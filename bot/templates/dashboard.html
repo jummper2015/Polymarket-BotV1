@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Polymarket BTC 5m Bot</title>
+  <link rel="stylesheet" href="/static/dashboard.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⏱</span>
+      <h1>Polymarket BTC <span class="muted">up/down 5m</span></h1>
+    </div>
+    <div class="badges">
+      <span id="mode-badge" class="badge">mode</span>
+      <span id="status-badge" class="badge">status</span>
+      <span id="ws-badge" class="badge">ws</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="grid">
+      <div class="card kpi">
+        <span class="kpi-label">Resolved P&amp;L</span>
+        <span id="kpi-pnl" class="kpi-value">$0.00</span>
+        <span id="kpi-roi" class="kpi-sub muted">ROI 0.00%</span>
+      </div>
+      <div class="card kpi">
+        <span class="kpi-label">Win rate</span>
+        <span id="kpi-winrate" class="kpi-value">0%</span>
+        <span id="kpi-wl" class="kpi-sub muted">0W / 0L</span>
+      </div>
+      <div class="card kpi">
+        <span class="kpi-label">Trades</span>
+        <span id="kpi-trades" class="kpi-value">0</span>
+        <span id="kpi-open" class="kpi-sub muted">0 open</span>
+      </div>
+      <div class="card kpi">
+        <span class="kpi-label">Windows seen</span>
+        <span id="kpi-windows" class="kpi-value">0</span>
+        <span id="kpi-traded" class="kpi-sub muted">0 traded</span>
+      </div>
+    </section>
+
+    <section class="grid two">
+      <div class="card">
+        <div class="card-head">
+          <h2>Live window</h2>
+          <span id="window-slug" class="mono muted">—</span>
+        </div>
+        <div class="prices">
+          <div class="price up">
+            <span class="side">UP</span>
+            <span id="price-up" class="value">—</span>
+            <div class="bar"><div id="bar-up" class="bar-fill"></div></div>
+          </div>
+          <div class="price down">
+            <span class="side">DOWN</span>
+            <span id="price-down" class="value">—</span>
+            <div class="bar"><div id="bar-down" class="bar-fill"></div></div>
+          </div>
+        </div>
+        <div class="meta">
+          <span>trigger <strong id="meta-trigger">—</strong></span>
+          <span>buy <strong id="meta-buy">—</strong></span>
+          <span>ttl <strong id="meta-ttl">—</strong></span>
+        </div>
+        <canvas id="price-chart" height="160"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>Activity log</h2></div>
+        <ol id="log" class="log"></ol>
+      </div>
+    </section>
+
+    <section class="card wide">
+      <div class="card-head"><h2>Trades</h2></div>
+      <div class="table-wrap">
+        <table class="trades">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Window</th>
+              <th>Side</th>
+              <th>Price</th>
+              <th>Shares</th>
+              <th>Cost</th>
+              <th>Status</th>
+              <th>P&amp;L</th>
+              <th>Mode</th>
+              <th>Order</th>
+            </tr>
+          </thead>
+          <tbody id="trades-body">
+            <tr><td colspan="10" class="empty">No trades yet — waiting for trigger.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer muted">
+    <span>Auto-refresh every 1s · uptime <span id="uptime">0s</span></span>
+  </footer>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

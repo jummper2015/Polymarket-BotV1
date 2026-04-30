@@ -1,0 +1,39 @@
+Crea un bot escrito en Python para operar en Polymarket en los mercados BTC up/down de 5 minutos, con modo paper y modo real mas dasboard web con metricas.
+Credenciales y config:
+TRIGGER_PRICE = 0.90
+BUY_AMOUNT = 5.0
+PRIVATE_KEY = "..."
+PROXY_WALLET = "..."
+CHAIN_ID = 137
+SIGNATURE_TYPE = 2
+Carga de mercado:
+Cada ventana tiene un slug btc-updown-5m-TIMESTAMP donde el timestamp es (unix_time // 300) * 300. Para cargar el mercado consulta GET https://gamma-api.polymarket.com/events?slug={slug} y extrae los token IDs desde data[0]["markets"][0]["tokens"], donde cada token tiene outcome ("UP"/"DOWN") y token_id. Si ese campo falla, fallback a clobTokenIds + outcomes del mismo objeto (que pueden venir como string JSON, hacer json.loads si es necesario).
+Price Feed — WebSocket:
+Conéctate a wss://ws-subscriptions-clob.polymarket.com/ws/market. El mensaje de suscripción es:
+json{"assets_ids": ["<up_token_id>", "<down_token_id>"], "type": "market", "custom_feature_enabled": true}
+Maneja estos tres tipos de evento del CLOB:
+ 
+book → calcula mid entre best_bid y best_ask de las listas bids/asks
+price_change → itera price_changes[], calcula mid desde best_bid/best_ask de cada item
+best_bid_ask → calcula mid desde best_bid/best_ask del evento
+ 
+El PriceFeed corre en un thread daemon con reconexión automática cada 3s si se cae.
+Lógica de trading:
+Monitoriza UP y DOWN en un bucle cada 50ms. El primero en alcanzar o superar TRIGGER_PRICE dispara una compra GTC con py_clob_client:
+pythonshares = floor((BUY_AMOUNT / TRIGGER_PRICE) * 100) / 100
+order = client.create_order(OrderArgs(price=TRIGGER_PRICE, size=shares, side=BUY, token_id=token_id))
+client.post_order(order, OrderType.GTC)
+Solo compra una vez por ventana. No vende nunca.
+Autenticación:
+pythonclient = ClobClient(host, key=PRIVATE_KEY, chain_id=137, signature_type=2, funder=PROXY_WALLET)
+client.set_api_creds(client.create_or_derive_api_creds())
+Bucle principal:
+ 
+Calcular slug de la ventana activa
+Cargar mercado con reintentos cada 3s (si cambia la ventana mientras espera, actualizar slug)
+Iniciar PriceFeed con los token IDs
+Esperar primeros precios (máx 5s)
+Monitorizar hasta trigger o fin de ventana
+Pasar a next_slug = btc-updown-5m-{ts + 300}
+ 
+Dependencias: py-clob-client, websocket-client, requests, eth-account. Sin rich, sin dashboard, sin logs a fichero. Prints simples con timestamp [HH:MM:SS] icon mensaje. Mostrar precios en tiempo real con \r en la misma línea.
