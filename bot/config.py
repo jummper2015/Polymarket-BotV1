@@ -1,4 +1,5 @@
 """Runtime configuration for the Polymarket BTC up/down bot."""
+
 from __future__ import annotations
 
 import os
@@ -61,7 +62,7 @@ def load_config() -> Config:
         mode = "paper"
     return Config(
         trigger_price=_env_float("TRIGGER_PRICE", 0.90),
-        buy_amount=_env_float("BUY_AMOUNT", 5.0),
+        buy_amount=_env_float("BUY_AMOUNT", 20.0),
         starting_bankroll=_env_float("STARTING_BANKROLL", 1000.0),
         chain_id=_env_int("CHAIN_ID", 137),
         signature_type=_env_int("SIGNATURE_TYPE", 2),
@@ -70,7 +71,9 @@ def load_config() -> Config:
         mode=mode,
         clob_host=os.getenv("CLOB_HOST", "https://clob.polymarket.com"),
         gamma_host=os.getenv("GAMMA_HOST", "https://gamma-api.polymarket.com"),
-        ws_url=os.getenv("CLOB_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
+        ws_url=os.getenv(
+            "CLOB_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+        ),
         dashboard_port=_env_int("PORT", 5000),
         dashboard_host=os.getenv("DASHBOARD_HOST", "0.0.0.0"),
         poll_interval_ms=_env_int("POLL_INTERVAL_MS", 50),
