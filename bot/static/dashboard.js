@@ -51,6 +51,8 @@
     barDown: document.getElementById("bar-down"),
     metaTrigger: document.getElementById("meta-trigger"),
     metaBuy: document.getElementById("meta-buy"),
+    metaHedge: document.getElementById("meta-hedge"),
+    metaLastmin: document.getElementById("meta-lastmin"),
     metaTtl: document.getElementById("meta-ttl"),
     chart: document.getElementById("price-chart"),
     log: document.getElementById("log"),
@@ -64,9 +66,9 @@
 
     let cls = "badge";
     let label = `status: ${s.bot_status}`;
-    if (s.bot_status === "watching" || s.bot_status === "traded") cls += " ok";
+    if (["watching", "traded", "hedged"].includes(s.bot_status)) cls += " ok";
     else if (s.bot_status === "error") cls += " err";
-    else if (s.bot_status === "loading_market") cls += " warn";
+    else if (["loading_market", "holding"].includes(s.bot_status)) cls += " warn";
     if (s.bot_message) label += ` — ${s.bot_message}`;
     els.statusBadge.textContent = label;
     els.statusBadge.className = cls;
@@ -107,6 +109,8 @@
     els.barDown.style.width = ((s.last_down_price || 0) * 100).toFixed(2) + "%";
     els.metaTrigger.textContent = s.trigger_price.toFixed(2);
     els.metaBuy.textContent = "$" + s.buy_amount.toFixed(2);
+    els.metaHedge.textContent = (s.hedge_threshold || 0.96).toFixed(2);
+    els.metaLastmin.textContent = (s.last_minute_seconds || 60) + "s";
     els.metaTtl.textContent = s.seconds_remaining !== null && s.seconds_remaining !== undefined
       ? fmtDuration(s.seconds_remaining)
       : "—";
@@ -136,9 +140,12 @@
     const rows = s.trades.map((t) => {
       const pnlCls = t.pnl == null ? "" : t.pnl >= 0 ? "pnl-pos" : "pnl-neg";
       const pnlText = t.pnl == null ? "—" : fmtSignedMoney(t.pnl);
+      const typeTag = t.is_hedge
+        ? `<span class="tag hedge">HEDGE</span>`
+        : `<span class="tag initial">INIT</span>`;
       return `
-        <tr>
-          <td>#${t.id}</td>
+        <tr${t.is_hedge ? ' class="row-hedge"' : ''}>
+          <td>#${t.id} ${typeTag}</td>
           <td class="mono">${t.window_slug}</td>
           <td><span class="tag ${t.side.toLowerCase()}">${t.side}</span></td>
           <td>${Number(t.price).toFixed(4)}</td>

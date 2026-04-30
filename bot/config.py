@@ -43,6 +43,8 @@ class Config:
     poll_interval_ms: int
     market_load_retry_seconds: int
     first_price_timeout_seconds: int
+    last_minute_seconds: int
+    hedge_threshold: float
 
     @property
     def is_real(self) -> bool:
@@ -74,4 +76,6 @@ def load_config() -> Config:
         poll_interval_ms=_env_int("POLL_INTERVAL_MS", 50),
         market_load_retry_seconds=_env_int("MARKET_RETRY_SECONDS", 3),
         first_price_timeout_seconds=_env_int("FIRST_PRICE_TIMEOUT", 5),
+        last_minute_seconds=_env_int("LAST_MINUTE_SECONDS", 60),
+        hedge_threshold=_env_float("HEDGE_THRESHOLD", 0.96),
     )

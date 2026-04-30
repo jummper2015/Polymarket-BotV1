@@ -25,6 +25,7 @@ class Trade:
     pnl: Optional[float] = None
     order_id: Optional[str] = None
     note: str = ""
+    is_hedge: bool = False  # True when this is the counter-trade (hedge)
 
 
 class BotState:
@@ -41,6 +42,8 @@ class BotState:
         self.trigger_price: float = 0.0
         self.buy_amount: float = 0.0
         self.starting_bankroll: float = 0.0
+        self.hedge_threshold: float = 0.96
+        self.last_minute_seconds: int = 60
         self.bot_status: str = "idle"  # idle, loading_market, watching, traded, error
         self.bot_message: str = ""
         self.current_slug: Optional[str] = None
@@ -69,6 +72,8 @@ class BotState:
         trigger_price: float,
         buy_amount: float,
         starting_bankroll: float,
+        hedge_threshold: float = 0.96,
+        last_minute_seconds: int = 60,
     ) -> None:
         with self._lock:
             self.mode = mode
@@ -76,6 +81,8 @@ class BotState:
             self.trigger_price = trigger_price
             self.buy_amount = buy_amount
             self.starting_bankroll = starting_bankroll
+            self.hedge_threshold = hedge_threshold
+            self.last_minute_seconds = last_minute_seconds
 
     def set_status(self, status: str, message: str = "") -> None:
         with self._lock:
@@ -126,11 +133,25 @@ class BotState:
             return trade
 
     def find_open_trade_for_window(self, slug: str) -> Optional[Trade]:
+        """Return the first (initial) open trade for this window."""
         with self._lock:
             for t in self.trades:
-                if t.window_slug == slug and t.status == "open":
+                if t.window_slug == slug and t.status == "open" and not t.is_hedge:
                     return t
         return None
+
+    def find_hedge_for_window(self, slug: str) -> Optional[Trade]:
+        """Return the hedge trade for this window if it exists."""
+        with self._lock:
+            for t in self.trades:
+                if t.window_slug == slug and t.is_hedge:
+                    return t
+        return None
+
+    def find_all_open_trades_for_window(self, slug: str) -> List[Trade]:
+        """Return all open trades (initial + hedge) for this window."""
+        with self._lock:
+            return [t for t in self.trades if t.window_slug == slug and t.status == "open"]
 
     def resolve_trade(self, trade_id: int, status: str, final_price: float, pnl: float, note: str = "") -> None:
         with self._lock:
@@ -170,6 +191,8 @@ class BotState:
                 "has_credentials": self.has_credentials,
                 "trigger_price": self.trigger_price,
                 "buy_amount": self.buy_amount,
+                "hedge_threshold": self.hedge_threshold,
+                "last_minute_seconds": self.last_minute_seconds,
                 "bot_status": self.bot_status,
                 "bot_message": self.bot_message,
                 "ws_connected": self.ws_connected,
@@ -219,6 +242,7 @@ class BotState:
                         "pnl": t.pnl,
                         "order_id": t.order_id,
                         "note": t.note,
+                        "is_hedge": t.is_hedge,
                     }
                     for t in reversed(self.trades[-100:])
                 ],

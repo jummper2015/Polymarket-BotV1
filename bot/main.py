@@ -16,6 +16,8 @@ def main() -> None:
         trigger_price=cfg.trigger_price,
         buy_amount=cfg.buy_amount,
         starting_bankroll=cfg.starting_bankroll,
+        hedge_threshold=cfg.hedge_threshold,
+        last_minute_seconds=cfg.last_minute_seconds,
     )
 
     if cfg.is_real and not cfg.has_credentials:
