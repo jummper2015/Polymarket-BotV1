@@ -29,6 +29,7 @@ def _env_int(key: str, default: int) -> int:
 class Config:
     trigger_price: float
     buy_amount: float
+    starting_bankroll: float
     chain_id: int
     signature_type: int
     private_key: str
@@ -59,6 +60,7 @@ def load_config() -> Config:
     return Config(
         trigger_price=_env_float("TRIGGER_PRICE", 0.90),
         buy_amount=_env_float("BUY_AMOUNT", 5.0),
+        starting_bankroll=_env_float("STARTING_BANKROLL", 1000.0),
         chain_id=_env_int("CHAIN_ID", 137),
         signature_type=_env_int("SIGNATURE_TYPE", 2),
         private_key=(os.getenv("PRIVATE_KEY") or "").strip(),

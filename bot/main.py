@@ -15,6 +15,7 @@ def main() -> None:
         has_credentials=cfg.has_credentials,
         trigger_price=cfg.trigger_price,
         buy_amount=cfg.buy_amount,
+        starting_bankroll=cfg.starting_bankroll,
     )
 
     if cfg.is_real and not cfg.has_credentials:

@@ -34,6 +34,8 @@
     modeBadge: document.getElementById("mode-badge"),
     statusBadge: document.getElementById("status-badge"),
     wsBadge: document.getElementById("ws-badge"),
+    kpiBankroll: document.getElementById("kpi-bankroll"),
+    kpiBankrollSub: document.getElementById("kpi-bankroll-sub"),
     kpiPnl: document.getElementById("kpi-pnl"),
     kpiRoi: document.getElementById("kpi-roi"),
     kpiWinrate: document.getElementById("kpi-winrate"),
@@ -75,6 +77,11 @@
 
   function renderKpis(s) {
     const stats = s.stats;
+    els.kpiBankroll.textContent = fmtMoney(stats.bankroll);
+    els.kpiBankroll.classList.toggle("up", stats.bankroll > stats.starting_bankroll);
+    els.kpiBankroll.classList.toggle("down", stats.bankroll < stats.starting_bankroll);
+    els.kpiBankrollSub.textContent = `start ${fmtMoney(stats.starting_bankroll)} · cash ${fmtMoney(stats.available_cash)}`;
+
     els.kpiPnl.textContent = fmtSignedMoney(stats.resolved_pnl);
     els.kpiPnl.classList.toggle("up", stats.resolved_pnl > 0);
     els.kpiPnl.classList.toggle("down", stats.resolved_pnl < 0);

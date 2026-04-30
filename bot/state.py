@@ -40,6 +40,7 @@ class BotState:
         self.has_credentials: bool = False
         self.trigger_price: float = 0.0
         self.buy_amount: float = 0.0
+        self.starting_bankroll: float = 0.0
         self.bot_status: str = "idle"  # idle, loading_market, watching, traded, error
         self.bot_message: str = ""
         self.current_slug: Optional[str] = None
@@ -61,12 +62,20 @@ class BotState:
 
     # ----- helpers -----
 
-    def configure(self, mode: str, has_credentials: bool, trigger_price: float, buy_amount: float) -> None:
+    def configure(
+        self,
+        mode: str,
+        has_credentials: bool,
+        trigger_price: float,
+        buy_amount: float,
+        starting_bankroll: float,
+    ) -> None:
         with self._lock:
             self.mode = mode
             self.has_credentials = has_credentials
             self.trigger_price = trigger_price
             self.buy_amount = buy_amount
+            self.starting_bankroll = starting_bankroll
 
     def set_status(self, status: str, message: str = "") -> None:
         with self._lock:
@@ -152,6 +161,9 @@ class BotState:
             resolved = wins + losses
             win_rate = (wins / resolved) if resolved else 0.0
             roi = (resolved_pnl / total_invested) if total_invested else 0.0
+            open_cost = sum(t.cost for t in self.trades if t.status == "open")
+            bankroll = self.starting_bankroll + resolved_pnl
+            available_cash = bankroll - open_cost
             now = time.time()
             return {
                 "mode": self.mode,
@@ -172,6 +184,7 @@ class BotState:
                 "last_up_price": self.last_up_price,
                 "last_down_price": self.last_down_price,
                 "last_price_update": self.last_price_update,
+                "starting_bankroll": self.starting_bankroll,
                 "stats": {
                     "trades": len(self.trades),
                     "open": open_count,
@@ -182,6 +195,10 @@ class BotState:
                     "total_invested": total_invested,
                     "total_won": total_won,
                     "roi": roi,
+                    "starting_bankroll": self.starting_bankroll,
+                    "bankroll": bankroll,
+                    "available_cash": available_cash,
+                    "open_cost": open_cost,
                     "windows_observed": self.windows_observed,
                     "windows_traded": self.windows_traded,
                     "uptime_seconds": now - self.started_at,

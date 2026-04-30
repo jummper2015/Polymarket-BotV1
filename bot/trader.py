@@ -45,7 +45,7 @@ class Trader:
     def _run(self) -> None:
         cfg = self.cfg
         logger.info(
-            f"starting bot — mode={cfg.mode} trigger={cfg.trigger_price} buy=${cfg.buy_amount}",
+            f"starting bot — mode={cfg.mode} trigger={cfg.trigger_price} buy=${cfg.buy_amount} bankroll=${cfg.starting_bankroll:.2f}",
             icon="🤖",
         )
         if cfg.is_real and not cfg.has_credentials:
