@@ -218,7 +218,7 @@
 
   async function poll() {
     try {
-      const resp = await fetch("/api/state", { cache: "no-store" });
+      const resp = await fetch("state", { cache: "no-store" });
       if (!resp.ok) return;
       const s = await resp.json();
       renderBadges(s);

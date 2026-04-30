@@ -11,15 +11,24 @@ def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
     CORS(app)
 
+    @app.after_request
+    def _no_cache(resp):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
+
     @app.get("/")
     def index():
         return render_template("dashboard.html")
 
-    @app.get("/api/state")
+    # Note: do NOT use the `/api/*` prefix — the Replit workspace proxy reserves
+    # that path for the (unused) api-server artifact, which causes 502s.
+    @app.get("/state")
     def state():
         return jsonify(STATE.snapshot())
 
-    @app.get("/api/healthz")
+    @app.get("/healthz")
     def healthz():
         return jsonify({"ok": True})
 
