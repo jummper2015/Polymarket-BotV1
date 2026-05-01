@@ -1,10 +1,11 @@
 """Thread-safe shared state for bot metrics and dashboard."""
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Deque, Dict, List, Optional
 
 
@@ -37,14 +38,19 @@ class BotState:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self.started_at: float = time.time()
+
+        # --- runtime-mutable config (can be changed via dashboard) ---
         self.mode: str = "paper"
         self.has_credentials: bool = False
-        self.trigger_price: float = 0.0
-        self.buy_amount: float = 0.0
-        self.starting_bankroll: float = 0.0
+        self.trigger_price: float = 0.90
+        self.buy_amount: float = 5.0
+        self.starting_bankroll: float = 1000.0
+        self.max_trades_per_window: int = 1
         self.hedge_threshold: float = 0.96
         self.last_minute_seconds: int = 60
-        self.bot_status: str = "idle"  # idle, loading_market, watching, traded, error
+
+        # --- bot status ---
+        self.bot_status: str = "idle"
         self.bot_message: str = ""
         self.current_slug: Optional[str] = None
         self.current_window_ts: Optional[int] = None
@@ -55,6 +61,12 @@ class BotState:
         self.last_down_price: Optional[float] = None
         self.last_price_update: Optional[float] = None
         self.ws_connected: bool = False
+
+        # --- BTC spot price (from Binance) ---
+        self.btc_price: Optional[float] = None
+        self.btc_price_updated_at: Optional[float] = None
+
+        # --- trade data ---
         self.trades: List[Trade] = []
         self._next_trade_id: int = 1
         self.log: Deque[Dict[str, object]] = deque(maxlen=self.MAX_LOG_LINES)
@@ -63,7 +75,7 @@ class BotState:
         self.windows_observed: int = 0
         self.windows_traded: int = 0
 
-    # ----- helpers -----
+    # ----- config helpers -----
 
     def configure(
         self,
@@ -72,6 +84,7 @@ class BotState:
         trigger_price: float,
         buy_amount: float,
         starting_bankroll: float,
+        max_trades_per_window: int = 1,
         hedge_threshold: float = 0.96,
         last_minute_seconds: int = 60,
     ) -> None:
@@ -81,8 +94,25 @@ class BotState:
             self.trigger_price = trigger_price
             self.buy_amount = buy_amount
             self.starting_bankroll = starting_bankroll
+            self.max_trades_per_window = max_trades_per_window
             self.hedge_threshold = hedge_threshold
             self.last_minute_seconds = last_minute_seconds
+
+    def update_runtime_config(self, **kwargs) -> Dict[str, object]:
+        """Update mutable config at runtime. Returns dict of accepted changes."""
+        allowed = {
+            "trigger_price", "buy_amount", "max_trades_per_window",
+            "mode", "hedge_threshold", "last_minute_seconds",
+        }
+        accepted: Dict[str, object] = {}
+        with self._lock:
+            for key, val in kwargs.items():
+                if key in allowed:
+                    setattr(self, key, val)
+                    accepted[key] = val
+        return accepted
+
+    # ----- status helpers -----
 
     def set_status(self, status: str, message: str = "") -> None:
         with self._lock:
@@ -120,9 +150,16 @@ class BotState:
                 self.last_down_price = price
                 self.down_price_history.append(entry)
 
+    def update_btc_price(self, price: float) -> None:
+        with self._lock:
+            self.btc_price = price
+            self.btc_price_updated_at = time.time()
+
     def set_ws_connected(self, connected: bool) -> None:
         with self._lock:
             self.ws_connected = connected
+
+    # ----- trade helpers -----
 
     def add_trade(self, trade: Trade) -> Trade:
         with self._lock:
@@ -140,8 +177,23 @@ class BotState:
                     return t
         return None
 
+    def count_initial_trades_for_window(self, slug: str) -> int:
+        """Count how many initial (non-hedge) trades exist for this window."""
+        with self._lock:
+            return sum(
+                1 for t in self.trades
+                if t.window_slug == slug and not t.is_hedge
+            )
+
+    def has_initial_trade_for_side(self, slug: str, side: str) -> bool:
+        """True if an initial trade for this side already exists in this window."""
+        with self._lock:
+            return any(
+                t for t in self.trades
+                if t.window_slug == slug and t.side == side and not t.is_hedge
+            )
+
     def find_hedge_for_window(self, slug: str) -> Optional[Trade]:
-        """Return the hedge trade for this window if it exists."""
         with self._lock:
             for t in self.trades:
                 if t.window_slug == slug and t.is_hedge:
@@ -149,7 +201,6 @@ class BotState:
         return None
 
     def find_all_open_trades_for_window(self, slug: str) -> List[Trade]:
-        """Return all open trades (initial + hedge) for this window."""
         with self._lock:
             return [t for t in self.trades if t.window_slug == slug and t.status == "open"]
 
@@ -169,7 +220,42 @@ class BotState:
         with self._lock:
             self.log.append(entry)
 
-    # ----- snapshots for the dashboard -----
+    # ----- real-mode readiness -----
+
+    def real_mode_readiness(self) -> Dict[str, object]:
+        pk = bool((os.getenv("PRIVATE_KEY") or "").strip())
+        pw = bool((os.getenv("PROXY_WALLET") or "").strip())
+        ready = pk and pw
+        missing = []
+        steps = []
+        if not pk:
+            missing.append("PRIVATE_KEY")
+            steps.append({
+                "done": False,
+                "text": "Agregar PRIVATE_KEY como secret de Replit",
+                "detail": "Ve a Secrets → Agregar secreto: PRIVATE_KEY = tu clave privada de la wallet de Polygon (Polymarket).",
+            })
+        if not pw:
+            missing.append("PROXY_WALLET")
+            steps.append({
+                "done": False,
+                "text": "Agregar PROXY_WALLET como secret de Replit",
+                "detail": "Ve a Secrets → Agregar secreto: PROXY_WALLET = dirección del proxy de Polymarket (empieza con 0x).",
+            })
+        steps.append({
+            "done": ready and self.mode == "real",
+            "text": "Cambiar modo a 'real' en Configuración y reiniciar el bot",
+            "detail": "En el panel de Configuración selecciona modo Real y pulsa Aplicar. Luego reinicia el workflow.",
+        })
+        return {
+            "ready": ready,
+            "has_private_key": pk,
+            "has_proxy_wallet": pw,
+            "missing": missing,
+            "steps": steps,
+        }
+
+    # ----- snapshot for the dashboard -----
 
     def snapshot(self) -> Dict[str, object]:
         with self._lock:
@@ -191,6 +277,7 @@ class BotState:
                 "has_credentials": self.has_credentials,
                 "trigger_price": self.trigger_price,
                 "buy_amount": self.buy_amount,
+                "max_trades_per_window": self.max_trades_per_window,
                 "hedge_threshold": self.hedge_threshold,
                 "last_minute_seconds": self.last_minute_seconds,
                 "bot_status": self.bot_status,
@@ -208,6 +295,9 @@ class BotState:
                 "last_down_price": self.last_down_price,
                 "last_price_update": self.last_price_update,
                 "starting_bankroll": self.starting_bankroll,
+                "btc_price": self.btc_price,
+                "btc_price_updated_at": self.btc_price_updated_at,
+                "real_mode_readiness": self.real_mode_readiness(),
                 "stats": {
                     "trades": len(self.trades),
                     "open": open_count,

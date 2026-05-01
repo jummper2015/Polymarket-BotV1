@@ -1,5 +1,4 @@
 """Runtime configuration for the Polymarket BTC up/down bot."""
-
 from __future__ import annotations
 
 import os
@@ -31,6 +30,7 @@ class Config:
     trigger_price: float
     buy_amount: float
     starting_bankroll: float
+    max_trades_per_window: int
     chain_id: int
     signature_type: int
     private_key: str
@@ -62,8 +62,9 @@ def load_config() -> Config:
         mode = "paper"
     return Config(
         trigger_price=_env_float("TRIGGER_PRICE", 0.90),
-        buy_amount=_env_float("BUY_AMOUNT", 20.0),
+        buy_amount=_env_float("BUY_AMOUNT", 5.0),
         starting_bankroll=_env_float("STARTING_BANKROLL", 1000.0),
+        max_trades_per_window=_env_int("MAX_TRADES_PER_WINDOW", 1),
         chain_id=_env_int("CHAIN_ID", 137),
         signature_type=_env_int("SIGNATURE_TYPE", 2),
         private_key=(os.getenv("PRIVATE_KEY") or "").strip(),

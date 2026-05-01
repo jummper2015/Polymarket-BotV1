@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from . import logger
 from .config import load_config
-from .dashboard import create_app
+from .dashboard import create_app, start_btc_fetcher
 from .state import STATE
 from .trader import Trader
 
@@ -16,6 +16,7 @@ def main() -> None:
         trigger_price=cfg.trigger_price,
         buy_amount=cfg.buy_amount,
         starting_bankroll=cfg.starting_bankroll,
+        max_trades_per_window=cfg.max_trades_per_window,
         hedge_threshold=cfg.hedge_threshold,
         last_minute_seconds=cfg.last_minute_seconds,
     )
@@ -25,6 +26,9 @@ def main() -> None:
             "TRADING_MODE=real but PRIVATE_KEY/PROXY_WALLET are not set — "
             "the bot will refuse to place orders. Switch to paper or add credentials."
         )
+
+    # Start background BTC price fetcher
+    start_btc_fetcher()
 
     trader = Trader(cfg)
     trader.start()

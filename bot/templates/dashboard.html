@@ -1,16 +1,21 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Polymarket BTC 5m Bot</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=2" />
+  <link rel="stylesheet" href="static/dashboard.css?v=3" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <span class="logo">⏱</span>
       <h1>Polymarket BTC <span class="muted">up/down 5m</span></h1>
+    </div>
+    <div class="btc-price-wrap">
+      <span class="btc-label">BTC</span>
+      <span id="btc-price" class="btc-value">—</span>
+      <span id="btc-age" class="btc-age muted"></span>
     </div>
     <div class="badges">
       <span id="mode-badge" class="badge">mode</span>
@@ -20,6 +25,7 @@
   </header>
 
   <main>
+    <!-- KPIs -->
     <section class="grid">
       <div class="card kpi">
         <span class="kpi-label">Bankroll</span>
@@ -42,16 +48,77 @@
         <span id="kpi-open" class="kpi-sub muted">0 open</span>
       </div>
       <div class="card kpi">
-        <span class="kpi-label">Windows seen</span>
+        <span class="kpi-label">Ventanas vistas</span>
         <span id="kpi-windows" class="kpi-value">0</span>
         <span id="kpi-traded" class="kpi-sub muted">0 traded</span>
       </div>
     </section>
 
+    <!-- Configuration -->
+    <section class="grid config-grid">
+      <div class="card wide config-card">
+        <div class="card-head">
+          <h2>⚙ Configuración</h2>
+          <span id="cfg-save-msg" class="cfg-msg"></span>
+        </div>
+        <form id="cfg-form" class="cfg-form" autocomplete="off">
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Precio trigger
+              <span class="cfg-hint">Umbral de activación (0.01 – 0.99)</span>
+            </label>
+            <input id="cfg-trigger" type="number" class="cfg-input" step="0.01" min="0.01" max="0.99" placeholder="0.90" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Monto por trade (USDC)
+              <span class="cfg-hint">Inversión por operación</span>
+            </label>
+            <input id="cfg-buy" type="number" class="cfg-input" step="0.5" min="0.5" max="100000" placeholder="5.00" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Trades por evento
+              <span class="cfg-hint">Máx. posiciones iniciales por ventana (1–10)</span>
+            </label>
+            <input id="cfg-max-trades" type="number" class="cfg-input" step="1" min="1" max="10" placeholder="1" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Hedge a partir de
+              <span class="cfg-hint">Precio que activa la cobertura (0.50 – 0.99)</span>
+            </label>
+            <input id="cfg-hedge" type="number" class="cfg-input" step="0.01" min="0.50" max="0.99" placeholder="0.96" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Últimos segundos activo
+              <span class="cfg-hint">Ventana de entrada al final del evento (10 – 240 s)</span>
+            </label>
+            <input id="cfg-lastmin" type="number" class="cfg-input" step="5" min="10" max="240" placeholder="60" />
+          </div>
+          <div class="cfg-row cfg-mode-row">
+            <label class="cfg-label">
+              Modo de operación
+              <span class="cfg-hint">Paper = simulación · Real = órdenes reales</span>
+            </label>
+            <div class="mode-toggle">
+              <button type="button" id="btn-paper" class="mode-btn active" data-mode="paper">Paper</button>
+              <button type="button" id="btn-real"  class="mode-btn"        data-mode="real">Real</button>
+            </div>
+          </div>
+          <div class="cfg-actions">
+            <button type="submit" class="btn-apply">Aplicar cambios</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- Live window + Activity log -->
     <section class="grid two">
       <div class="card">
         <div class="card-head">
-          <h2>Live window</h2>
+          <h2>Ventana en vivo</h2>
           <span id="window-slug" class="mono muted">—</span>
         </div>
         <div class="prices">
@@ -69,7 +136,7 @@
         <div class="meta">
           <span>trigger <strong id="meta-trigger">—</strong></span>
           <span>buy <strong id="meta-buy">—</strong></span>
-          <span>hedge@<strong id="meta-hedge">—</strong></span>
+          <span>hedge@ <strong id="meta-hedge">—</strong></span>
           <span>last-min <strong id="meta-lastmin">—</strong></span>
           <span>ttl <strong id="meta-ttl">—</strong></span>
         </div>
@@ -82,6 +149,16 @@
       </div>
     </section>
 
+    <!-- Real mode readiness -->
+    <section class="card wide readiness-card">
+      <div class="card-head">
+        <h2>Estado para modo Real</h2>
+        <span id="readiness-badge" class="badge">—</span>
+      </div>
+      <ul id="readiness-steps" class="readiness-list"></ul>
+    </section>
+
+    <!-- Trades table -->
     <section class="card wide">
       <div class="card-head"><h2>Trades</h2></div>
       <div class="table-wrap">
@@ -89,19 +166,19 @@
           <thead>
             <tr>
               <th>#</th>
-              <th>Window</th>
-              <th>Side</th>
-              <th>Price</th>
+              <th>Ventana</th>
+              <th>Lado</th>
+              <th>Precio exec.</th>
               <th>Shares</th>
-              <th>Cost</th>
-              <th>Status</th>
+              <th>Costo</th>
+              <th>Estado</th>
               <th>P&amp;L</th>
-              <th>Mode</th>
-              <th>Order</th>
+              <th>Modo</th>
+              <th>Orden</th>
             </tr>
           </thead>
           <tbody id="trades-body">
-            <tr><td colspan="10" class="empty">No trades yet — waiting for trigger.</td></tr>
+            <tr><td colspan="10" class="empty">Sin trades — esperando trigger.</td></tr>
           </tbody>
         </table>
       </div>
@@ -109,9 +186,9 @@
   </main>
 
   <footer class="footer muted">
-    <span>Auto-refresh every 1s · uptime <span id="uptime">0s</span></span>
+    <span>Auto-refresh cada 1s · uptime <span id="uptime">0s</span></span>
   </footer>
 
-  <script src="static/dashboard.js?v=2"></script>
+  <script src="static/dashboard.js?v=3"></script>
 </body>
 </html>
