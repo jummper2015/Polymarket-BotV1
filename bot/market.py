@@ -11,13 +11,13 @@ import requests
 from . import logger
 
 
-def slug_for_timestamp(unix_seconds: int) -> Tuple[str, int]:
+def slug_for_timestamp(unix_seconds: int, symbol: str = "btc") -> Tuple[str, int]:
     window_ts = (unix_seconds // 300) * 300
-    return f"btc-updown-5m-{window_ts}", window_ts
+    return f"{symbol}-updown-5m-{window_ts}", window_ts
 
 
-def current_slug() -> Tuple[str, int]:
-    return slug_for_timestamp(int(time.time()))
+def current_slug(symbol: str = "btc") -> Tuple[str, int]:
+    return slug_for_timestamp(int(time.time()), symbol)
 
 
 @dataclass
@@ -97,6 +97,7 @@ def fetch_market(gamma_host: str, slug: str, *, timeout: float = 8.0) -> Optiona
 def load_market_for_current_window(
     gamma_host: str,
     *,
+    symbol: str = "btc",
     retry_seconds: int = 3,
     on_slug_change=None,
 ) -> MarketTokens:
@@ -105,7 +106,7 @@ def load_market_for_current_window(
     If the window rolls over while we're retrying, recompute the slug.
     `on_slug_change(new_slug, new_ts)` is invoked whenever the active slug changes.
     """
-    slug, ts = current_slug()
+    slug, ts = current_slug(symbol)
     if on_slug_change:
         on_slug_change(slug, ts)
 

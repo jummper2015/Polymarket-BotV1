@@ -11,17 +11,17 @@ small loss offset by the winner's profit.
 """
 from __future__ import annotations
 
-import math
 import time
 from typing import Optional
 
 from . import logger
-from .state import STATE, Trade
+from .state import Trade
 
 
 class MarketMakerStrategy:
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg, state) -> None:
         self.cfg = cfg
+        self.state = state
         self._client = None
         if cfg.is_real and cfg.has_credentials:
             self._client = self._build_client()
@@ -31,10 +31,9 @@ class MarketMakerStrategy:
     def run_for_window(self, tokens) -> None:
         """Block until the MM strategy for this window completes."""
         window_ends = tokens.window_ts + 300
-        mm_seconds = STATE.mm_last_seconds          # runtime-mutable
+        mm_seconds = self.state.mm_last_seconds
         entry_time = window_ends - mm_seconds
 
-        # Wait until the MM entry window opens
         while True:
             now = time.time()
             if now >= window_ends:
@@ -48,13 +47,12 @@ class MarketMakerStrategy:
             )
             time.sleep(min(remaining, 1.0))
 
-        # Do not double-place if trades already exist for this window
-        if STATE.count_mm_trades_for_window(tokens.slug) > 0:
+        if self.state.count_mm_trades_for_window(tokens.slug) > 0:
             logger.warn(f"MM  {tokens.slug}  ya tiene trades — omitiendo")
             return
 
-        mm_max_price = STATE.mm_max_price   # runtime-mutable
-        mm_shares    = STATE.mm_shares      # runtime-mutable (fixed shares per side)
+        mm_max_price = self.state.mm_max_price
+        mm_shares    = self.state.mm_shares
 
         logger.info(
             f"MM  {tokens.slug}  ejecutando ambos lados  "
@@ -67,9 +65,8 @@ class MarketMakerStrategy:
             ("UP",   tokens.up_token_id),
             ("DOWN", tokens.down_token_id),
         ]:
-            # Lee el precio en tiempo real justo antes de colocar la orden
             current_price = (
-                STATE.last_up_price if side == "UP" else STATE.last_down_price
+                self.state.last_up_price if side == "UP" else self.state.last_down_price
             )
 
             if current_price is None:
@@ -83,7 +80,6 @@ class MarketMakerStrategy:
                 )
                 continue
 
-            # mm_max_price es condición de rechazo, NO un techo de precio
             if current_price > mm_max_price:
                 logger.warn(
                     f"MM  {tokens.slug}  {side} precio {current_price:.4f} "
@@ -104,7 +100,7 @@ class MarketMakerStrategy:
 
             order_id: Optional[str] = None
             note = ""
-            is_real_now = STATE.mode == "real"
+            is_real_now = self.state.mode == "real"
 
             if is_real_now and self._client is not None:
                 try:
@@ -127,16 +123,16 @@ class MarketMakerStrategy:
                 price=exec_price,
                 shares=shares,
                 cost=cost,
-                mode=STATE.mode,
+                mode=self.state.mode,
                 opened_at=time.time(),
                 order_id=order_id,
                 note=note,
                 is_hedge=False,
                 strategy="mm",
             )
-            STATE.add_trade(trade)
+            self.state.add_trade(trade)
 
-        STATE.set_status("mm_placed", f"MM {tokens.slug} — ambos lados colocados")
+        self.state.set_status("mm_placed", f"MM {tokens.slug} — ambos lados colocados")
 
     # ----- real-order plumbing -----
 

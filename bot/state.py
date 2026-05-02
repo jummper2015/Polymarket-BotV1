@@ -26,7 +26,7 @@ class Trade:
     pnl: Optional[float] = None
     order_id: Optional[str] = None
     note: str = ""
-    is_hedge: bool = False  # True when this is the counter-trade (hedge)
+    is_hedge: bool = False
     strategy: str = "trigger"  # "trigger" or "mm"
 
 
@@ -34,13 +34,13 @@ class BotState:
     """All mutable shared state lives here. Lock-protected."""
 
     MAX_LOG_LINES = 500
-    MAX_PRICE_HISTORY = 600  # ~30s at 50ms
+    MAX_PRICE_HISTORY = 600
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self.started_at: float = time.time()
 
-        # --- runtime-mutable config (can be changed via dashboard) ---
+        # --- runtime-mutable config ---
         self.mode: str = "paper"
         self.has_credentials: bool = False
         self.trigger_price: float = 0.90
@@ -51,7 +51,7 @@ class BotState:
         self.last_minute_seconds: int = 60
 
         # --- active strategy + market-making config ---
-        self.active_strategy: str = "trigger"   # "trigger", "market_making", "both"
+        self.active_strategy: str = "trigger"
         self.mm_shares: float = 20.0
         self.mm_last_seconds: int = 30
         self.mm_max_price: float = 0.95
@@ -69,9 +69,9 @@ class BotState:
         self.last_price_update: Optional[float] = None
         self.ws_connected: bool = False
 
-        # --- BTC spot price (from Binance) ---
-        self.btc_price: Optional[float] = None
-        self.btc_price_updated_at: Optional[float] = None
+        # --- spot price (from CoinGecko, per market asset) ---
+        self.spot_price: Optional[float] = None
+        self.spot_price_updated_at: Optional[float] = None
 
         # --- trade data ---
         self.trades: List[Trade] = []
@@ -106,11 +106,11 @@ class BotState:
             self.last_minute_seconds = last_minute_seconds
 
     def update_runtime_config(self, **kwargs) -> Dict[str, object]:
-        """Update mutable config at runtime. Returns dict of accepted changes."""
         allowed = {
             "trigger_price", "buy_amount", "max_trades_per_window",
             "mode", "hedge_threshold", "last_minute_seconds",
             "active_strategy", "mm_shares", "mm_last_seconds", "mm_max_price",
+            "starting_bankroll",
         }
         accepted: Dict[str, object] = {}
         with self._lock:
@@ -158,10 +158,14 @@ class BotState:
                 self.last_down_price = price
                 self.down_price_history.append(entry)
 
-    def update_btc_price(self, price: float) -> None:
+    def update_spot_price(self, price: float) -> None:
         with self._lock:
-            self.btc_price = price
-            self.btc_price_updated_at = time.time()
+            self.spot_price = price
+            self.spot_price_updated_at = time.time()
+
+    # Keep old method name as alias for compatibility
+    def update_btc_price(self, price: float) -> None:
+        self.update_spot_price(price)
 
     def set_ws_connected(self, connected: bool) -> None:
         with self._lock:
@@ -178,7 +182,6 @@ class BotState:
             return trade
 
     def find_open_trade_for_window(self, slug: str) -> Optional[Trade]:
-        """Return the first (initial) open trade for this window."""
         with self._lock:
             for t in self.trades:
                 if t.window_slug == slug and t.status == "open" and not t.is_hedge:
@@ -186,7 +189,6 @@ class BotState:
         return None
 
     def count_initial_trades_for_window(self, slug: str) -> int:
-        """Count how many initial (non-hedge) trades exist for this window."""
         with self._lock:
             return sum(
                 1 for t in self.trades
@@ -194,7 +196,6 @@ class BotState:
             )
 
     def has_initial_trade_for_side(self, slug: str, side: str) -> bool:
-        """True if an initial trade for this side already exists in this window."""
         with self._lock:
             return any(
                 t for t in self.trades
@@ -213,7 +214,6 @@ class BotState:
             return [t for t in self.trades if t.window_slug == slug and t.status == "open"]
 
     def count_mm_trades_for_window(self, slug: str) -> int:
-        """Count how many Market Making trades exist for this window."""
         with self._lock:
             return sum(
                 1 for t in self.trades
@@ -315,8 +315,8 @@ class BotState:
                 "last_down_price": self.last_down_price,
                 "last_price_update": self.last_price_update,
                 "starting_bankroll": self.starting_bankroll,
-                "btc_price": self.btc_price,
-                "btc_price_updated_at": self.btc_price_updated_at,
+                "spot_price": self.spot_price,
+                "spot_price_updated_at": self.spot_price_updated_at,
                 "real_mode_readiness": self.real_mode_readiness(),
                 "stats": {
                     "trades": len(self.trades),
@@ -365,4 +365,9 @@ class BotState:
             }
 
 
-STATE = BotState()
+STATES = {
+    "btc": BotState(),
+    "sol": BotState(),
+    "eth": BotState(),
+}
+STATE = STATES["btc"]  # backward compat alias

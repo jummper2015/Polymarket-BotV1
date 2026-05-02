@@ -1,25 +1,27 @@
-"""Entry point: launches the trader thread and the Flask dashboard."""
+"""Entry point: launches 3 trader threads (BTC, SOL, ETH) and the Flask dashboard."""
 from __future__ import annotations
 
 from . import logger
 from .config import load_config
-from .dashboard import create_app, start_btc_fetcher
-from .state import STATE
+from .dashboard import create_app, start_price_fetcher
+from .state import STATES
 from .trader import Trader
 
 
 def main() -> None:
     cfg = load_config()
-    STATE.configure(
-        mode=cfg.mode,
-        has_credentials=cfg.has_credentials,
-        trigger_price=cfg.trigger_price,
-        buy_amount=cfg.buy_amount,
-        starting_bankroll=cfg.starting_bankroll,
-        max_trades_per_window=cfg.max_trades_per_window,
-        hedge_threshold=cfg.hedge_threshold,
-        last_minute_seconds=cfg.last_minute_seconds,
-    )
+
+    for sym, state in STATES.items():
+        state.configure(
+            mode=cfg.mode,
+            has_credentials=cfg.has_credentials,
+            trigger_price=cfg.trigger_price,
+            buy_amount=cfg.buy_amount,
+            starting_bankroll=cfg.starting_bankroll,
+            max_trades_per_window=cfg.max_trades_per_window,
+            hedge_threshold=cfg.hedge_threshold,
+            last_minute_seconds=cfg.last_minute_seconds,
+        )
 
     if cfg.is_real and not cfg.has_credentials:
         logger.warn(
@@ -27,11 +29,12 @@ def main() -> None:
             "the bot will refuse to place orders. Switch to paper or add credentials."
         )
 
-    # Start background BTC price fetcher
-    start_btc_fetcher()
+    start_price_fetcher()
 
-    trader = Trader(cfg)
-    trader.start()
+    for sym in STATES:
+        trader = Trader(cfg, sym)
+        trader.start()
+        logger.ok(f"trader [{sym.upper()}] started", icon="▶")
 
     app = create_app()
     logger.ok(f"dashboard listening on http://{cfg.dashboard_host}:{cfg.dashboard_port}", icon="🌐")

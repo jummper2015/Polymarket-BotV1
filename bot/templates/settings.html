@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Polymarket Bot — Configuración</title>
+  <link rel="stylesheet" href="static/dashboard.css?v=6" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">⏱</span>
+    <h1>Polymarket Bot <span class="muted" style="font-weight:400;font-size:14px;">Multi-Market</span></h1>
+  </div>
+  <nav class="nav-links">
+    <a href="/" class="nav-link">📊 Mercados</a>
+    <a href="/settings" class="nav-link active">⚙ Configuración</a>
+  </nav>
+  <div class="topbar-right">
+    <div class="badges">
+      <span id="mode-badge" class="badge paper">PAPER</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- ── Formulario de configuración ── -->
+  <section class="grid config-grid">
+    <div class="card wide config-card">
+      <div class="card-head">
+        <h2>⚙ Configuración de la operativa</h2>
+        <span id="cfg-save-msg" class="cfg-msg"></span>
+      </div>
+      <p class="muted" style="font-size:13px;margin:0 0 8px;">
+        La configuración se aplica simultáneamente a los tres mercados (BTC, SOL, ETH).
+      </p>
+      <form id="cfg-form" class="cfg-form" autocomplete="off">
+
+        <!-- Estrategia activa -->
+        <div class="cfg-row">
+          <label class="cfg-label">
+            Estrategia activa
+            <span class="cfg-hint">Selecciona qué estrategia ejecutar en cada ventana</span>
+          </label>
+          <div class="strategy-toggle">
+            <button type="button" id="btn-strat-trigger" class="strategy-btn active" data-strat="trigger">⚡ Trigger</button>
+            <button type="button" id="btn-strat-mm"      class="strategy-btn"        data-strat="market_making">🏦 Market Making</button>
+            <button type="button" id="btn-strat-both"    class="strategy-btn"        data-strat="both">⚡+🏦 Ambas</button>
+          </div>
+        </div>
+
+        <!-- ── TRIGGER STRATEGY ── -->
+        <div id="trigger-config-section">
+          <div class="cfg-section-header">⚡ Estrategia Trigger</div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Precio trigger
+              <span class="cfg-hint">Umbral de activación (0.01 – 0.99)</span>
+            </label>
+            <input id="cfg-trigger" type="number" class="cfg-input" step="0.01" min="0.01" max="0.99" placeholder="0.90" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Monto por trade (USDC)
+              <span class="cfg-hint">Inversión por operación</span>
+            </label>
+            <input id="cfg-buy" type="number" class="cfg-input" step="0.5" min="0.5" max="100000" placeholder="5.00" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Trades por ventana
+              <span class="cfg-hint">Máx. posiciones iniciales por ventana (1–10)</span>
+            </label>
+            <input id="cfg-max-trades" type="number" class="cfg-input" step="1" min="1" max="10" placeholder="1" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Hedge a partir de
+              <span class="cfg-hint">Precio que activa la cobertura (0.50 – 0.99)</span>
+            </label>
+            <input id="cfg-hedge" type="number" class="cfg-input" step="0.01" min="0.50" max="0.99" placeholder="0.96" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Segundos de entrada
+              <span class="cfg-hint">Ventana de entrada al final del evento (10 – 240 s)</span>
+            </label>
+            <input id="cfg-lastmin" type="number" class="cfg-input" step="5" min="10" max="240" placeholder="60" />
+          </div>
+        </div>
+
+        <!-- ── MARKET MAKING ── -->
+        <div id="mm-config-section" style="display:none">
+          <div class="cfg-section-header">🏦 Market Making</div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Shares por lado
+              <span class="cfg-hint">Cantidad de shares en UP y DOWN (misma cantidad por lado)</span>
+            </label>
+            <input id="cfg-mm-shares" type="number" class="cfg-input" step="1" min="1" max="100000" placeholder="20" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Segundos antes del cierre
+              <span class="cfg-hint">Momento de activación del MM (5 – 120 s)</span>
+            </label>
+            <input id="cfg-mm-last-sec" type="number" class="cfg-input" step="1" min="5" max="120" placeholder="30" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Precio máximo de compra
+              <span class="cfg-hint">Techo de precio de entrada MM (0.50 – 0.99)</span>
+            </label>
+            <input id="cfg-mm-max-price" type="number" class="cfg-input" step="0.01" min="0.50" max="0.99" placeholder="0.95" />
+          </div>
+        </div>
+
+        <!-- ── GENERAL ── -->
+        <div class="cfg-section-header">🏦 General</div>
+        <div class="cfg-row">
+          <label class="cfg-label">
+            Bankroll inicial (USDC)
+            <span class="cfg-hint">Capital de referencia para calcular P&L</span>
+          </label>
+          <input id="cfg-bankroll" type="number" class="cfg-input" step="100" min="1" max="10000000" placeholder="1000" />
+        </div>
+        <div class="cfg-row cfg-mode-row">
+          <label class="cfg-label">
+            Modo de operación
+            <span class="cfg-hint">Paper = simulación · Real = órdenes reales en Polymarket</span>
+          </label>
+          <div class="mode-toggle">
+            <button type="button" id="btn-paper" class="mode-btn active" data-mode="paper">Paper</button>
+            <button type="button" id="btn-real"  class="mode-btn"        data-mode="real">Real</button>
+          </div>
+        </div>
+
+        <div class="cfg-actions">
+          <button type="submit" class="btn-apply">Aplicar cambios a los 3 mercados</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ── Checklist para modo Real ── -->
+  <section class="card wide readiness-card">
+    <div class="card-head">
+      <h2>Estado para modo Real</h2>
+      <span id="readiness-badge" class="badge warn">—</span>
+    </div>
+    <ul id="readiness-steps" class="readiness-list"></ul>
+  </section>
+</main>
+
+<footer class="footer muted">Polymarket Bot · Configuración</footer>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+
+  // ── strategy selector ──
+  let _selectedStrategy = "trigger";
+  function setStrategyUI(s) {
+    _selectedStrategy = s;
+    $("btn-strat-trigger").classList.toggle("active", s === "trigger");
+    $("btn-strat-mm").classList.toggle("active",      s === "market_making");
+    $("btn-strat-both").classList.toggle("active",    s === "both");
+    const showT = s === "trigger" || s === "both";
+    const showM = s === "market_making" || s === "both";
+    $("trigger-config-section").style.display = showT ? "" : "none";
+    $("mm-config-section").style.display      = showM ? "" : "none";
+  }
+  $("btn-strat-trigger").addEventListener("click", () => setStrategyUI("trigger"));
+  $("btn-strat-mm").addEventListener("click",      () => setStrategyUI("market_making"));
+  $("btn-strat-both").addEventListener("click",    () => setStrategyUI("both"));
+
+  // ── mode selector ──
+  let _selectedMode = "paper";
+  function setModeUI(m) {
+    _selectedMode = m;
+    $("btn-paper").classList.toggle("active", m === "paper");
+    $("btn-real").classList.toggle("active",  m === "real");
+  }
+  $("btn-paper").addEventListener("click", () => setModeUI("paper"));
+  $("btn-real").addEventListener("click",  () => setModeUI("real"));
+
+  // ── load state ──
+  async function loadState() {
+    try {
+      const resp = await fetch("state", { cache: "no-store" });
+      if (!resp.ok) return;
+      const s = await resp.json();
+      const c = s.config || {};
+      $("cfg-trigger").value    = c.trigger_price    ?? 0.90;
+      $("cfg-buy").value        = c.buy_amount        ?? 5.0;
+      $("cfg-max-trades").value = c.max_trades_per_window ?? 1;
+      $("cfg-hedge").value      = c.hedge_threshold   ?? 0.96;
+      $("cfg-lastmin").value    = c.last_minute_seconds ?? 60;
+      $("cfg-mm-shares").value    = c.mm_shares    ?? 20;
+      $("cfg-mm-last-sec").value  = c.mm_last_seconds ?? 30;
+      $("cfg-mm-max-price").value = c.mm_max_price ?? 0.95;
+      $("cfg-bankroll").value     = c.starting_bankroll ?? 1000;
+      setModeUI(c.mode || "paper");
+      setStrategyUI(c.active_strategy || "trigger");
+
+      const mBadge = $("mode-badge");
+      mBadge.textContent = (c.mode || "paper").toUpperCase();
+      mBadge.className = "badge " + (c.mode === "real" ? "real" : "paper");
+
+      // readiness
+      const r = s.real_mode_readiness;
+      if (r) {
+        $("readiness-badge").textContent = r.ready ? "✓ Listo para Real" : "✗ Pendiente";
+        $("readiness-badge").className   = "badge " + (r.ready ? "ok" : "warn");
+        $("readiness-steps").innerHTML = (r.steps || []).map(st => `
+          <li class="readiness-step ${st.done ? "done" : "todo"}">
+            <span class="step-icon">${st.done ? "✓" : "○"}</span>
+            <div>
+              <strong>${st.text}</strong>
+              ${st.detail ? `<p class="step-detail muted">${st.detail}</p>` : ""}
+            </div>
+          </li>`).join("");
+      }
+    } catch (_) {}
+  }
+  loadState();
+
+  // ── form submit ──
+  function showMsg(text, type) {
+    const el = $("cfg-save-msg");
+    el.textContent = text;
+    el.className = "cfg-msg " + type;
+    setTimeout(() => { el.textContent = ""; el.className = "cfg-msg"; }, 4000);
+  }
+
+  $("cfg-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      trigger_price:         parseFloat($("cfg-trigger").value),
+      buy_amount:            parseFloat($("cfg-buy").value),
+      max_trades_per_window: parseInt($("cfg-max-trades").value, 10),
+      hedge_threshold:       parseFloat($("cfg-hedge").value),
+      last_minute_seconds:   parseInt($("cfg-lastmin").value, 10),
+      active_strategy: _selectedStrategy,
+      mm_shares:       parseFloat($("cfg-mm-shares").value),
+      mm_last_seconds: parseInt($("cfg-mm-last-sec").value, 10),
+      mm_max_price:    parseFloat($("cfg-mm-max-price").value),
+      starting_bankroll: parseFloat($("cfg-bankroll").value),
+      mode: _selectedMode,
+    };
+    Object.keys(body).forEach((k) => {
+      if (typeof body[k] === "number" && isNaN(body[k])) delete body[k];
+    });
+    try {
+      const resp = await fetch("config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        cache: "no-store",
+      });
+      const data = await resp.json();
+      if (resp.ok && data.ok) {
+        const keys = Object.keys(data.updated || {});
+        showMsg("✓ Guardado: " + (keys.length ? keys.join(", ") : "sin cambios"), "ok");
+        loadState();
+      } else {
+        showMsg("✗ " + (data.error || "Error al guardar"), "err");
+      }
+    } catch (err) {
+      showMsg("✗ Error de red: " + err.message, "err");
+    }
+  });
+})();
+</script>
+</body>
+</html>

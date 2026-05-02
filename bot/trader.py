@@ -10,12 +10,12 @@ Rules:
      the fixed trigger threshold.  trigger_price is purely an entry signal.
   5. Hedge: if the initial side's price rises to hedge_threshold, buy the opposite
      side with the same number of shares (provided opposite mid < 1.00).
-  6. Emergency exit: if an open position has NOT been hedged and 10 seconds or
-     fewer remain in the window, sell immediately at the best available price.
+  6. Emergency hedge: if an open position has NOT been hedged and 10 seconds or
+     fewer remain in the window, buy the opposite side to guarantee coverage.
   7. max_trades_per_window controls how many initial (non-hedge) trades per window.
 
 All runtime-mutable params (trigger_price, buy_amount, max_trades_per_window,
-hedge_threshold, last_minute_seconds, mode) are read from STATE so dashboard
+hedge_threshold, last_minute_seconds, mode) are read from self.state so dashboard
 changes take effect on the next window without restarting.
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from . import logger
 from .config import Config
 from .market import load_market_for_current_window
 from .price_feed import PriceFeed
-from .state import STATE, Trade
+from .state import STATES, Trade
 
 
 def _sleep_ms(ms: int) -> None:
@@ -37,8 +37,10 @@ def _sleep_ms(ms: int) -> None:
 
 
 class Trader:
-    def __init__(self, cfg: Config) -> None:
-        self.cfg = cfg          # static config (ports, hosts, keys…)
+    def __init__(self, cfg: Config, symbol: str = "btc") -> None:
+        self.cfg = cfg
+        self.symbol = symbol
+        self.state = STATES[symbol]
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._client = None
@@ -51,7 +53,11 @@ class Trader:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="trader", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"trader-{self.symbol}",
+            daemon=True,
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -60,61 +66,62 @@ class Trader:
     # ----- core loop -----
 
     def _run(self) -> None:
-        cfg = self.cfg
+        sym = self.symbol.upper()
         logger.info(
-            f"starting bot — mode={STATE.mode} trigger={STATE.trigger_price} "
-            f"buy=${STATE.buy_amount} bankroll=${STATE.starting_bankroll:.2f} "
-            f"last_minute={STATE.last_minute_seconds}s hedge@{STATE.hedge_threshold}",
+            f"[{sym}] starting bot — mode={self.state.mode} trigger={self.state.trigger_price} "
+            f"buy=${self.state.buy_amount} bankroll=${self.state.starting_bankroll:.2f} "
+            f"last_minute={self.state.last_minute_seconds}s hedge@{self.state.hedge_threshold}",
             icon="🤖",
         )
-        if STATE.mode == "real" and not cfg.has_credentials:
-            logger.err("real mode requires PRIVATE_KEY and PROXY_WALLET; refusing to start")
-            STATE.set_status("error", "Missing PRIVATE_KEY / PROXY_WALLET for real mode")
+        if self.state.mode == "real" and not self.cfg.has_credentials:
+            logger.err(f"[{sym}] real mode requires PRIVATE_KEY and PROXY_WALLET; refusing to start")
+            self.state.set_status("error", "Missing PRIVATE_KEY / PROXY_WALLET for real mode")
             return
 
         while not self._stop.is_set():
             try:
                 self._run_one_window()
             except Exception as exc:
-                logger.err(f"window error: {exc}")
-                STATE.set_status("error", str(exc))
+                logger.err(f"[{sym}] window error: {exc}")
+                self.state.set_status("error", str(exc))
                 time.sleep(2.0)
 
     def _run_one_window(self) -> None:
-        STATE.set_status("loading_market", "Loading market for current window")
+        sym = self.symbol.upper()
+        self.state.set_status("loading_market", "Loading market for current window")
         tokens = load_market_for_current_window(
             self.cfg.gamma_host,
+            symbol=self.symbol,
             retry_seconds=self.cfg.market_load_retry_seconds,
-            on_slug_change=lambda slug, ts: STATE.set_window(slug, ts),
+            on_slug_change=lambda slug, ts: self.state.set_window(slug, ts),
         )
-        STATE.set_window(tokens.slug, tokens.window_ts)
-        STATE.set_tokens(tokens.up_token_id, tokens.down_token_id)
-        logger.ok(f"market ready  slug={tokens.slug}", icon="📈")
+        self.state.set_window(tokens.slug, tokens.window_ts)
+        self.state.set_tokens(tokens.up_token_id, tokens.down_token_id)
+        logger.ok(f"[{sym}] market ready  slug={tokens.slug}", icon="📈")
 
         feed = PriceFeed(
             ws_url=self.cfg.ws_url,
             up_token_id=tokens.up_token_id,
             down_token_id=tokens.down_token_id,
             on_price=self._on_price,
-            on_status=STATE.set_ws_connected,
+            on_status=self.state.set_ws_connected,
         )
         feed.start()
 
         try:
             self._wait_for_first_prices(timeout_s=self.cfg.first_price_timeout_seconds)
 
-            trigger_active = STATE.active_strategy in ("trigger", "both")
-            mm_active = STATE.active_strategy in ("market_making", "both")
+            trigger_active = self.state.active_strategy in ("trigger", "both")
+            mm_active = self.state.active_strategy in ("market_making", "both")
 
-            # Launch Market Making strategy in a parallel daemon thread if active
             mm_thread = None
             if mm_active:
                 from .strategy_mm import MarketMakerStrategy
-                mm_strat = MarketMakerStrategy(self.cfg)
+                mm_strat = MarketMakerStrategy(self.cfg, self.state)
                 mm_thread = threading.Thread(
                     target=mm_strat.run_for_window,
                     args=(tokens,),
-                    name="mm-strategy",
+                    name=f"mm-{self.symbol}",
                     daemon=True,
                 )
                 mm_thread.start()
@@ -124,30 +131,30 @@ class Trader:
                 self._wait_for_last_minute(tokens)
 
                 # Phase 2 — check if price already above trigger at entry
-                up_at_entry = STATE.last_up_price
-                down_at_entry = STATE.last_down_price
-                trigger = STATE.trigger_price   # read from STATE (runtime-mutable)
+                up_at_entry = self.state.last_up_price
+                down_at_entry = self.state.last_down_price
+                trigger = self.state.trigger_price
                 already_above = (
                     (up_at_entry is not None and up_at_entry >= trigger) or
                     (down_at_entry is not None and down_at_entry >= trigger)
                 )
                 if already_above:
                     logger.warn(
-                        f"SKIP — price already above trigger at last-minute entry  "
+                        f"[{sym}] SKIP — price already above trigger at last-minute entry  "
                         f"UP={up_at_entry}  DOWN={down_at_entry}  trigger={trigger}",
                         icon="🚫",
                     )
-                    STATE.set_status("watching", "skipped — price above trigger at entry")
+                    self.state.set_status("watching", "skipped — price above trigger at entry")
                     self._sleep_until(tokens.window_ts + 300 + 2.0)
                 else:
                     # Phase 3 — watch for the trigger crossing
-                    STATE.set_status("watching", f"last minute — watching {tokens.slug}")
+                    self.state.set_status("watching", f"last minute — watching {tokens.slug}")
                     self._monitor_until_trigger_or_window_end(tokens)
 
                     # Phase 4 — hold + hedge until window ends
-                    if STATE.count_initial_trades_for_window(tokens.slug) > 0:
-                        STATE.set_status("holding", f"{tokens.slug} — holding to settlement")
-                        initial_trade = STATE.find_open_trade_for_window(tokens.slug)
+                    if self.state.count_initial_trades_for_window(tokens.slug) > 0:
+                        self.state.set_status("holding", f"{tokens.slug} — holding to settlement")
+                        initial_trade = self.state.find_open_trade_for_window(tokens.slug)
                         if initial_trade is not None:
                             self._hold_and_hedge_until_window_end(tokens, initial_trade)
 
@@ -156,23 +163,22 @@ class Trader:
                 # No trigger strategy — wait for the window to close
                 self._sleep_until(tokens.window_ts + 300 + 2.0)
 
-            # Ensure MM thread has completed before moving to settlement
             if mm_thread is not None and mm_thread.is_alive():
                 mm_thread.join(timeout=10.0)
 
         finally:
             feed.stop()
-            STATE.set_ws_connected(False)
+            self.state.set_ws_connected(False)
 
         self._resolve_all_open_trades(tokens)
 
         next_ts = tokens.window_ts + 300
-        logger.info(f"advancing to next window btc-updown-5m-{next_ts}", icon="⏭")
+        logger.info(f"[{sym}] advancing to next window {self.symbol}-updown-5m-{next_ts}", icon="⏭")
 
     # ----- helpers -----
 
     def _on_price(self, side: str, mid: float) -> None:
-        STATE.update_price(side, mid)
+        self.state.update_price(side, mid)
 
     def _sleep_until(self, target_unix: float) -> None:
         while not self._stop.is_set():
@@ -184,14 +190,14 @@ class Trader:
     def _wait_for_first_prices(self, timeout_s: float) -> None:
         start = time.time()
         while time.time() - start < timeout_s:
-            if STATE.last_up_price is not None and STATE.last_down_price is not None:
+            if self.state.last_up_price is not None and self.state.last_down_price is not None:
                 return
             _sleep_ms(50)
         logger.warn("no initial prices received within timeout; continuing anyway")
 
     def _wait_for_last_minute(self, tokens) -> None:
         window_ends = tokens.window_ts + 300
-        entry_time = window_ends - STATE.last_minute_seconds  # runtime-mutable
+        entry_time = window_ends - self.state.last_minute_seconds
 
         while not self._stop.is_set():
             now = time.time()
@@ -208,26 +214,15 @@ class Trader:
         logger.info(f"{tokens.slug}  entering last-minute watch window", icon="⏱")
 
     def _monitor_until_trigger_or_window_end(self, tokens) -> None:
-        """Watch prices; buy at actual market price when it crosses trigger.
-
-        Supports max_trades_per_window > 1: continues monitoring until
-        max trades are placed or the window closes.  Never buys the same
-        side twice in one window.
-
-        Entry is only allowed during the FIRST 45 seconds of the last-minute
-        window.  After that the monitor exits without placing new trades.
-        """
         cfg = self.cfg
         window_ends = tokens.window_ts + 300
-        # Cutoff: entry only in first 45 s of the last-minute window
-        entry_cutoff = window_ends - STATE.last_minute_seconds + 45
+        entry_cutoff = window_ends - self.state.last_minute_seconds + 45
 
         while not self._stop.is_set():
             now = time.time()
             if now >= window_ends:
                 return
 
-            # Stop opening new positions after the first 45 s of last minute
             if now >= entry_cutoff:
                 logger.info(
                     f"{tokens.slug}  entry window closed — past first 45s of last minute  "
@@ -236,11 +231,11 @@ class Trader:
                 )
                 return
 
-            up = STATE.last_up_price
-            down = STATE.last_down_price
-            trigger = STATE.trigger_price       # runtime-mutable
-            max_trades = STATE.max_trades_per_window  # runtime-mutable
-            current_count = STATE.count_initial_trades_for_window(tokens.slug)
+            up = self.state.last_up_price
+            down = self.state.last_down_price
+            trigger = self.state.trigger_price
+            max_trades = self.state.max_trades_per_window
+            current_count = self.state.count_initial_trades_for_window(tokens.slug)
 
             if up is not None and down is not None:
                 logger.transient(
@@ -251,30 +246,24 @@ class Trader:
 
             if current_count < max_trades:
                 if up is not None and up >= trigger:
-                    if not STATE.has_initial_trade_for_side(tokens.slug, "UP"):
+                    if not self.state.has_initial_trade_for_side(tokens.slug, "UP"):
                         self._fire_initial_trade(tokens, "UP", tokens.up_token_id, up)
                         current_count += 1
                         if current_count >= max_trades:
                             return
 
                 if down is not None and down >= trigger:
-                    if not STATE.has_initial_trade_for_side(tokens.slug, "DOWN"):
+                    if not self.state.has_initial_trade_for_side(tokens.slug, "DOWN"):
                         self._fire_initial_trade(tokens, "DOWN", tokens.down_token_id, down)
                         current_count += 1
                         if current_count >= max_trades:
                             return
             else:
-                return  # max trades reached
+                return
 
             _sleep_ms(cfg.poll_interval_ms)
 
     def _hold_and_hedge_until_window_end(self, tokens, initial_trade: Trade) -> None:
-        """Hold position; place one hedge if price hits hedge_threshold.
-
-        Emergency hedge: if 10 seconds or fewer remain and no hedge has been
-        placed yet, buy the opposite side with the same number of shares to
-        guarantee exposure on both sides before settlement.
-        """
         end = tokens.window_ts + 300
         _EMERGENCY_SECONDS = 10
 
@@ -283,9 +272,9 @@ class Trader:
             if now >= end:
                 return
 
-            up = STATE.last_up_price
-            down = STATE.last_down_price
-            hedge_threshold = STATE.hedge_threshold  # runtime-mutable
+            up = self.state.last_up_price
+            down = self.state.last_down_price
+            hedge_threshold = self.state.hedge_threshold
             ttl = end - now
 
             if up is not None and down is not None:
@@ -293,9 +282,8 @@ class Trader:
                     f"{tokens.slug}  HOLD  UP={up:.4f}  DOWN={down:.4f}  ttl={int(ttl)}s"
                 )
 
-            hedge_placed = STATE.find_hedge_for_window(tokens.slug) is not None
+            hedge_placed = self.state.find_hedge_for_window(tokens.slug) is not None
 
-            # --- Emergency hedge at last 10 seconds if no hedge was placed ---
             if not hedge_placed and ttl <= _EMERGENCY_SECONDS:
                 logger.warn(
                     f"{tokens.slug}  ⚡ last {int(ttl)}s — no hedge reached — buying opposite side",
@@ -322,15 +310,14 @@ class Trader:
     # ----- trade execution -----
 
     def _fire_emergency_sell(self, tokens) -> None:
-        """Sell ALL open positions at current best price with ~10 s to window end."""
-        up = STATE.last_up_price
-        down = STATE.last_down_price
-        open_trades = STATE.find_all_open_trades_for_window(tokens.slug)
+        up = self.state.last_up_price
+        down = self.state.last_down_price
+        open_trades = self.state.find_all_open_trades_for_window(tokens.slug)
 
         if not open_trades:
             return
 
-        is_real_now = STATE.mode == "real"
+        is_real_now = self.state.mode == "real"
 
         for trade in open_trades:
             sell_price_raw = up if trade.side == "UP" else down
@@ -362,20 +349,16 @@ class Trader:
             else:
                 note = f"paper emergency sell @ {sell_price:.4f}"
 
-            STATE.resolve_trade(trade.id, "sold", sell_price, pnl, note=note)
+            self.state.resolve_trade(trade.id, "sold", sell_price, pnl, note=note)
 
-        STATE.set_status("sold", f"emergency exit @ {round((up or 0), 4)}/{round((down or 0), 4)}")
+        self.state.set_status("sold", f"emergency exit @ {round((up or 0), 4)}/{round((down or 0), 4)}")
 
     def _fire_emergency_hedge(self, tokens, initial_trade: Trade) -> None:
-        """Buy the opposite side with the same shares as the initial trade.
-
-        Called when 10 s remain and no hedge was placed via the normal threshold.
-        Guarantees exposure on both sides before settlement instead of selling.
-        """
+        """Buy the opposite side with the same shares as the initial trade."""
         opp_side     = "DOWN" if initial_trade.side == "UP" else "UP"
         opp_token_id = tokens.down_token_id if initial_trade.side == "UP" else tokens.up_token_id
         opp_price_raw = (
-            STATE.last_down_price if initial_trade.side == "UP" else STATE.last_up_price
+            self.state.last_down_price if initial_trade.side == "UP" else self.state.last_up_price
         )
 
         if opp_price_raw is None:
@@ -400,7 +383,7 @@ class Trader:
 
         order_id: Optional[str] = None
         note = ""
-        is_real_now = STATE.mode == "real"
+        is_real_now = self.state.mode == "real"
 
         if is_real_now and self._client is not None:
             try:
@@ -423,19 +406,18 @@ class Trader:
             price=exec_price,
             shares=shares,
             cost=cost,
-            mode=STATE.mode,
+            mode=self.state.mode,
             opened_at=time.time(),
             order_id=order_id,
             note=note,
             is_hedge=True,
         )
-        STATE.add_trade(hedge)
-        STATE.set_status("hedged", f"emergency hedge {initial_trade.side}+{opp_side}")
+        self.state.add_trade(hedge)
+        self.state.set_status("hedged", f"emergency hedge {initial_trade.side}+{opp_side}")
 
     def _fire_initial_trade(self, tokens, side: str, token_id: str, observed_price: float) -> None:
-        """Buy at the ACTUAL observed market price (not the trigger threshold)."""
-        trigger = STATE.trigger_price       # signal threshold
-        buy_amount = STATE.buy_amount       # runtime-mutable
+        trigger = self.state.trigger_price
+        buy_amount = self.state.buy_amount
         exec_price = round(observed_price, 4)
         shares = math.floor((buy_amount / exec_price) * 100) / 100.0
         cost = round(shares * exec_price, 4)
@@ -448,17 +430,17 @@ class Trader:
 
         order_id: Optional[str] = None
         note = ""
-        is_real_now = STATE.mode == "real"
+        is_real_now = self.state.mode == "real"
         if is_real_now and self._client is not None:
             try:
                 order_id, note = self._place_real_order(token_id, shares, exec_price)
             except Exception as exc:
                 logger.err(f"order failed: {exc}")
-                STATE.set_status("error", f"order failed: {exc}")
+                self.state.set_status("error", f"order failed: {exc}")
                 return
         elif is_real_now and self._client is None:
             logger.err("real mode active but CLOB client not initialized — restart required")
-            STATE.set_status("error", "real mode: restart bot with credentials")
+            self.state.set_status("error", "real mode: restart bot with credentials")
             return
         else:
             note = f"paper trade @ {exec_price:.4f}"
@@ -472,14 +454,14 @@ class Trader:
             price=exec_price,
             shares=shares,
             cost=cost,
-            mode=STATE.mode,
+            mode=self.state.mode,
             opened_at=time.time(),
             order_id=order_id,
             note=note,
             is_hedge=False,
         )
-        trade = STATE.add_trade(trade)
-        STATE.set_status("traded", f"{side} @ {exec_price:.4f} (signal {trigger:.2f})")
+        trade = self.state.add_trade(trade)
+        self.state.set_status("traded", f"{side} @ {exec_price:.4f} (signal {trigger:.2f})")
 
     def _fire_hedge(self, tokens, initial_trade: Trade, opp_side: str, opp_token_id: str, opp_mid: float) -> None:
         exec_price = round(opp_mid, 4)
@@ -494,7 +476,7 @@ class Trader:
 
         order_id: Optional[str] = None
         note = ""
-        is_real_now = STATE.mode == "real"
+        is_real_now = self.state.mode == "real"
         if is_real_now and self._client is not None:
             try:
                 order_id, note = self._place_real_order(opp_token_id, shares, exec_price)
@@ -515,24 +497,24 @@ class Trader:
             price=exec_price,
             shares=shares,
             cost=cost,
-            mode=STATE.mode,
+            mode=self.state.mode,
             opened_at=time.time(),
             order_id=order_id,
             note=note,
             is_hedge=True,
         )
-        STATE.add_trade(hedge)
-        STATE.set_status("hedged", f"{initial_trade.side}+{opp_side} hedged")
+        self.state.add_trade(hedge)
+        self.state.set_status("hedged", f"{initial_trade.side}+{opp_side} hedged")
 
     # ----- settlement -----
 
     def _resolve_all_open_trades(self, tokens) -> None:
-        open_trades = STATE.find_all_open_trades_for_window(tokens.slug)
+        open_trades = self.state.find_all_open_trades_for_window(tokens.slug)
         if not open_trades:
             return
 
-        final_up = STATE.last_up_price
-        final_down = STATE.last_down_price
+        final_up = self.state.last_up_price
+        final_down = self.state.last_down_price
 
         winner: Optional[str] = None
         if final_up is not None and final_down is not None:
@@ -548,18 +530,18 @@ class Trader:
             label = "HEDGE" if trade.is_hedge else "TRADE"
 
             if winner is None:
-                STATE.resolve_trade(trade.id, "expired", side_final or 0.0, 0.0, note="no final price")
+                self.state.resolve_trade(trade.id, "expired", side_final or 0.0, 0.0, note="no final price")
                 logger.warn(f"{label} #{trade.id} expired (no final price)")
                 continue
 
             if winner == trade.side:
                 payout = trade.shares * 1.0
                 pnl = round(payout - trade.cost, 4)
-                STATE.resolve_trade(trade.id, "won", side_final or 1.0, pnl)
+                self.state.resolve_trade(trade.id, "won", side_final or 1.0, pnl)
                 logger.ok(f"{label} #{trade.id} WON  side={trade.side}  pnl=${pnl:+.4f}", icon="🟢")
             else:
                 pnl = round(-trade.cost, 4)
-                STATE.resolve_trade(trade.id, "lost", side_final or 0.0, pnl)
+                self.state.resolve_trade(trade.id, "lost", side_final or 0.0, pnl)
                 logger.warn(f"{label} #{trade.id} LOST side={trade.side}  pnl=${pnl:+.4f}", icon="🔴")
 
     # ----- real-order plumbing -----

@@ -22,50 +22,63 @@ body {
 }
 
 .muted { color: var(--muted); }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.mono  { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 
-/* ── TOPBAR ───────────────────────────────────────────────── */
+/* ── TOPBAR / NAV ─────────────────────────────────────────── */
 .topbar {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 24px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
   gap: 16px;
   flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 100;
 }
 .brand { display: flex; align-items: center; gap: 12px; }
 .brand .logo { font-size: 22px; }
-.brand h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: 0.2px; }
-.brand h1 .muted { font-weight: 400; font-size: 14px; margin-left: 6px; }
+.brand h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: 0.2px; }
 
-.btc-price-wrap {
-  display: flex; align-items: center; gap: 8px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 6px 14px;
+.nav-links { display: flex; gap: 4px; }
+.nav-link {
+  text-decoration: none;
+  color: var(--muted);
+  font-size: 13px; font-weight: 500;
+  padding: 7px 14px;
+  border-radius: 8px;
+  transition: color 0.15s, background 0.15s;
 }
-.btc-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: var(--warn); }
-.btc-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
-.btc-age { font-size: 11px; }
+.nav-link:hover { color: var(--text); background: var(--panel-2); }
+.nav-link.active { color: var(--accent); background: rgba(90,141,238,0.12); }
+
+.topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.spot-prices { display: flex; gap: 10px; flex-wrap: wrap; }
+.spot-item { display: flex; align-items: center; gap: 5px; }
+.spot-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
+.spot-val { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .badges { display: flex; gap: 8px; flex-wrap: wrap; }
 .badge {
-  padding: 6px 10px; border-radius: 999px;
+  padding: 5px 10px; border-radius: 999px;
   background: var(--panel-2); border: 1px solid var(--border);
   font-size: 12px; letter-spacing: 0.2px;
 }
-.badge.ok  { color: var(--up);   border-color: rgba(28,200,138,0.3); }
-.badge.warn{ color: var(--warn); border-color: rgba(241,180,76,0.3); }
-.badge.err { color: var(--down); border-color: rgba(231,74,59,0.35); }
-.badge.real{ color: #fff; background: var(--down); border-color: var(--down); }
-.badge.paper{ color: var(--text); background: var(--panel-2); }
+.badge.ok   { color: var(--up);   border-color: rgba(28,200,138,0.3); }
+.badge.warn { color: var(--warn); border-color: rgba(241,180,76,0.3); }
+.badge.err  { color: var(--down); border-color: rgba(231,74,59,0.35); }
+.badge.real { color: #fff; background: var(--down); border-color: var(--down); }
+.badge.paper { color: var(--text); background: var(--panel-2); }
 
 /* ── LAYOUT ───────────────────────────────────────────────── */
-main { max-width: 1300px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+main {
+  max-width: 1400px; margin: 0 auto; padding: 24px;
+  display: flex; flex-direction: column; gap: 24px;
+}
 
-.grid { display: grid; gap: 16px; grid-template-columns: repeat(5, 1fr); }
-.grid.two { grid-template-columns: 1.4fr 1fr; }
+.grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(5, 1fr);
+}
 .config-grid { grid-template-columns: 1fr; }
 
 .card {
@@ -75,8 +88,35 @@ main { max-width: 1300px; margin: 0 auto; padding: 24px; display: flex; flex-dir
   padding: 20px;
 }
 .card.wide { grid-column: 1 / -1; }
-.card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.card-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted); }
+.card-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 16px;
+}
+.card-head h2 {
+  margin: 0; font-size: 13px; font-weight: 600;
+  letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted);
+}
+
+/* ── MARKET GRID ──────────────────────────────────────────── */
+.market-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(3, 1fr);
+}
+.market-panel { padding: 18px; }
+
+.market-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 10px; flex-wrap: wrap;
+}
+.market-title { display: flex; align-items: center; gap: 12px; }
+.market-icon { font-size: 28px; line-height: 1; }
+.market-name { font-size: 15px; font-weight: 600; margin-bottom: 2px; }
+
+.market-meta {
+  display: flex; gap: 14px; margin-top: 14px;
+  color: var(--muted); font-size: 12px; flex-wrap: wrap;
+}
+.market-meta strong { color: var(--text); }
 
 /* ── KPI CARDS ────────────────────────────────────────────── */
 .kpi { display: flex; flex-direction: column; gap: 6px; }
@@ -86,8 +126,25 @@ main { max-width: 1300px; margin: 0 auto; padding: 24px; display: flex; flex-dir
 .kpi-value.up   { color: var(--up); }
 .kpi-value.down { color: var(--down); }
 
+/* ── PRICES ───────────────────────────────────────────────── */
+.prices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.price {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.price.up   { border-color: rgba(28,200,138,0.3); }
+.price.down { border-color: rgba(231,74,59,0.3); }
+.price .side  { font-size: 12px; letter-spacing: 0.6px; color: var(--muted); }
+.price .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.price.up   .value { color: var(--up); }
+.price.down .value { color: var(--down); }
+.bar { height: 6px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
+.bar-fill { height: 100%; width: 0%; border-radius: 999px; transition: width 200ms ease; }
+.price.up   .bar-fill { background: var(--up); }
+.price.down .bar-fill { background: var(--down); }
+
 /* ── CONFIG SECTION ───────────────────────────────────────── */
-.config-card { }
 .cfg-form { display: flex; flex-direction: column; gap: 0; }
 .cfg-row {
   display: grid; grid-template-columns: 280px 1fr;
@@ -133,42 +190,19 @@ main { max-width: 1300px; margin: 0 auto; padding: 24px; display: flex; flex-dir
 .cfg-msg.ok  { color: var(--up); }
 .cfg-msg.err { color: var(--down); }
 
-/* ── LIVE WINDOW ──────────────────────────────────────────── */
-.prices { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.price {
-  background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 12px; padding: 14px;
-  display: flex; flex-direction: column; gap: 8px;
-}
-.price.up   { border-color: rgba(28,200,138,0.3); }
-.price.down { border-color: rgba(231,74,59,0.3); }
-.price .side  { font-size: 12px; letter-spacing: 0.6px; color: var(--muted); }
-.price .value { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.price.up   .value { color: var(--up); }
-.price.down .value { color: var(--down); }
-.bar { height: 6px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
-.bar-fill { height: 100%; width: 0%; border-radius: 999px; transition: width 200ms ease; }
-.price.up   .bar-fill { background: var(--up); }
-.price.down .bar-fill { background: var(--down); }
-
-.meta { display: flex; gap: 18px; margin: 14px 0 8px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
-.meta strong { color: var(--text); }
-#price-chart { width: 100%; display: block; margin-top: 8px; }
-
 /* ── LOG ──────────────────────────────────────────────────── */
-.log { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 12.5px; }
-.log li { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 10px; }
+.log { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 12px; }
+.log li { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
 .log li:last-child { border-bottom: none; }
 .log .ts    { color: var(--muted); flex-shrink: 0; }
-.log .level { width: 60px; flex-shrink: 0; text-transform: uppercase; font-size: 10px; padding-top: 2px; }
+.log .level { width: 56px; flex-shrink: 0; text-transform: uppercase; font-size: 10px; padding-top: 2px; }
 .log .level.info    { color: var(--accent); }
 .log .level.success { color: var(--up); }
 .log .level.warn    { color: var(--warn); }
 .log .level.error   { color: var(--down); }
-.log .msg { color: var(--text); word-break: break-word; }
+.log .msg { color: var(--text); word-break: break-word; flex: 1; }
 
 /* ── READINESS ────────────────────────────────────────────── */
-.readiness-card { }
 .readiness-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .readiness-step { display: flex; align-items: flex-start; gap: 14px; padding: 14px 16px; border-radius: 10px; }
 .readiness-step.done { background: rgba(28,200,138,0.07); border: 1px solid rgba(28,200,138,0.2); }
@@ -182,7 +216,7 @@ main { max-width: 1300px; margin: 0 auto; padding: 24px; display: flex; flex-dir
 /* ── TRADES TABLE ─────────────────────────────────────────── */
 .table-wrap { overflow-x: auto; }
 table.trades { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.trades th, table.trades td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+table.trades th, table.trades td { padding: 10px 10px; text-align: left; border-bottom: 1px solid var(--border); }
 table.trades th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
 table.trades td.empty { text-align: center; color: var(--muted); padding: 28px; }
 .tag { padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 500; }
@@ -199,6 +233,9 @@ table.trades td.empty { text-align: center; color: var(--muted); padding: 28px; 
 tr.row-hedge td { background: rgba(241,180,76,0.04); }
 .pnl-pos { color: var(--up);   font-variant-numeric: tabular-nums; }
 .pnl-neg { color: var(--down); font-variant-numeric: tabular-nums; }
+.tag.strat-trigger { background: rgba(241,180,76,0.15); color: var(--warn); }
+.tag.strat-mm      { background: rgba(90,141,238,0.18); color: var(--accent); }
+.tag.sold          { background: rgba(28,200,138,0.12); color: var(--up); }
 
 /* ── STRATEGY TOGGLE ──────────────────────────────────────── */
 .strategy-toggle {
@@ -217,7 +254,6 @@ tr.row-hedge td { background: rgba(241,180,76,0.04); }
 .strategy-btn.active[data-strat="market_making"] { background: rgba(90,141,238,0.2);   color: var(--accent); }
 .strategy-btn.active[data-strat="both"]          { background: rgba(28,200,138,0.15);  color: var(--up); }
 
-/* ── CONFIG SECTION HEADERS ───────────────────────────────── */
 .cfg-section-header {
   font-size: 11px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.6px; color: var(--muted);
@@ -226,23 +262,18 @@ tr.row-hedge td { background: rgba(241,180,76,0.04); }
   margin-top: 4px;
 }
 
-/* ── TRADE STRATEGY TAGS ──────────────────────────────────── */
-.tag.strat-trigger { background: rgba(241,180,76,0.15); color: var(--warn); }
-.tag.strat-mm      { background: rgba(90,141,238,0.18); color: var(--accent); }
-.tag.sold          { background: rgba(28,200,138,0.12); color: var(--up); }
-
 /* ── FOOTER ───────────────────────────────────────────────── */
 .footer { padding: 18px 24px; text-align: center; font-size: 12px; }
 
 /* ── RESPONSIVE ───────────────────────────────────────────── */
-@media (max-width: 1100px) {
+@media (max-width: 1200px) {
+  .market-grid { grid-template-columns: repeat(2, 1fr); }
   .grid { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 780px) {
+  .market-grid { grid-template-columns: 1fr; }
   .grid { grid-template-columns: repeat(2, 1fr); }
-  .grid.two { grid-template-columns: 1fr; }
   .cfg-row { grid-template-columns: 1fr; gap: 8px; }
-  .btc-price-wrap { order: -1; }
 }
 @media (max-width: 480px) {
   .grid { grid-template-columns: 1fr; }

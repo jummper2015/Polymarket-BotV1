@@ -3,36 +3,54 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
 
 import requests as _requests
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
 from . import logger
-from .state import STATE
+from .state import STATES
 
-_BTC_FETCH_INTERVAL = 10  # seconds between Binance price polls
+_PRICE_FETCH_INTERVAL = 10  # seconds between CoinGecko polls
+
+_COINGECKO_IDS = {
+    "btc": "bitcoin",
+    "sol": "solana",
+    "eth": "ethereum",
+}
+
+_MARKET_LABELS = {
+    "btc": "Bitcoin",
+    "sol": "Solana",
+    "eth": "Ethereum",
+}
 
 
-def _btc_price_loop() -> None:
-    """Background daemon: keeps STATE.btc_price up to date from CoinGecko."""
-    # CoinGecko simple price — no API key needed, accessible from Replit
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+def _prices_loop() -> None:
+    ids = ",".join(_COINGECKO_IDS.values())
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd"
     while True:
         try:
             r = _requests.get(url, timeout=8)
             if r.ok:
-                price = float(r.json()["bitcoin"]["usd"])
-                STATE.update_btc_price(price)
+                data = r.json()
+                for sym, coin_id in _COINGECKO_IDS.items():
+                    if coin_id in data:
+                        price = float(data[coin_id]["usd"])
+                        STATES[sym].update_spot_price(price)
         except Exception:
-            pass  # silently retry next interval
-        time.sleep(_BTC_FETCH_INTERVAL)
+            pass
+        time.sleep(_PRICE_FETCH_INTERVAL)
 
 
-def start_btc_fetcher() -> None:
-    t = threading.Thread(target=_btc_price_loop, name="btc-price", daemon=True)
+def start_price_fetcher() -> None:
+    t = threading.Thread(target=_prices_loop, name="price-fetcher", daemon=True)
     t.start()
+
+
+# Keep old name as alias
+def start_btc_fetcher() -> None:
+    start_price_fetcher()
 
 
 def create_app() -> Flask:
@@ -50,11 +68,87 @@ def create_app() -> Flask:
     def index():
         return render_template("dashboard.html")
 
-    # Note: do NOT use the `/api/*` prefix — the Replit workspace proxy reserves
-    # that path for the (unused) api-server artifact, which causes 502s.
+    @app.get("/settings")
+    def settings():
+        return render_template("settings.html")
+
     @app.get("/state")
-    def state():
-        return jsonify(STATE.snapshot())
+    def get_state():
+        snapshots = {sym: st.snapshot() for sym, st in STATES.items()}
+        markets_data = {}
+        all_logs = []
+
+        for sym, snap in snapshots.items():
+            markets_data[sym] = {
+                "symbol": sym,
+                "label": _MARKET_LABELS[sym],
+                "bot_status": snap["bot_status"],
+                "bot_message": snap["bot_message"],
+                "ws_connected": snap["ws_connected"],
+                "current_slug": snap["current_slug"],
+                "seconds_remaining": snap["seconds_remaining"],
+                "last_up_price": snap["last_up_price"],
+                "last_down_price": snap["last_down_price"],
+                "spot_price": snap["spot_price"],
+                "stats": snap["stats"],
+                "trades": snap["trades"],
+                "price_history": snap["price_history"],
+            }
+            for entry in snap["log"]:
+                all_logs.append({"market": sym, **entry})
+
+        all_logs.sort(key=lambda x: x["t"])
+        all_logs = all_logs[-150:]
+
+        btc_snap = snapshots["btc"]
+
+        wins = sum(snapshots[s]["stats"]["wins"] for s in STATES)
+        losses = sum(snapshots[s]["stats"]["losses"] for s in STATES)
+        trades = sum(snapshots[s]["stats"]["trades"] for s in STATES)
+        open_count = sum(snapshots[s]["stats"]["open"] for s in STATES)
+        resolved_pnl = sum(snapshots[s]["stats"]["resolved_pnl"] for s in STATES)
+        total_invested = sum(snapshots[s]["stats"]["total_invested"] for s in STATES)
+        open_cost = sum(snapshots[s]["stats"]["open_cost"] for s in STATES)
+        resolved = wins + losses
+        win_rate = (wins / resolved) if resolved else 0.0
+        roi = (resolved_pnl / total_invested) if total_invested else 0.0
+        starting_bankroll = btc_snap["starting_bankroll"]
+        bankroll = starting_bankroll + resolved_pnl
+        available_cash = bankroll - open_cost
+
+        return jsonify({
+            "markets": markets_data,
+            "config": {
+                "mode": btc_snap["mode"],
+                "has_credentials": btc_snap["has_credentials"],
+                "trigger_price": btc_snap["trigger_price"],
+                "buy_amount": btc_snap["buy_amount"],
+                "max_trades_per_window": btc_snap["max_trades_per_window"],
+                "hedge_threshold": btc_snap["hedge_threshold"],
+                "last_minute_seconds": btc_snap["last_minute_seconds"],
+                "active_strategy": btc_snap["active_strategy"],
+                "mm_shares": btc_snap["mm_shares"],
+                "mm_last_seconds": btc_snap["mm_last_seconds"],
+                "mm_max_price": btc_snap["mm_max_price"],
+                "starting_bankroll": btc_snap["starting_bankroll"],
+            },
+            "combined_stats": {
+                "wins": wins,
+                "losses": losses,
+                "trades": trades,
+                "open": open_count,
+                "win_rate": win_rate,
+                "resolved_pnl": resolved_pnl,
+                "total_invested": total_invested,
+                "roi": roi,
+                "starting_bankroll": starting_bankroll,
+                "bankroll": bankroll,
+                "available_cash": available_cash,
+                "uptime_seconds": btc_snap["stats"]["uptime_seconds"],
+            },
+            "log": all_logs,
+            "real_mode_readiness": btc_snap["real_mode_readiness"],
+        })
 
     @app.post("/config")
     def update_config():
@@ -130,11 +224,19 @@ def create_app() -> Flask:
             except (TypeError, ValueError):
                 pass
 
+        if "starting_bankroll" in data:
+            try:
+                v = float(data["starting_bankroll"])
+                if 1.0 <= v <= 10_000_000:
+                    updates["starting_bankroll"] = v
+            except (TypeError, ValueError):
+                pass
+
         if "mode" in data:
             v = str(data["mode"]).lower()
             if v in ("paper", "real"):
-                if v == "real" and not STATE.has_credentials:
-                    rmr = STATE.real_mode_readiness()
+                if v == "real" and not STATES["btc"].has_credentials:
+                    rmr = STATES["btc"].real_mode_readiness()
                     return jsonify({
                         "ok": False,
                         "error": "Credenciales incompletas para modo real",
@@ -142,7 +244,10 @@ def create_app() -> Flask:
                     }), 400
                 updates["mode"] = v
 
-        accepted = STATE.update_runtime_config(**updates)
+        # Apply config to ALL markets simultaneously
+        accepted = {}
+        for st in STATES.values():
+            accepted = st.update_runtime_config(**updates)
         logger.info(f"config updated via dashboard: {accepted}", icon="⚙")
         return jsonify({"ok": True, "updated": accepted})
 
