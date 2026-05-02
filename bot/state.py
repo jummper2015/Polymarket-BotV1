@@ -262,7 +262,7 @@ class BotState:
             wins = sum(1 for t in self.trades if t.status == "won")
             losses = sum(1 for t in self.trades if t.status == "lost")
             open_count = sum(1 for t in self.trades if t.status == "open")
-            resolved_pnl = sum((t.pnl or 0.0) for t in self.trades if t.status in ("won", "lost", "expired"))
+            resolved_pnl = sum((t.pnl or 0.0) for t in self.trades if t.status in ("won", "lost", "expired", "sold"))
             total_invested = sum(t.cost for t in self.trades)
             total_won = sum((t.pnl or 0.0) + t.cost for t in self.trades if t.status == "won")
             resolved = wins + losses

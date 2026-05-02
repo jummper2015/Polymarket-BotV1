@@ -2,14 +2,17 @@
 
 Rules:
   1. Only enter watching mode in the last last_minute_seconds of each window.
-  2. If price is ALREADY >= trigger_price when the last minute begins → skip.
+  2. New positions are only opened during the FIRST 45 seconds of that last
+     minute.  After second 45 no new initial trades are fired.
+  3. If price is ALREADY >= trigger_price when the last minute begins → skip.
      We only buy when the price CROSSES the trigger from below during last minute.
-  3. Execute the buy at the ACTUAL current market price (observed_price), not at
+  4. Execute the buy at the ACTUAL current market price (observed_price), not at
      the fixed trigger threshold.  trigger_price is purely an entry signal.
-  4. Hedge: if the initial side's price rises to hedge_threshold, buy the opposite
+  5. Hedge: if the initial side's price rises to hedge_threshold, buy the opposite
      side with the same number of shares (provided opposite mid < 1.00).
-  5. max_trades_per_window controls how many initial (non-hedge) trades per window.
-  6. Never sell; hold all positions to settlement.
+  6. Emergency exit: if an open position has NOT been hedged and 10 seconds or
+     fewer remain in the window, sell immediately at the best available price.
+  7. max_trades_per_window controls how many initial (non-hedge) trades per window.
 
 All runtime-mutable params (trigger_price, buy_amount, max_trades_per_window,
 hedge_threshold, last_minute_seconds, mode) are read from STATE so dashboard
@@ -186,12 +189,27 @@ class Trader:
         Supports max_trades_per_window > 1: continues monitoring until
         max trades are placed or the window closes.  Never buys the same
         side twice in one window.
+
+        Entry is only allowed during the FIRST 45 seconds of the last-minute
+        window.  After that the monitor exits without placing new trades.
         """
         cfg = self.cfg
+        window_ends = tokens.window_ts + 300
+        # Cutoff: entry only in first 45 s of the last-minute window
+        entry_cutoff = window_ends - STATE.last_minute_seconds + 45
+
         while not self._stop.is_set():
             now = time.time()
-            window_ends = tokens.window_ts + 300
             if now >= window_ends:
+                return
+
+            # Stop opening new positions after the first 45 s of last minute
+            if now >= entry_cutoff:
+                logger.info(
+                    f"{tokens.slug}  entry window closed — past first 45s of last minute  "
+                    f"ttl={int(window_ends - now)}s",
+                    icon="🔒",
+                )
                 return
 
             up = STATE.last_up_price
@@ -204,7 +222,7 @@ class Trader:
                 logger.transient(
                     f"{tokens.slug}  UP={up:.4f}  DOWN={down:.4f}  "
                     f"trigger={trigger:.2f}  trades={current_count}/{max_trades}  "
-                    f"ttl={int(window_ends - now)}s"
+                    f"entry_closes={int(entry_cutoff - now)}s  ttl={int(window_ends - now)}s"
                 )
 
             if current_count < max_trades:
@@ -227,8 +245,14 @@ class Trader:
             _sleep_ms(cfg.poll_interval_ms)
 
     def _hold_and_hedge_until_window_end(self, tokens, initial_trade: Trade) -> None:
-        """Hold position; place one hedge if price hits hedge_threshold."""
+        """Hold position; place one hedge if price hits hedge_threshold.
+
+        Emergency exit: if 10 seconds or fewer remain and no hedge has been
+        placed yet, sell the open position at the best available price to lock
+        in profit before settlement.
+        """
         end = tokens.window_ts + 300
+        _EMERGENCY_SECONDS = 10
 
         while not self._stop.is_set():
             now = time.time()
@@ -238,13 +262,25 @@ class Trader:
             up = STATE.last_up_price
             down = STATE.last_down_price
             hedge_threshold = STATE.hedge_threshold  # runtime-mutable
+            ttl = end - now
 
             if up is not None and down is not None:
                 logger.transient(
-                    f"{tokens.slug}  HOLD  UP={up:.4f}  DOWN={down:.4f}  ttl={int(end - now)}s"
+                    f"{tokens.slug}  HOLD  UP={up:.4f}  DOWN={down:.4f}  ttl={int(ttl)}s"
                 )
 
-            if STATE.find_hedge_for_window(tokens.slug) is None:
+            hedge_placed = STATE.find_hedge_for_window(tokens.slug) is not None
+
+            # --- Emergency exit at last 10 seconds if no hedge was placed ---
+            if not hedge_placed and ttl <= _EMERGENCY_SECONDS:
+                logger.warn(
+                    f"{tokens.slug}  ⚡ last {int(ttl)}s — no hedge reached — emergency exit",
+                    icon="🚨",
+                )
+                self._fire_emergency_sell(tokens)
+                return
+
+            if not hedge_placed:
                 if initial_trade.side == "UP" and up is not None and up >= hedge_threshold:
                     if down is not None and down < 1.00:
                         self._fire_hedge(tokens, initial_trade, "DOWN", tokens.down_token_id, down)
@@ -260,6 +296,51 @@ class Trader:
             time.sleep(0.5)
 
     # ----- trade execution -----
+
+    def _fire_emergency_sell(self, tokens) -> None:
+        """Sell ALL open positions at current best price with ~10 s to window end."""
+        up = STATE.last_up_price
+        down = STATE.last_down_price
+        open_trades = STATE.find_all_open_trades_for_window(tokens.slug)
+
+        if not open_trades:
+            return
+
+        is_real_now = STATE.mode == "real"
+
+        for trade in open_trades:
+            sell_price_raw = up if trade.side == "UP" else down
+            if sell_price_raw is None:
+                logger.warn(f"emergency sell #{trade.id}: no price for {trade.side} — skipping")
+                continue
+
+            sell_price = round(sell_price_raw, 4)
+            pnl = round(trade.shares * sell_price - trade.cost, 4)
+            label = "HEDGE" if trade.is_hedge else "TRADE"
+
+            logger.ok(
+                f"EMERGENCY SELL  {label} #{trade.id}  side={trade.side}  "
+                f"buy={trade.price:.4f}  sell={sell_price:.4f}  "
+                f"shares={trade.shares:.2f}  pnl=${pnl:+.4f}",
+                icon="🚨",
+            )
+
+            note = ""
+            if is_real_now and self._client is not None:
+                try:
+                    _, note = self._place_real_sell_order(trade.token_id, trade.shares, sell_price)
+                except Exception as exc:
+                    logger.err(f"emergency sell order failed #{trade.id}: {exc}")
+                    note = f"emergency sell failed: {exc}"
+            elif is_real_now and self._client is None:
+                note = "real mode: CLOB client not initialized — sell skipped"
+                logger.err(note)
+            else:
+                note = f"paper emergency sell @ {sell_price:.4f}"
+
+            STATE.resolve_trade(trade.id, "sold", sell_price, pnl, note=note)
+
+        STATE.set_status("sold", f"emergency exit @ {round((up or 0), 4)}/{round((down or 0), 4)}")
 
     def _fire_initial_trade(self, tokens, side: str, token_id: str, observed_price: float) -> None:
         """Buy at the ACTUAL observed market price (not the trigger threshold)."""
@@ -426,3 +507,16 @@ class Trader:
         if isinstance(resp, dict):
             order_id = resp.get("orderID") or resp.get("order_id") or resp.get("id")
         return str(order_id) if order_id else None, "real order placed"
+
+    def _place_real_sell_order(self, token_id: str, shares: float, price: float):
+        from py_clob_client.clob_types import OrderArgs, OrderType
+        from py_clob_client.order_builder.constants import SELL
+
+        order = self._client.create_order(
+            OrderArgs(price=price, size=shares, side=SELL, token_id=token_id)
+        )
+        resp = self._client.post_order(order, OrderType.GTC)
+        order_id = None
+        if isinstance(resp, dict):
+            order_id = resp.get("orderID") or resp.get("order_id") or resp.get("id")
+        return str(order_id) if order_id else None, "real sell order placed"
