@@ -53,36 +53,46 @@ class MarketMakerStrategy:
             logger.warn(f"MM  {tokens.slug}  ya tiene trades — omitiendo")
             return
 
-        up = STATE.last_up_price
-        down = STATE.last_down_price
-
-        if up is None or down is None:
-            logger.warn(f"MM  {tokens.slug}  sin precios disponibles — omitiendo")
-            return
-
         mm_max_price = STATE.mm_max_price   # runtime-mutable
         mm_shares    = STATE.mm_shares      # runtime-mutable (fixed shares per side)
 
         logger.info(
-            f"MM  {tokens.slug}  abriendo ambos lados  "
-            f"UP={up:.4f}  DOWN={down:.4f}  "
+            f"MM  {tokens.slug}  ejecutando ambos lados  "
             f"max_price={mm_max_price:.2f}  shares={mm_shares:.2f}  "
             f"ttl={int(window_ends - time.time())}s",
             icon="🏦",
         )
 
-        for side, current_price, token_id in [
-            ("UP",   up,   tokens.up_token_id),
-            ("DOWN", down, tokens.down_token_id),
+        for side, token_id in [
+            ("UP",   tokens.up_token_id),
+            ("DOWN", tokens.down_token_id),
         ]:
-            exec_price = round(min(current_price, mm_max_price), 4)
-            if exec_price < 0.01:
+            # Lee el precio en tiempo real justo antes de colocar la orden
+            current_price = (
+                STATE.last_up_price if side == "UP" else STATE.last_down_price
+            )
+
+            if current_price is None:
+                logger.warn(f"MM  {tokens.slug}  {side} sin precio — omitiendo lado")
+                continue
+
+            if current_price < 0.01:
                 logger.warn(
                     f"MM  {tokens.slug}  {side} precio demasiado bajo "
                     f"({current_price:.4f}) — omitiendo lado"
                 )
                 continue
 
+            # mm_max_price es condición de rechazo, NO un techo de precio
+            if current_price > mm_max_price:
+                logger.warn(
+                    f"MM  {tokens.slug}  {side} precio {current_price:.4f} "
+                    f"> máximo {mm_max_price:.2f} — omitiendo lado",
+                    icon="🚫",
+                )
+                continue
+
+            exec_price = round(current_price, 4)
             shares = mm_shares
             cost = round(shares * exec_price, 4)
 
