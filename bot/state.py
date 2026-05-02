@@ -52,7 +52,7 @@ class BotState:
 
         # --- active strategy + market-making config ---
         self.active_strategy: str = "trigger"   # "trigger", "market_making", "both"
-        self.mm_buy_amount: float = 5.0
+        self.mm_shares: float = 10.0
         self.mm_last_seconds: int = 30
         self.mm_max_price: float = 0.95
 
@@ -110,7 +110,7 @@ class BotState:
         allowed = {
             "trigger_price", "buy_amount", "max_trades_per_window",
             "mode", "hedge_threshold", "last_minute_seconds",
-            "active_strategy", "mm_buy_amount", "mm_last_seconds", "mm_max_price",
+            "active_strategy", "mm_shares", "mm_last_seconds", "mm_max_price",
         }
         accepted: Dict[str, object] = {}
         with self._lock:
@@ -297,7 +297,7 @@ class BotState:
                 "hedge_threshold": self.hedge_threshold,
                 "last_minute_seconds": self.last_minute_seconds,
                 "active_strategy": self.active_strategy,
-                "mm_buy_amount": self.mm_buy_amount,
+                "mm_shares": self.mm_shares,
                 "mm_last_seconds": self.mm_last_seconds,
                 "mm_max_price": self.mm_max_price,
                 "bot_status": self.bot_status,

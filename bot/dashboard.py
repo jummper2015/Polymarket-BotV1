@@ -106,11 +106,11 @@ def create_app() -> Flask:
             if v in ("trigger", "market_making", "both"):
                 updates["active_strategy"] = v
 
-        if "mm_buy_amount" in data:
+        if "mm_shares" in data:
             try:
-                v = float(data["mm_buy_amount"])
-                if 0.50 <= v <= 100_000:
-                    updates["mm_buy_amount"] = v
+                v = float(data["mm_shares"])
+                if 0.01 <= v <= 100_000:
+                    updates["mm_shares"] = v
             except (TypeError, ValueError):
                 pass
 

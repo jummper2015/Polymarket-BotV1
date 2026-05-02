@@ -60,13 +60,13 @@ class MarketMakerStrategy:
             logger.warn(f"MM  {tokens.slug}  sin precios disponibles — omitiendo")
             return
 
-        mm_max_price = STATE.mm_max_price           # runtime-mutable
-        mm_buy_amount = STATE.mm_buy_amount         # runtime-mutable
+        mm_max_price = STATE.mm_max_price   # runtime-mutable
+        mm_shares    = STATE.mm_shares      # runtime-mutable (fixed shares per side)
 
         logger.info(
             f"MM  {tokens.slug}  abriendo ambos lados  "
             f"UP={up:.4f}  DOWN={down:.4f}  "
-            f"max_price={mm_max_price:.2f}  buy=${mm_buy_amount:.2f}  "
+            f"max_price={mm_max_price:.2f}  shares={mm_shares:.2f}  "
             f"ttl={int(window_ends - time.time())}s",
             icon="🏦",
         )
@@ -83,7 +83,7 @@ class MarketMakerStrategy:
                 )
                 continue
 
-            shares = math.floor((mm_buy_amount / exec_price) * 100) / 100.0
+            shares = mm_shares
             cost = round(shares * exec_price, 4)
 
             logger.ok(

@@ -71,7 +71,7 @@
     cfgHedge: $("cfg-hedge"),
     cfgLastmin: $("cfg-lastmin"),
     // mm config
-    cfgMmBuy: $("cfg-mm-buy"),
+    cfgMmShares: $("cfg-mm-shares"),
     cfgMmLastSec: $("cfg-mm-last-sec"),
     cfgMmMaxPrice: $("cfg-mm-max-price"),
     // strategy selector
@@ -129,10 +129,10 @@
       hedge_threshold:      parseFloat(els.cfgHedge.value),
       last_minute_seconds:  parseInt(els.cfgLastmin.value, 10),
       // mm strategy params
-      active_strategy:  _selectedStrategy,
-      mm_buy_amount:    parseFloat(els.cfgMmBuy.value),
-      mm_last_seconds:  parseInt(els.cfgMmLastSec.value, 10),
-      mm_max_price:     parseFloat(els.cfgMmMaxPrice.value),
+      active_strategy: _selectedStrategy,
+      mm_shares:       parseFloat(els.cfgMmShares.value),
+      mm_last_seconds: parseInt(els.cfgMmLastSec.value, 10),
+      mm_max_price:    parseFloat(els.cfgMmMaxPrice.value),
       // global
       mode: _selectedMode,
     };
@@ -221,7 +221,7 @@
       els.cfgHedge.value     = s.hedge_threshold;
       els.cfgLastmin.value   = s.last_minute_seconds;
       // MM params
-      els.cfgMmBuy.value      = s.mm_buy_amount;
+      els.cfgMmShares.value   = s.mm_shares;
       els.cfgMmLastSec.value  = s.mm_last_seconds;
       els.cfgMmMaxPrice.value = s.mm_max_price;
       setModeUI(s.mode);
