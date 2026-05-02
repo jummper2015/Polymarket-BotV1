@@ -271,9 +271,9 @@ class Trader:
     def _hold_and_hedge_until_window_end(self, tokens, initial_trade: Trade) -> None:
         """Hold position; place one hedge if price hits hedge_threshold.
 
-        Emergency exit: if 10 seconds or fewer remain and no hedge has been
-        placed yet, sell the open position at the best available price to lock
-        in profit before settlement.
+        Emergency hedge: if 10 seconds or fewer remain and no hedge has been
+        placed yet, buy the opposite side with the same number of shares to
+        guarantee exposure on both sides before settlement.
         """
         end = tokens.window_ts + 300
         _EMERGENCY_SECONDS = 10
@@ -295,13 +295,13 @@ class Trader:
 
             hedge_placed = STATE.find_hedge_for_window(tokens.slug) is not None
 
-            # --- Emergency exit at last 10 seconds if no hedge was placed ---
+            # --- Emergency hedge at last 10 seconds if no hedge was placed ---
             if not hedge_placed and ttl <= _EMERGENCY_SECONDS:
                 logger.warn(
-                    f"{tokens.slug}  ⚡ last {int(ttl)}s — no hedge reached — emergency exit",
+                    f"{tokens.slug}  ⚡ last {int(ttl)}s — no hedge reached — buying opposite side",
                     icon="🚨",
                 )
-                self._fire_emergency_sell(tokens)
+                self._fire_emergency_hedge(tokens, initial_trade)
                 return
 
             if not hedge_placed:
@@ -365,6 +365,72 @@ class Trader:
             STATE.resolve_trade(trade.id, "sold", sell_price, pnl, note=note)
 
         STATE.set_status("sold", f"emergency exit @ {round((up or 0), 4)}/{round((down or 0), 4)}")
+
+    def _fire_emergency_hedge(self, tokens, initial_trade: Trade) -> None:
+        """Buy the opposite side with the same shares as the initial trade.
+
+        Called when 10 s remain and no hedge was placed via the normal threshold.
+        Guarantees exposure on both sides before settlement instead of selling.
+        """
+        opp_side     = "DOWN" if initial_trade.side == "UP" else "UP"
+        opp_token_id = tokens.down_token_id if initial_trade.side == "UP" else tokens.up_token_id
+        opp_price_raw = (
+            STATE.last_down_price if initial_trade.side == "UP" else STATE.last_up_price
+        )
+
+        if opp_price_raw is None:
+            logger.warn(f"emergency hedge: sin precio para {opp_side} — omitiendo")
+            return
+
+        if opp_price_raw >= 1.00:
+            logger.warn(
+                f"emergency hedge: {opp_side} precio {opp_price_raw:.4f} >= 1.00 — omitiendo"
+            )
+            return
+
+        exec_price = round(opp_price_raw, 4)
+        shares     = initial_trade.shares
+        cost       = round(shares * exec_price, 4)
+
+        logger.ok(
+            f"EMERGENCY HEDGE  {initial_trade.side}@{initial_trade.price:.4f} "
+            f"→ {opp_side}  {shares:.2f} shares @ {exec_price:.4f}  cost=${cost:.4f}",
+            icon="🚨",
+        )
+
+        order_id: Optional[str] = None
+        note = ""
+        is_real_now = STATE.mode == "real"
+
+        if is_real_now and self._client is not None:
+            try:
+                order_id, note = self._place_real_order(opp_token_id, shares, exec_price)
+            except Exception as exc:
+                logger.err(f"emergency hedge order failed: {exc}")
+                note = f"emergency hedge failed: {exc}"
+        elif is_real_now and self._client is None:
+            note = "real mode: CLOB client not initialized — emergency hedge skipped"
+            logger.err(note)
+        else:
+            note = f"paper emergency hedge @ {exec_price:.4f}"
+
+        hedge = Trade(
+            id=0,
+            window_slug=tokens.slug,
+            window_ts=tokens.window_ts,
+            side=opp_side,
+            token_id=opp_token_id,
+            price=exec_price,
+            shares=shares,
+            cost=cost,
+            mode=STATE.mode,
+            opened_at=time.time(),
+            order_id=order_id,
+            note=note,
+            is_hedge=True,
+        )
+        STATE.add_trade(hedge)
+        STATE.set_status("hedged", f"emergency hedge {initial_trade.side}+{opp_side}")
 
     def _fire_initial_trade(self, tokens, side: str, token_id: str, observed_price: float) -> None:
         """Buy at the ACTUAL observed market price (not the trigger threshold)."""
