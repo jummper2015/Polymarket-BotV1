@@ -200,6 +200,37 @@ tr.row-hedge td { background: rgba(241,180,76,0.04); }
 .pnl-pos { color: var(--up);   font-variant-numeric: tabular-nums; }
 .pnl-neg { color: var(--down); font-variant-numeric: tabular-nums; }
 
+/* ── STRATEGY TOGGLE ──────────────────────────────────────── */
+.strategy-toggle {
+  display: flex; gap: 0; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border); width: fit-content;
+}
+.strategy-btn {
+  padding: 8px 16px; font-size: 13px; font-weight: 500;
+  cursor: pointer; border: none; outline: none;
+  background: var(--panel-2); color: var(--muted);
+  transition: background 0.15s, color 0.15s;
+  border-right: 1px solid var(--border);
+}
+.strategy-btn:last-child { border-right: none; }
+.strategy-btn.active[data-strat="trigger"]       { background: rgba(241,180,76,0.18);  color: var(--warn); }
+.strategy-btn.active[data-strat="market_making"] { background: rgba(90,141,238,0.2);   color: var(--accent); }
+.strategy-btn.active[data-strat="both"]          { background: rgba(28,200,138,0.15);  color: var(--up); }
+
+/* ── CONFIG SECTION HEADERS ───────────────────────────────── */
+.cfg-section-header {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--muted);
+  padding: 14px 0 6px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  margin-top: 4px;
+}
+
+/* ── TRADE STRATEGY TAGS ──────────────────────────────────── */
+.tag.strat-trigger { background: rgba(241,180,76,0.15); color: var(--warn); }
+.tag.strat-mm      { background: rgba(90,141,238,0.18); color: var(--accent); }
+.tag.sold          { background: rgba(28,200,138,0.12); color: var(--up); }
+
 /* ── FOOTER ───────────────────────────────────────────────── */
 .footer { padding: 18px 24px; text-align: center; font-size: 12px; }
 

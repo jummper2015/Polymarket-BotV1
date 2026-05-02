@@ -103,38 +103,62 @@ class Trader:
         try:
             self._wait_for_first_prices(timeout_s=self.cfg.first_price_timeout_seconds)
 
-            # Phase 1 — wait until last-minute entry point
-            self._wait_for_last_minute(tokens)
+            trigger_active = STATE.active_strategy in ("trigger", "both")
+            mm_active = STATE.active_strategy in ("market_making", "both")
 
-            # Phase 2 — check if price already above trigger at entry
-            up_at_entry = STATE.last_up_price
-            down_at_entry = STATE.last_down_price
-            trigger = STATE.trigger_price   # read from STATE (runtime-mutable)
-            already_above = (
-                (up_at_entry is not None and up_at_entry >= trigger) or
-                (down_at_entry is not None and down_at_entry >= trigger)
-            )
-            if already_above:
-                logger.warn(
-                    f"SKIP — price already above trigger at last-minute entry  "
-                    f"UP={up_at_entry}  DOWN={down_at_entry}  trigger={trigger}",
-                    icon="🚫",
+            # Launch Market Making strategy in a parallel daemon thread if active
+            mm_thread = None
+            if mm_active:
+                from .strategy_mm import MarketMakerStrategy
+                mm_strat = MarketMakerStrategy(self.cfg)
+                mm_thread = threading.Thread(
+                    target=mm_strat.run_for_window,
+                    args=(tokens,),
+                    name="mm-strategy",
+                    daemon=True,
                 )
-                STATE.set_status("watching", "skipped — price above trigger at entry")
-                self._sleep_until(tokens.window_ts + 300 + 2.0)
+                mm_thread.start()
+
+            if trigger_active:
+                # Phase 1 — wait until last-minute entry point
+                self._wait_for_last_minute(tokens)
+
+                # Phase 2 — check if price already above trigger at entry
+                up_at_entry = STATE.last_up_price
+                down_at_entry = STATE.last_down_price
+                trigger = STATE.trigger_price   # read from STATE (runtime-mutable)
+                already_above = (
+                    (up_at_entry is not None and up_at_entry >= trigger) or
+                    (down_at_entry is not None and down_at_entry >= trigger)
+                )
+                if already_above:
+                    logger.warn(
+                        f"SKIP — price already above trigger at last-minute entry  "
+                        f"UP={up_at_entry}  DOWN={down_at_entry}  trigger={trigger}",
+                        icon="🚫",
+                    )
+                    STATE.set_status("watching", "skipped — price above trigger at entry")
+                    self._sleep_until(tokens.window_ts + 300 + 2.0)
+                else:
+                    # Phase 3 — watch for the trigger crossing
+                    STATE.set_status("watching", f"last minute — watching {tokens.slug}")
+                    self._monitor_until_trigger_or_window_end(tokens)
+
+                    # Phase 4 — hold + hedge until window ends
+                    if STATE.count_initial_trades_for_window(tokens.slug) > 0:
+                        STATE.set_status("holding", f"{tokens.slug} — holding to settlement")
+                        initial_trade = STATE.find_open_trade_for_window(tokens.slug)
+                        if initial_trade is not None:
+                            self._hold_and_hedge_until_window_end(tokens, initial_trade)
+
+                    self._sleep_until(tokens.window_ts + 300 + 2.0)
             else:
-                # Phase 3 — watch for the trigger crossing
-                STATE.set_status("watching", f"last minute — watching {tokens.slug}")
-                self._monitor_until_trigger_or_window_end(tokens)
-
-                # Phase 4 — hold + hedge until window ends
-                if STATE.count_initial_trades_for_window(tokens.slug) > 0:
-                    STATE.set_status("holding", f"{tokens.slug} — holding to settlement")
-                    initial_trade = STATE.find_open_trade_for_window(tokens.slug)
-                    if initial_trade is not None:
-                        self._hold_and_hedge_until_window_end(tokens, initial_trade)
-
+                # No trigger strategy — wait for the window to close
                 self._sleep_until(tokens.window_ts + 300 + 2.0)
+
+            # Ensure MM thread has completed before moving to settlement
+            if mm_thread is not None and mm_thread.is_alive():
+                mm_thread.join(timeout=10.0)
 
         finally:
             feed.stop()

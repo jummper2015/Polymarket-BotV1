@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Polymarket BTC 5m Bot</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=3" />
+  <link rel="stylesheet" href="static/dashboard.css?v=4" />
 </head>
 <body>
   <header class="topbar">
@@ -62,41 +62,87 @@
           <span id="cfg-save-msg" class="cfg-msg"></span>
         </div>
         <form id="cfg-form" class="cfg-form" autocomplete="off">
+
+          <!-- Estrategia activa (always visible) -->
           <div class="cfg-row">
             <label class="cfg-label">
-              Precio trigger
-              <span class="cfg-hint">Umbral de activación (0.01 – 0.99)</span>
+              Estrategia activa
+              <span class="cfg-hint">Selecciona qué estrategia ejecutar en cada ventana</span>
             </label>
-            <input id="cfg-trigger" type="number" class="cfg-input" step="0.01" min="0.01" max="0.99" placeholder="0.90" />
+            <div class="strategy-toggle">
+              <button type="button" id="btn-strat-trigger" class="strategy-btn active" data-strat="trigger">⚡ Trigger</button>
+              <button type="button" id="btn-strat-mm"      class="strategy-btn"        data-strat="market_making">🏦 Market Making</button>
+              <button type="button" id="btn-strat-both"    class="strategy-btn"        data-strat="both">⚡+🏦 Ambas</button>
+            </div>
           </div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Monto por trade (USDC)
-              <span class="cfg-hint">Inversión por operación</span>
-            </label>
-            <input id="cfg-buy" type="number" class="cfg-input" step="0.5" min="0.5" max="100000" placeholder="5.00" />
+
+          <!-- ── TRIGGER STRATEGY SECTION ── -->
+          <div id="trigger-config-section">
+            <div class="cfg-section-header">⚡ Estrategia Trigger</div>
+            <div class="cfg-row">
+              <label class="cfg-label">
+                Precio trigger
+                <span class="cfg-hint">Umbral de activación (0.01 – 0.99)</span>
+              </label>
+              <input id="cfg-trigger" type="number" class="cfg-input" step="0.01" min="0.01" max="0.99" placeholder="0.90" />
+            </div>
+            <div class="cfg-row">
+              <label class="cfg-label">
+                Monto por trade (USDC)
+                <span class="cfg-hint">Inversión por operación</span>
+              </label>
+              <input id="cfg-buy" type="number" class="cfg-input" step="0.5" min="0.5" max="100000" placeholder="5.00" />
+            </div>
+            <div class="cfg-row">
+              <label class="cfg-label">
+                Trades por evento
+                <span class="cfg-hint">Máx. posiciones iniciales por ventana (1–10)</span>
+              </label>
+              <input id="cfg-max-trades" type="number" class="cfg-input" step="1" min="1" max="10" placeholder="1" />
+            </div>
+            <div class="cfg-row">
+              <label class="cfg-label">
+                Hedge a partir de
+                <span class="cfg-hint">Precio que activa la cobertura (0.50 – 0.99)</span>
+              </label>
+              <input id="cfg-hedge" type="number" class="cfg-input" step="0.01" min="0.50" max="0.99" placeholder="0.96" />
+            </div>
+            <div class="cfg-row">
+              <label class="cfg-label">
+                Últimos segundos activo
+                <span class="cfg-hint">Ventana de entrada al final del evento (10 – 240 s)</span>
+              </label>
+              <input id="cfg-lastmin" type="number" class="cfg-input" step="5" min="10" max="240" placeholder="60" />
+            </div>
           </div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Trades por evento
-              <span class="cfg-hint">Máx. posiciones iniciales por ventana (1–10)</span>
-            </label>
-            <input id="cfg-max-trades" type="number" class="cfg-input" step="1" min="1" max="10" placeholder="1" />
+
+          <!-- ── MARKET MAKING STRATEGY SECTION ── -->
+          <div id="mm-config-section" style="display:none">
+            <div class="cfg-section-header">🏦 Market Making</div>
+            <div class="cfg-row">
+              <label class="cfg-label">
+                Monto por lado (USDC)
+                <span class="cfg-hint">Inversión en UP y en DOWN por separado</span>
+              </label>
+              <input id="cfg-mm-buy" type="number" class="cfg-input" step="0.5" min="0.5" max="100000" placeholder="5.00" />
+            </div>
+            <div class="cfg-row">
+              <label class="cfg-label">
+                Segundos antes del cierre
+                <span class="cfg-hint">Momento de activación del MM (5 – 120 s)</span>
+              </label>
+              <input id="cfg-mm-last-sec" type="number" class="cfg-input" step="1" min="5" max="120" placeholder="30" />
+            </div>
+            <div class="cfg-row">
+              <label class="cfg-label">
+                Precio máximo de compra
+                <span class="cfg-hint">Techo de precio de entrada MM (0.50 – 0.99)</span>
+              </label>
+              <input id="cfg-mm-max-price" type="number" class="cfg-input" step="0.01" min="0.50" max="0.99" placeholder="0.95" />
+            </div>
           </div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Hedge a partir de
-              <span class="cfg-hint">Precio que activa la cobertura (0.50 – 0.99)</span>
-            </label>
-            <input id="cfg-hedge" type="number" class="cfg-input" step="0.01" min="0.50" max="0.99" placeholder="0.96" />
-          </div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Últimos segundos activo
-              <span class="cfg-hint">Ventana de entrada al final del evento (10 – 240 s)</span>
-            </label>
-            <input id="cfg-lastmin" type="number" class="cfg-input" step="5" min="10" max="240" placeholder="60" />
-          </div>
+
+          <!-- Modo de operación (always visible) -->
           <div class="cfg-row cfg-mode-row">
             <label class="cfg-label">
               Modo de operación
@@ -107,6 +153,7 @@
               <button type="button" id="btn-real"  class="mode-btn"        data-mode="real">Real</button>
             </div>
           </div>
+
           <div class="cfg-actions">
             <button type="submit" class="btn-apply">Aplicar cambios</button>
           </div>
@@ -166,6 +213,7 @@
           <thead>
             <tr>
               <th>#</th>
+              <th>Strat</th>
               <th>Ventana</th>
               <th>Lado</th>
               <th>Precio exec.</th>
@@ -178,7 +226,7 @@
             </tr>
           </thead>
           <tbody id="trades-body">
-            <tr><td colspan="10" class="empty">Sin trades — esperando trigger.</td></tr>
+            <tr><td colspan="11" class="empty">Sin trades — esperando trigger.</td></tr>
           </tbody>
         </table>
       </div>
@@ -189,6 +237,6 @@
     <span>Auto-refresh cada 1s · uptime <span id="uptime">0s</span></span>
   </footer>
 
-  <script src="static/dashboard.js?v=3"></script>
+  <script src="static/dashboard.js?v=4"></script>
 </body>
 </html>

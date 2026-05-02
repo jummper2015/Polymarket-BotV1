@@ -101,6 +101,35 @@ def create_app() -> Flask:
             except (TypeError, ValueError):
                 pass
 
+        if "active_strategy" in data:
+            v = str(data["active_strategy"]).lower()
+            if v in ("trigger", "market_making", "both"):
+                updates["active_strategy"] = v
+
+        if "mm_buy_amount" in data:
+            try:
+                v = float(data["mm_buy_amount"])
+                if 0.50 <= v <= 100_000:
+                    updates["mm_buy_amount"] = v
+            except (TypeError, ValueError):
+                pass
+
+        if "mm_last_seconds" in data:
+            try:
+                v = int(data["mm_last_seconds"])
+                if 5 <= v <= 120:
+                    updates["mm_last_seconds"] = v
+            except (TypeError, ValueError):
+                pass
+
+        if "mm_max_price" in data:
+            try:
+                v = float(data["mm_max_price"])
+                if 0.50 <= v <= 0.99:
+                    updates["mm_max_price"] = v
+            except (TypeError, ValueError):
+                pass
+
         if "mode" in data:
             v = str(data["mode"]).lower()
             if v in ("paper", "real"):

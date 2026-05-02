@@ -64,11 +64,23 @@
     log: $("log"),
     trades: $("trades-body"),
     uptime: $("uptime"),
+    // trigger config
     cfgTrigger: $("cfg-trigger"),
     cfgBuy: $("cfg-buy"),
     cfgMaxTrades: $("cfg-max-trades"),
     cfgHedge: $("cfg-hedge"),
     cfgLastmin: $("cfg-lastmin"),
+    // mm config
+    cfgMmBuy: $("cfg-mm-buy"),
+    cfgMmLastSec: $("cfg-mm-last-sec"),
+    cfgMmMaxPrice: $("cfg-mm-max-price"),
+    // strategy selector
+    btnStratTrigger: $("btn-strat-trigger"),
+    btnStratMm: $("btn-strat-mm"),
+    btnStratBoth: $("btn-strat-both"),
+    triggerSection: $("trigger-config-section"),
+    mmSection: $("mm-config-section"),
+    // mode
     cfgSaveMsg: $("cfg-save-msg"),
     btnPaper: $("btn-paper"),
     btnReal: $("btn-real"),
@@ -76,29 +88,55 @@
     readinessList: $("readiness-steps"),
   };
 
-  // ── config form state ────────────────────────────────────────────────────
+  // ── strategy form state ──────────────────────────────────────────────────
+  let _selectedStrategy = "trigger";
+
+  els.btnStratTrigger.addEventListener("click", () => setStrategyUI("trigger"));
+  els.btnStratMm.addEventListener("click",      () => setStrategyUI("market_making"));
+  els.btnStratBoth.addEventListener("click",    () => setStrategyUI("both"));
+
+  function setStrategyUI(strategy) {
+    _selectedStrategy = strategy;
+    els.btnStratTrigger.classList.toggle("active", strategy === "trigger");
+    els.btnStratMm.classList.toggle("active",      strategy === "market_making");
+    els.btnStratBoth.classList.toggle("active",    strategy === "both");
+    const showTrigger = strategy === "trigger" || strategy === "both";
+    const showMm      = strategy === "market_making" || strategy === "both";
+    els.triggerSection.style.display = showTrigger ? "" : "none";
+    els.mmSection.style.display      = showMm      ? "" : "none";
+  }
+
+  // ── mode form state ──────────────────────────────────────────────────────
   let _selectedMode = "paper";
 
   els.btnPaper.addEventListener("click", () => setModeUI("paper"));
-  els.btnReal.addEventListener("click", () => setModeUI("real"));
+  els.btnReal.addEventListener("click",  () => setModeUI("real"));
 
   function setModeUI(mode) {
     _selectedMode = mode;
     els.btnPaper.classList.toggle("active", mode === "paper");
-    els.btnReal.classList.toggle("active", mode === "real");
+    els.btnReal.classList.toggle("active",  mode === "real");
   }
 
+  // ── form submit ──────────────────────────────────────────────────────────
   $("cfg-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const body = {
-      trigger_price: parseFloat(els.cfgTrigger.value),
-      buy_amount: parseFloat(els.cfgBuy.value),
+      // trigger strategy params
+      trigger_price:        parseFloat(els.cfgTrigger.value),
+      buy_amount:           parseFloat(els.cfgBuy.value),
       max_trades_per_window: parseInt(els.cfgMaxTrades.value, 10),
-      hedge_threshold: parseFloat(els.cfgHedge.value),
-      last_minute_seconds: parseInt(els.cfgLastmin.value, 10),
+      hedge_threshold:      parseFloat(els.cfgHedge.value),
+      last_minute_seconds:  parseInt(els.cfgLastmin.value, 10),
+      // mm strategy params
+      active_strategy:  _selectedStrategy,
+      mm_buy_amount:    parseFloat(els.cfgMmBuy.value),
+      mm_last_seconds:  parseInt(els.cfgMmLastSec.value, 10),
+      mm_max_price:     parseFloat(els.cfgMmMaxPrice.value),
+      // global
       mode: _selectedMode,
     };
-    // Remove NaN values
+    // Remove NaN / empty values
     Object.keys(body).forEach((k) => {
       if (typeof body[k] === "number" && isNaN(body[k])) delete body[k];
     });
@@ -134,9 +172,9 @@
 
     let cls = "badge";
     const label = `estado: ${s.bot_status}`;
-    if (["watching", "traded", "hedged"].includes(s.bot_status)) cls += " ok";
+    if (["watching", "traded", "hedged", "mm_placed"].includes(s.bot_status)) cls += " ok";
     else if (s.bot_status === "error") cls += " err";
-    else if (["loading_market", "holding"].includes(s.bot_status)) cls += " warn";
+    else if (["loading_market", "holding", "sold"].includes(s.bot_status)) cls += " warn";
     els.statusBadge.textContent = s.bot_message ? `${s.bot_status} — ${s.bot_message}` : label;
     els.statusBadge.className = cls;
 
@@ -175,21 +213,35 @@
 
   let _cfgPopulated = false;
   function renderConfig(s) {
-    // Only populate form fields once (don't override while user is editing)
     if (!_cfgPopulated) {
-      els.cfgTrigger.value = s.trigger_price;
-      els.cfgBuy.value = s.buy_amount;
+      // Trigger params
+      els.cfgTrigger.value   = s.trigger_price;
+      els.cfgBuy.value       = s.buy_amount;
       els.cfgMaxTrades.value = s.max_trades_per_window;
-      els.cfgHedge.value = s.hedge_threshold;
-      els.cfgLastmin.value = s.last_minute_seconds;
+      els.cfgHedge.value     = s.hedge_threshold;
+      els.cfgLastmin.value   = s.last_minute_seconds;
+      // MM params
+      els.cfgMmBuy.value      = s.mm_buy_amount;
+      els.cfgMmLastSec.value  = s.mm_last_seconds;
+      els.cfgMmMaxPrice.value = s.mm_max_price;
       setModeUI(s.mode);
+      setStrategyUI(s.active_strategy || "trigger");
       _cfgPopulated = true;
     }
-    // Keep mode toggle in sync with server state
+    // Always keep mode + strategy toggles in sync with server
     els.btnPaper.classList.toggle("active", s.mode === "paper");
-    els.btnReal.classList.toggle("active", s.mode === "real");
-    if (_selectedMode !== s.mode && document.activeElement !== els.btnPaper && document.activeElement !== els.btnReal) {
+    els.btnReal.classList.toggle("active",  s.mode === "real");
+    if (_selectedMode !== s.mode &&
+        document.activeElement !== els.btnPaper &&
+        document.activeElement !== els.btnReal) {
       _selectedMode = s.mode;
+    }
+    const srv = s.active_strategy || "trigger";
+    if (_selectedStrategy !== srv &&
+        document.activeElement !== els.btnStratTrigger &&
+        document.activeElement !== els.btnStratMm &&
+        document.activeElement !== els.btnStratBoth) {
+      setStrategyUI(srv);
     }
   }
 
@@ -241,18 +293,22 @@
 
   function renderTrades(s) {
     if (!s.trades || s.trades.length === 0) {
-      els.trades.innerHTML = `<tr><td colspan="10" class="empty">Sin trades — esperando trigger.</td></tr>`;
+      els.trades.innerHTML = `<tr><td colspan="11" class="empty">Sin trades — esperando trigger.</td></tr>`;
       return;
     }
     els.trades.innerHTML = s.trades
       .map((t) => {
-        const pnlCls = t.pnl == null ? "" : t.pnl >= 0 ? "pnl-pos" : "pnl-neg";
+        const pnlCls  = t.pnl == null ? "" : t.pnl >= 0 ? "pnl-pos" : "pnl-neg";
         const pnlText = t.pnl == null ? "—" : fmtSigned(t.pnl);
         const typeTag = t.is_hedge
           ? `<span class="tag hedge">HEDGE</span>`
           : `<span class="tag initial">INIT</span>`;
+        const stratTag = t.strategy === "mm"
+          ? `<span class="tag strat-mm">MM</span>`
+          : `<span class="tag strat-trigger">TRG</span>`;
         return `<tr${t.is_hedge ? ' class="row-hedge"' : ""}>
           <td>#${t.id} ${typeTag}</td>
+          <td>${stratTag}</td>
           <td class="mono">${t.window_slug}</td>
           <td><span class="tag ${t.side.toLowerCase()}">${t.side}</span></td>
           <td>${Number(t.price).toFixed(4)}</td>

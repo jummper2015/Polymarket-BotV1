@@ -21,12 +21,13 @@ class Trade:
     cost: float
     mode: str  # "paper" or "real"
     opened_at: float  # unix
-    status: str = "open"  # "open", "won", "lost", "expired"
+    status: str = "open"  # "open", "won", "lost", "expired", "sold"
     final_price: Optional[float] = None
     pnl: Optional[float] = None
     order_id: Optional[str] = None
     note: str = ""
     is_hedge: bool = False  # True when this is the counter-trade (hedge)
+    strategy: str = "trigger"  # "trigger" or "mm"
 
 
 class BotState:
@@ -48,6 +49,12 @@ class BotState:
         self.max_trades_per_window: int = 1
         self.hedge_threshold: float = 0.96
         self.last_minute_seconds: int = 60
+
+        # --- active strategy + market-making config ---
+        self.active_strategy: str = "trigger"   # "trigger", "market_making", "both"
+        self.mm_buy_amount: float = 5.0
+        self.mm_last_seconds: int = 30
+        self.mm_max_price: float = 0.95
 
         # --- bot status ---
         self.bot_status: str = "idle"
@@ -103,6 +110,7 @@ class BotState:
         allowed = {
             "trigger_price", "buy_amount", "max_trades_per_window",
             "mode", "hedge_threshold", "last_minute_seconds",
+            "active_strategy", "mm_buy_amount", "mm_last_seconds", "mm_max_price",
         }
         accepted: Dict[str, object] = {}
         with self._lock:
@@ -204,6 +212,14 @@ class BotState:
         with self._lock:
             return [t for t in self.trades if t.window_slug == slug and t.status == "open"]
 
+    def count_mm_trades_for_window(self, slug: str) -> int:
+        """Count how many Market Making trades exist for this window."""
+        with self._lock:
+            return sum(
+                1 for t in self.trades
+                if t.window_slug == slug and t.strategy == "mm"
+            )
+
     def resolve_trade(self, trade_id: int, status: str, final_price: float, pnl: float, note: str = "") -> None:
         with self._lock:
             for t in self.trades:
@@ -280,6 +296,10 @@ class BotState:
                 "max_trades_per_window": self.max_trades_per_window,
                 "hedge_threshold": self.hedge_threshold,
                 "last_minute_seconds": self.last_minute_seconds,
+                "active_strategy": self.active_strategy,
+                "mm_buy_amount": self.mm_buy_amount,
+                "mm_last_seconds": self.mm_last_seconds,
+                "mm_max_price": self.mm_max_price,
                 "bot_status": self.bot_status,
                 "bot_message": self.bot_message,
                 "ws_connected": self.ws_connected,
@@ -333,6 +353,7 @@ class BotState:
                         "order_id": t.order_id,
                         "note": t.note,
                         "is_hedge": t.is_hedge,
+                        "strategy": t.strategy,
                     }
                     for t in reversed(self.trades[-100:])
                 ],
