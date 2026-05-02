@@ -3,6 +3,7 @@ modules = ["nodejs-24", "python-3.11"]
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
+run = ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
@@ -24,16 +25,16 @@ args = "Start application"
 name = "Start application"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python run.py"
 waitForPort = 5000
 
-[workflows.workflow.metadata]
-outputType = "webview"
-
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "FLASK_VANILLA_JS"
 expertMode = true
 
 [postMerge]
@@ -42,6 +43,7 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
+packages = ["openssl", "postgresql"]
 
 [userenv]
 
@@ -51,10 +53,6 @@ TRADING_MODE = "paper"
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 8080
-externalPort = 8080
 
 [[ports]]
 localPort = 8081
