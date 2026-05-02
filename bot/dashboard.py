@@ -109,7 +109,7 @@ def create_app() -> Flask:
         if "mm_shares" in data:
             try:
                 v = float(data["mm_shares"])
-                if 0.01 <= v <= 100_000:
+                if 1 <= v <= 100_000:
                     updates["mm_shares"] = v
             except (TypeError, ValueError):
                 pass
