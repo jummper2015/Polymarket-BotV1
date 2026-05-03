@@ -177,8 +177,12 @@ class BotState:
         with self._lock:
             trade.id = self._next_trade_id
             self._next_trade_id += 1
+            already_traded = any(
+                t for t in self.trades if t.window_slug == trade.window_slug
+            )
             self.trades.append(trade)
-            self.windows_traded += 1
+            if not already_traded:
+                self.windows_traded += 1
             return trade
 
     def find_open_trade_for_window(self, slug: str) -> Optional[Trade]:

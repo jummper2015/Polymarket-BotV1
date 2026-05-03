@@ -4,8 +4,4 @@ requests>=2.32.0
 eth-account>=0.13.0
 Flask>=3.1.0
 flask-cors>=6.0.0
-email_validator
-flask
-flask-sqlalchemy
-gunicorn
-psycopg2-binary
+gunicorn>=23.0.0

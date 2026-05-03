@@ -19,9 +19,10 @@ from .state import Trade
 
 
 class MarketMakerStrategy:
-    def __init__(self, cfg, state) -> None:
+    def __init__(self, cfg, state, symbol: str = "btc") -> None:
         self.cfg = cfg
         self.state = state
+        self.symbol = symbol
         self._client = None
         if cfg.is_real and cfg.has_credentials:
             self._client = self._build_client()
@@ -43,12 +44,13 @@ class MarketMakerStrategy:
             remaining = entry_time - now
             logger.transient(
                 f"MM  {tokens.slug}  ⏳ esperando ventana MM  "
-                f"entry_in={int(remaining)}s  ttl={int(window_ends - now)}s"
+                f"entry_in={int(remaining)}s  ttl={int(window_ends - now)}s",
+                symbol=self.symbol,
             )
             time.sleep(min(remaining, 1.0))
 
         if self.state.count_mm_trades_for_window(tokens.slug) > 0:
-            logger.warn(f"MM  {tokens.slug}  ya tiene trades — omitiendo")
+            logger.warn(f"MM  {tokens.slug}  ya tiene trades — omitiendo", symbol=self.symbol)
             return
 
         mm_max_price = self.state.mm_max_price
@@ -58,7 +60,7 @@ class MarketMakerStrategy:
             f"MM  {tokens.slug}  ejecutando ambos lados  "
             f"max_price={mm_max_price:.2f}  shares={mm_shares:.2f}  "
             f"ttl={int(window_ends - time.time())}s",
-            icon="🏦",
+            icon="🏦", symbol=self.symbol,
         )
 
         for side, token_id in [
@@ -70,13 +72,14 @@ class MarketMakerStrategy:
             )
 
             if current_price is None:
-                logger.warn(f"MM  {tokens.slug}  {side} sin precio — omitiendo lado")
+                logger.warn(f"MM  {tokens.slug}  {side} sin precio — omitiendo lado", symbol=self.symbol)
                 continue
 
             if current_price < 0.01:
                 logger.warn(
                     f"MM  {tokens.slug}  {side} precio demasiado bajo "
-                    f"({current_price:.4f}) — omitiendo lado"
+                    f"({current_price:.4f}) — omitiendo lado",
+                    symbol=self.symbol,
                 )
                 continue
 
@@ -84,7 +87,7 @@ class MarketMakerStrategy:
                 logger.warn(
                     f"MM  {tokens.slug}  {side} precio {current_price:.4f} "
                     f"> máximo {mm_max_price:.2f} — omitiendo lado",
-                    icon="🚫",
+                    icon="🚫", symbol=self.symbol,
                 )
                 continue
 
@@ -95,7 +98,7 @@ class MarketMakerStrategy:
             logger.ok(
                 f"MM BUY  side={side}  exec_price={exec_price:.4f}  "
                 f"shares={shares:.2f}  cost=${cost:.4f}",
-                icon="🏦",
+                icon="🏦", symbol=self.symbol,
             )
 
             order_id: Optional[str] = None
@@ -106,10 +109,10 @@ class MarketMakerStrategy:
                 try:
                     order_id, note = self._place_real_order(token_id, shares, exec_price)
                 except Exception as exc:
-                    logger.err(f"MM orden falló {side}: {exc}")
+                    logger.err(f"MM orden falló {side}: {exc}", symbol=self.symbol)
                     note = f"MM orden falló: {exc}"
             elif is_real_now and self._client is None:
-                logger.err("MM modo real: cliente CLOB no inicializado — reiniciar bot")
+                logger.err("MM modo real: cliente CLOB no inicializado — reiniciar bot", symbol=self.symbol)
                 return
             else:
                 note = f"MM paper @ {exec_price:.4f}"
@@ -140,7 +143,7 @@ class MarketMakerStrategy:
         try:
             from py_clob_client.client import ClobClient
         except Exception as exc:
-            logger.err(f"MM: py_clob_client no disponible: {exc}")
+            logger.err(f"MM: py_clob_client no disponible: {exc}", symbol=self.symbol)
             return None
         try:
             client = ClobClient(
@@ -151,10 +154,10 @@ class MarketMakerStrategy:
                 funder=self.cfg.proxy_wallet,
             )
             client.set_api_creds(client.create_or_derive_api_creds())
-            logger.ok("MM: cliente CLOB autenticado", icon="🔑")
+            logger.ok("MM: cliente CLOB autenticado", icon="🔑", symbol=self.symbol)
             return client
         except Exception as exc:
-            logger.err(f"MM: autenticación CLOB falló: {exc}")
+            logger.err(f"MM: autenticación CLOB falló: {exc}", symbol=self.symbol)
             return None
 
     def _place_real_order(self, token_id: str, shares: float, price: float):

@@ -71,10 +71,10 @@ class Trader:
             f"[{sym}] starting bot — mode={self.state.mode} trigger={self.state.trigger_price} "
             f"buy=${self.state.buy_amount} bankroll=${self.state.starting_bankroll:.2f} "
             f"last_minute={self.state.last_minute_seconds}s hedge@{self.state.hedge_threshold}",
-            icon="🤖",
+            icon="🤖", symbol=self.symbol,
         )
         if self.state.mode == "real" and not self.cfg.has_credentials:
-            logger.err(f"[{sym}] real mode requires PRIVATE_KEY and PROXY_WALLET; refusing to start")
+            logger.err(f"[{sym}] real mode requires PRIVATE_KEY and PROXY_WALLET; refusing to start", symbol=self.symbol)
             self.state.set_status("error", "Missing PRIVATE_KEY / PROXY_WALLET for real mode")
             return
 
@@ -82,7 +82,7 @@ class Trader:
             try:
                 self._run_one_window()
             except Exception as exc:
-                logger.err(f"[{sym}] window error: {exc}")
+                logger.err(f"[{sym}] window error: {exc}", symbol=self.symbol)
                 self.state.set_status("error", str(exc))
                 time.sleep(2.0)
 
@@ -97,7 +97,7 @@ class Trader:
         )
         self.state.set_window(tokens.slug, tokens.window_ts)
         self.state.set_tokens(tokens.up_token_id, tokens.down_token_id)
-        logger.ok(f"[{sym}] market ready  slug={tokens.slug}", icon="📈")
+        logger.ok(f"[{sym}] market ready  slug={tokens.slug}", icon="📈", symbol=self.symbol)
 
         feed = PriceFeed(
             ws_url=self.cfg.ws_url,
@@ -117,7 +117,7 @@ class Trader:
             mm_thread = None
             if mm_active:
                 from .strategy_mm import MarketMakerStrategy
-                mm_strat = MarketMakerStrategy(self.cfg, self.state)
+                mm_strat = MarketMakerStrategy(self.cfg, self.state, symbol=self.symbol)
                 mm_thread = threading.Thread(
                     target=mm_strat.run_for_window,
                     args=(tokens,),
@@ -142,7 +142,7 @@ class Trader:
                     logger.warn(
                         f"[{sym}] SKIP — price already above trigger at last-minute entry  "
                         f"UP={up_at_entry}  DOWN={down_at_entry}  trigger={trigger}",
-                        icon="🚫",
+                        icon="🚫", symbol=self.symbol,
                     )
                     self.state.set_status("watching", "skipped — price above trigger at entry")
                     self._sleep_until(tokens.window_ts + 300 + 2.0)
@@ -173,7 +173,7 @@ class Trader:
         self._resolve_all_open_trades(tokens)
 
         next_ts = tokens.window_ts + 300
-        logger.info(f"[{sym}] advancing to next window {self.symbol}-updown-5m-{next_ts}", icon="⏭")
+        logger.info(f"[{sym}] advancing to next window {self.symbol}-updown-5m-{next_ts}", icon="⏭", symbol=self.symbol)
 
     # ----- helpers -----
 
@@ -193,7 +193,7 @@ class Trader:
             if self.state.last_up_price is not None and self.state.last_down_price is not None:
                 return
             _sleep_ms(50)
-        logger.warn("no initial prices received within timeout; continuing anyway")
+        logger.warn("no initial prices received within timeout; continuing anyway", symbol=self.symbol)
 
     def _wait_for_last_minute(self, tokens) -> None:
         window_ends = tokens.window_ts + 300
@@ -207,11 +207,12 @@ class Trader:
             window_ttl = window_ends - now
             logger.transient(
                 f"{tokens.slug}  ⏳ waiting for last minute  "
-                f"entry_in={int(remaining_to_entry)}s  window_ttl={int(window_ttl)}s"
+                f"entry_in={int(remaining_to_entry)}s  window_ttl={int(window_ttl)}s",
+                symbol=self.symbol,
             )
             time.sleep(min(remaining_to_entry, 1.0))
 
-        logger.info(f"{tokens.slug}  entering last-minute watch window", icon="⏱")
+        logger.info(f"{tokens.slug}  entering last-minute watch window", icon="⏱", symbol=self.symbol)
 
     def _monitor_until_trigger_or_window_end(self, tokens) -> None:
         cfg = self.cfg
@@ -227,7 +228,7 @@ class Trader:
                 logger.info(
                     f"{tokens.slug}  entry window closed — past first 45s of last minute  "
                     f"ttl={int(window_ends - now)}s",
-                    icon="🔒",
+                    icon="🔒", symbol=self.symbol,
                 )
                 return
 
@@ -241,7 +242,8 @@ class Trader:
                 logger.transient(
                     f"{tokens.slug}  UP={up:.4f}  DOWN={down:.4f}  "
                     f"trigger={trigger:.2f}  trades={current_count}/{max_trades}  "
-                    f"entry_closes={int(entry_cutoff - now)}s  ttl={int(window_ends - now)}s"
+                    f"entry_closes={int(entry_cutoff - now)}s  ttl={int(window_ends - now)}s",
+                    symbol=self.symbol,
                 )
 
             if current_count < max_trades:
@@ -279,7 +281,8 @@ class Trader:
 
             if up is not None and down is not None:
                 logger.transient(
-                    f"{tokens.slug}  HOLD  UP={up:.4f}  DOWN={down:.4f}  ttl={int(ttl)}s"
+                    f"{tokens.slug}  HOLD  UP={up:.4f}  DOWN={down:.4f}  ttl={int(ttl)}s",
+                    symbol=self.symbol,
                 )
 
             hedge_placed = self.state.find_hedge_for_window(tokens.slug) is not None
@@ -287,7 +290,7 @@ class Trader:
             if not hedge_placed and ttl <= _EMERGENCY_SECONDS:
                 logger.warn(
                     f"{tokens.slug}  ⚡ last {int(ttl)}s — no hedge reached — buying opposite side",
-                    icon="🚨",
+                    icon="🚨", symbol=self.symbol,
                 )
                 self._fire_emergency_hedge(tokens, initial_trade)
                 return
@@ -297,61 +300,17 @@ class Trader:
                     if down is not None and down < 1.00:
                         self._fire_hedge(tokens, initial_trade, "DOWN", tokens.down_token_id, down)
                     else:
-                        logger.warn(f"hedge skipped: DOWN={down} not < 1.00")
+                        logger.warn(f"hedge skipped: DOWN={down} not < 1.00", symbol=self.symbol)
 
                 elif initial_trade.side == "DOWN" and down is not None and down >= hedge_threshold:
                     if up is not None and up < 1.00:
                         self._fire_hedge(tokens, initial_trade, "UP", tokens.up_token_id, up)
                     else:
-                        logger.warn(f"hedge skipped: UP={up} not < 1.00")
+                        logger.warn(f"hedge skipped: UP={up} not < 1.00", symbol=self.symbol)
 
             time.sleep(0.5)
 
     # ----- trade execution -----
-
-    def _fire_emergency_sell(self, tokens) -> None:
-        up = self.state.last_up_price
-        down = self.state.last_down_price
-        open_trades = self.state.find_all_open_trades_for_window(tokens.slug)
-
-        if not open_trades:
-            return
-
-        is_real_now = self.state.mode == "real"
-
-        for trade in open_trades:
-            sell_price_raw = up if trade.side == "UP" else down
-            if sell_price_raw is None:
-                logger.warn(f"emergency sell #{trade.id}: no price for {trade.side} — skipping")
-                continue
-
-            sell_price = round(sell_price_raw, 4)
-            pnl = round(trade.shares * sell_price - trade.cost, 4)
-            label = "HEDGE" if trade.is_hedge else "TRADE"
-
-            logger.ok(
-                f"EMERGENCY SELL  {label} #{trade.id}  side={trade.side}  "
-                f"buy={trade.price:.4f}  sell={sell_price:.4f}  "
-                f"shares={trade.shares:.2f}  pnl=${pnl:+.4f}",
-                icon="🚨",
-            )
-
-            note = ""
-            if is_real_now and self._client is not None:
-                try:
-                    _, note = self._place_real_sell_order(trade.token_id, trade.shares, sell_price)
-                except Exception as exc:
-                    logger.err(f"emergency sell order failed #{trade.id}: {exc}")
-                    note = f"emergency sell failed: {exc}"
-            elif is_real_now and self._client is None:
-                note = "real mode: CLOB client not initialized — sell skipped"
-                logger.err(note)
-            else:
-                note = f"paper emergency sell @ {sell_price:.4f}"
-
-            self.state.resolve_trade(trade.id, "sold", sell_price, pnl, note=note)
-
-        self.state.set_status("sold", f"emergency exit @ {round((up or 0), 4)}/{round((down or 0), 4)}")
 
     def _fire_emergency_hedge(self, tokens, initial_trade: Trade) -> None:
         """Buy the opposite side with the same shares as the initial trade."""
@@ -362,12 +321,13 @@ class Trader:
         )
 
         if opp_price_raw is None:
-            logger.warn(f"emergency hedge: sin precio para {opp_side} — omitiendo")
+            logger.warn(f"emergency hedge: sin precio para {opp_side} — omitiendo", symbol=self.symbol)
             return
 
         if opp_price_raw >= 1.00:
             logger.warn(
-                f"emergency hedge: {opp_side} precio {opp_price_raw:.4f} >= 1.00 — omitiendo"
+                f"emergency hedge: {opp_side} precio {opp_price_raw:.4f} >= 1.00 — omitiendo",
+                symbol=self.symbol,
             )
             return
 
@@ -378,7 +338,7 @@ class Trader:
         logger.ok(
             f"EMERGENCY HEDGE  {initial_trade.side}@{initial_trade.price:.4f} "
             f"→ {opp_side}  {shares:.2f} shares @ {exec_price:.4f}  cost=${cost:.4f}",
-            icon="🚨",
+            icon="🚨", symbol=self.symbol,
         )
 
         order_id: Optional[str] = None
@@ -389,11 +349,11 @@ class Trader:
             try:
                 order_id, note = self._place_real_order(opp_token_id, shares, exec_price)
             except Exception as exc:
-                logger.err(f"emergency hedge order failed: {exc}")
+                logger.err(f"emergency hedge order failed: {exc}", symbol=self.symbol)
                 note = f"emergency hedge failed: {exc}"
         elif is_real_now and self._client is None:
             note = "real mode: CLOB client not initialized — emergency hedge skipped"
-            logger.err(note)
+            logger.err(note, symbol=self.symbol)
         else:
             note = f"paper emergency hedge @ {exec_price:.4f}"
 
@@ -425,7 +385,7 @@ class Trader:
         logger.ok(
             f"TRIGGER  side={side}  signal={trigger:.2f}  "
             f"exec_price={exec_price:.4f}  shares={shares:.2f}  cost=${cost:.4f}",
-            icon="🚀",
+            icon="🚀", symbol=self.symbol,
         )
 
         order_id: Optional[str] = None
@@ -435,11 +395,11 @@ class Trader:
             try:
                 order_id, note = self._place_real_order(token_id, shares, exec_price)
             except Exception as exc:
-                logger.err(f"order failed: {exc}")
+                logger.err(f"order failed: {exc}", symbol=self.symbol)
                 self.state.set_status("error", f"order failed: {exc}")
                 return
         elif is_real_now and self._client is None:
-            logger.err("real mode active but CLOB client not initialized — restart required")
+            logger.err("real mode active but CLOB client not initialized — restart required", symbol=self.symbol)
             self.state.set_status("error", "real mode: restart bot with credentials")
             return
         else:
@@ -471,7 +431,7 @@ class Trader:
         logger.ok(
             f"HEDGE  {initial_trade.side}@{initial_trade.price:.4f} "
             f"→ {opp_side} {shares:.2f} shares @ {exec_price:.4f}",
-            icon="🛡",
+            icon="🛡", symbol=self.symbol,
         )
 
         order_id: Optional[str] = None
@@ -481,7 +441,7 @@ class Trader:
             try:
                 order_id, note = self._place_real_order(opp_token_id, shares, exec_price)
             except Exception as exc:
-                logger.err(f"hedge order failed: {exc}")
+                logger.err(f"hedge order failed: {exc}", symbol=self.symbol)
                 note = f"hedge order failed: {exc}"
         elif is_real_now and self._client is None:
             note = "real mode: client not initialized (restart)"
@@ -531,18 +491,18 @@ class Trader:
 
             if winner is None:
                 self.state.resolve_trade(trade.id, "expired", side_final or 0.0, 0.0, note="no final price")
-                logger.warn(f"{label} #{trade.id} expired (no final price)")
+                logger.warn(f"{label} #{trade.id} expired (no final price)", symbol=self.symbol)
                 continue
 
             if winner == trade.side:
                 payout = trade.shares * 1.0
                 pnl = round(payout - trade.cost, 4)
                 self.state.resolve_trade(trade.id, "won", side_final or 1.0, pnl)
-                logger.ok(f"{label} #{trade.id} WON  side={trade.side}  pnl=${pnl:+.4f}", icon="🟢")
+                logger.ok(f"{label} #{trade.id} WON  side={trade.side}  pnl=${pnl:+.4f}", icon="🟢", symbol=self.symbol)
             else:
                 pnl = round(-trade.cost, 4)
                 self.state.resolve_trade(trade.id, "lost", side_final or 0.0, pnl)
-                logger.warn(f"{label} #{trade.id} LOST side={trade.side}  pnl=${pnl:+.4f}", icon="🔴")
+                logger.warn(f"{label} #{trade.id} LOST side={trade.side}  pnl=${pnl:+.4f}", icon="🔴", symbol=self.symbol)
 
     # ----- real-order plumbing -----
 
@@ -550,7 +510,7 @@ class Trader:
         try:
             from py_clob_client.client import ClobClient
         except Exception as exc:
-            logger.err(f"py_clob_client not available: {exc}")
+            logger.err(f"py_clob_client not available: {exc}", symbol=self.symbol)
             return None
         try:
             client = ClobClient(
@@ -561,10 +521,10 @@ class Trader:
                 funder=self.cfg.proxy_wallet,
             )
             client.set_api_creds(client.create_or_derive_api_creds())
-            logger.ok("CLOB client authenticated", icon="🔑")
+            logger.ok("CLOB client authenticated", icon="🔑", symbol=self.symbol)
             return client
         except Exception as exc:
-            logger.err(f"CLOB authentication failed: {exc}")
+            logger.err(f"CLOB authentication failed: {exc}", symbol=self.symbol)
             return None
 
     def _place_real_order(self, token_id: str, shares: float, price: float):
@@ -579,16 +539,3 @@ class Trader:
         if isinstance(resp, dict):
             order_id = resp.get("orderID") or resp.get("order_id") or resp.get("id")
         return str(order_id) if order_id else None, "real order placed"
-
-    def _place_real_sell_order(self, token_id: str, shares: float, price: float):
-        from py_clob_client.clob_types import OrderArgs, OrderType
-        from py_clob_client.order_builder.constants import SELL
-
-        order = self._client.create_order(
-            OrderArgs(price=price, size=shares, side=SELL, token_id=token_id)
-        )
-        resp = self._client.post_order(order, OrderType.GTC)
-        order_id = None
-        if isinstance(resp, dict):
-            order_id = resp.get("orderID") or resp.get("order_id") or resp.get("id")
-        return str(order_id) if order_id else None, "real sell order placed"

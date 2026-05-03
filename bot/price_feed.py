@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 import websocket  # websocket-client
 
@@ -21,18 +21,18 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
-def _best_from_levels(levels) -> Optional[float]:
-    """Return the best (highest) bid or (lowest) ask from a list of {price, size} levels."""
+def _best_from_levels(levels) -> Optional[List[float]]:
+    """Return parsed prices from a list of {price, size} levels, or None."""
     if not isinstance(levels, list) or not levels:
         return None
-    prices = []
+    prices: List[float] = []
     for lvl in levels:
         p = _safe_float(lvl.get("price")) if isinstance(lvl, dict) else None
         if p is not None:
             prices.append(p)
     if not prices:
         return None
-    return prices  # caller decides best vs lowest
+    return prices
 
 
 def _mid_from_book(item: dict) -> Optional[float]:
