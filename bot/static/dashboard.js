@@ -34,11 +34,11 @@
     idle: "Inactivo", loading_market: "Cargando…", watching: "Vigilando",
     holding: "Holding", traded: "Operado", hedged: "Hedgeado",
     sold: "Vendido", error: "Error", mm_placed: "MM colocado",
-    ee_traded: "EE Operado", ee_hedged: "EE Hedgeado",
+    ee_traded: "EE Operado", ee_hedged: "EE Hedgeado", ee_tp: "EE Take-Profit",
   };
   const STATUS_CLASS = {
     watching: "ok", traded: "ok", hedged: "ok", mm_placed: "ok",
-    ee_traded: "ok", ee_hedged: "ok",
+    ee_traded: "ok", ee_hedged: "ok", ee_tp: "ok",
     holding: "warn", loading_market: "warn", sold: "warn",
     error: "err",
   };

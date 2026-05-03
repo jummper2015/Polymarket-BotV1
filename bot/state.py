@@ -219,6 +219,13 @@ class BotState:
                     return t
         return None
 
+    def find_trade_by_id(self, trade_id: int) -> Optional[Trade]:
+        with self._lock:
+            for t in self.trades:
+                if t.id == trade_id:
+                    return t
+        return None
+
     def find_all_open_trades_for_window(self, slug: str) -> List[Trade]:
         with self._lock:
             return [t for t in self.trades if t.window_slug == slug and t.status == "open"]
