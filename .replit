@@ -30,7 +30,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python run.py"
+args = "PYTHONPATH=/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages python run.py"
 waitForPort = 5000
 
 [agent]
@@ -53,7 +53,3 @@ TRADING_MODE = "paper"
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 8081
-externalPort = 8081
