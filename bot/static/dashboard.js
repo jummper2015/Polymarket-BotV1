@@ -34,9 +34,11 @@
     idle: "Inactivo", loading_market: "Cargando…", watching: "Vigilando",
     holding: "Holding", traded: "Operado", hedged: "Hedgeado",
     sold: "Vendido", error: "Error", mm_placed: "MM colocado",
+    ee_traded: "EE Operado", ee_hedged: "EE Hedgeado",
   };
   const STATUS_CLASS = {
     watching: "ok", traded: "ok", hedged: "ok", mm_placed: "ok",
+    ee_traded: "ok", ee_hedged: "ok",
     holding: "warn", loading_market: "warn", sold: "warn",
     error: "err",
   };
@@ -44,8 +46,21 @@
   const MARKET_ICONS = { btc: "₿", sol: "◎", eth: "Ξ" };
   const MARKET_COLOR = { btc: "#f7931a", sol: "#9945ff", eth: "#627eea" };
 
+  const STRAT_LABELS = { trigger: "⚡ Trigger", mm: "🏦 Market Making", early_entry: "🎯 Early Entry" };
+  const STRAT_CLASS  = { trigger: "strat-trigger", mm: "strat-mm", early_entry: "strat-ee" };
+
   // ── element refs ─────────────────────────────────────────────────────────
   const $ = (id) => document.getElementById(id);
+
+  // ── toggle market ────────────────────────────────────────────────────────
+  async function toggleMarket(sym) {
+    try {
+      const resp = await fetch(`toggle-market/${sym}`, { method: "POST", cache: "no-store" });
+      if (!resp.ok) return;
+      await resp.json();
+      // State will refresh on next poll
+    } catch (_) {}
+  }
 
   // ── render header ────────────────────────────────────────────────────────
   function renderHeader(s) {
@@ -112,22 +127,75 @@
     if (upt) upt.textContent = fmtDuration(st.uptime_seconds);
   }
 
+  // ── render strategy metrics ──────────────────────────────────────────────
+  function renderStrategyMetrics(s) {
+    const el = $("strat-metrics");
+    if (!el) return;
+    const ss = s.combined_strategy_stats || {};
+    const activeStrat = (s.config || {}).active_strategy || "trigger";
+    const earlyEnabled = (s.config || {}).early_entry_enabled || false;
+
+    const stratOrder = ["trigger", "mm", "early_entry"];
+    el.innerHTML = stratOrder.map((key) => {
+      const st = ss[key] || { trades: 0, wins: 0, losses: 0, win_rate: 0, pnl: 0, roi: 0 };
+      const isActive =
+        (key === "trigger" && (activeStrat === "trigger" || activeStrat === "both")) ||
+        (key === "mm"      && (activeStrat === "market_making" || activeStrat === "both")) ||
+        (key === "early_entry" && earlyEnabled);
+      const activeDot = isActive
+        ? `<span class="strat-active-dot"></span>`
+        : `<span class="strat-inactive-dot"></span>`;
+      const pnlCls = st.pnl >= 0 ? "pnl-pos" : "pnl-neg";
+      return `
+        <div class="strat-metric-card">
+          <div class="strat-metric-header">
+            <span class="tag ${STRAT_CLASS[key]}">${STRAT_LABELS[key]}</span>
+            ${activeDot}
+          </div>
+          <div class="strat-metric-row">
+            <span class="strat-metric-label">Trades</span>
+            <span class="strat-metric-val">${st.trades}</span>
+          </div>
+          <div class="strat-metric-row">
+            <span class="strat-metric-label">V / D</span>
+            <span class="strat-metric-val">${st.wins}V / ${st.losses}D</span>
+          </div>
+          <div class="strat-metric-row">
+            <span class="strat-metric-label">Win Rate</span>
+            <span class="strat-metric-val">${fmtPct(st.win_rate)}</span>
+          </div>
+          <div class="strat-metric-row">
+            <span class="strat-metric-label">P&L</span>
+            <span class="strat-metric-val ${pnlCls}">${fmtSigned(st.pnl)}</span>
+          </div>
+          <div class="strat-metric-row">
+            <span class="strat-metric-label">ROI</span>
+            <span class="strat-metric-val ${pnlCls}">${fmtPct(st.roi)}</span>
+          </div>
+        </div>`;
+    }).join("");
+  }
+
   // ── render one market panel ──────────────────────────────────────────────
   function renderMarket(sym, m) {
     const panel = $("panel-" + sym);
     if (!panel) return;
 
-    const icon  = MARKET_ICONS[sym] || sym.toUpperCase();
-    const color = MARKET_COLOR[sym] || "#888";
-    const stCls = STATUS_CLASS[m.bot_status] || "";
-    const stLbl = STATUS_LABEL[m.bot_status] || m.bot_status;
-    const wsCls = m.ws_connected ? "ok" : "err";
-    const slug  = m.current_slug || "—";
-    const ttl   = m.seconds_remaining != null ? fmtDuration(m.seconds_remaining) : "—";
-    const up    = m.last_up_price;
-    const down  = m.last_down_price;
-    const st    = m.stats || {};
-    const pnlCls = st.resolved_pnl >= 0 ? "pnl-pos" : "pnl-neg";
+    const icon    = MARKET_ICONS[sym] || sym.toUpperCase();
+    const color   = MARKET_COLOR[sym] || "#888";
+    const stCls   = STATUS_CLASS[m.bot_status] || "";
+    const stLbl   = STATUS_LABEL[m.bot_status] || m.bot_status;
+    const wsCls   = m.ws_connected ? "ok" : "err";
+    const slug    = m.current_slug || "—";
+    const ttl     = m.seconds_remaining != null ? fmtDuration(m.seconds_remaining) : "—";
+    const up      = m.last_up_price;
+    const down    = m.last_down_price;
+    const st      = m.stats || {};
+    const pnlCls  = st.resolved_pnl >= 0 ? "pnl-pos" : "pnl-neg";
+    const enabled = m.market_enabled !== false;
+
+    const toggleLabel = enabled ? "⏸ Desactivar" : "▶ Activar";
+    const toggleCls   = enabled ? "btn-mkt-toggle active" : "btn-mkt-toggle inactive";
 
     panel.innerHTML = `
       <div class="market-header">
@@ -142,9 +210,11 @@
           <span class="badge ${stCls}">${stLbl}</span>
           <span class="badge ${wsCls}">WS ●</span>
           <span class="mono muted" style="font-size:12px;">${fmtSpot(m.spot_price)}</span>
+          <button class="${toggleCls}" data-sym="${sym}">${toggleLabel}</button>
         </div>
       </div>
 
+      ${!enabled ? `<div class="market-disabled-overlay">Mercado Desactivado</div>` : `
       <div class="prices" style="margin-top:14px;">
         <div class="price up">
           <span class="side">▲ SUBE</span>
@@ -163,8 +233,14 @@
         <span>Trades <strong>${st.trades || 0}</strong></span>
         <span>Victoria <strong>${(st.win_rate * 100 || 0).toFixed(0)}%</strong></span>
         <span class="${pnlCls}">P&L <strong>${fmtSigned(st.resolved_pnl || 0)}</strong></span>
-      </div>
+      </div>`}
     `;
+
+    // Bind toggle button
+    const btn = panel.querySelector(".btn-mkt-toggle");
+    if (btn) {
+      btn.addEventListener("click", () => toggleMarket(sym));
+    }
   }
 
   // ── render combined trades table ─────────────────────────────────────────
@@ -192,9 +268,10 @@
       const typeTag = t.is_hedge
         ? `<span class="tag hedge">HEDGE</span>`
         : `<span class="tag initial">INIT</span>`;
-      const stratTag = t.strategy === "mm"
-        ? `<span class="tag strat-mm">MM</span>`
-        : `<span class="tag strat-trigger">TRG</span>`;
+      let stratTag;
+      if (t.strategy === "mm")          stratTag = `<span class="tag strat-mm">MM</span>`;
+      else if (t.strategy === "early_entry") stratTag = `<span class="tag strat-ee">EE</span>`;
+      else                              stratTag = `<span class="tag strat-trigger">TRG</span>`;
       const sym = t._sym;
       const symColor = MKT_COLOR[sym] || "#aaa";
       return `<tr${t.is_hedge ? ' class="row-hedge"' : ""}>
@@ -230,7 +307,6 @@
         <span class="msg"></span>
       </li>`;
     }).join("");
-    // Set text content safely for msg spans
     logEl.querySelectorAll("li").forEach((li, i) => {
       const msgEl = li.querySelector(".msg");
       if (msgEl && items[i]) msgEl.textContent = items[i].message;
@@ -241,6 +317,7 @@
   function render(s) {
     renderHeader(s);
     renderKpis(s);
+    renderStrategyMetrics(s);
     const markets = s.markets || {};
     for (const [sym, m] of Object.entries(markets)) {
       renderMarket(sym, m);

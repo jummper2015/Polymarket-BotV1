@@ -48,7 +48,6 @@ def start_price_fetcher() -> None:
     t.start()
 
 
-# Keep old name as alias
 def start_btc_fetcher() -> None:
     start_price_fetcher()
 
@@ -91,8 +90,10 @@ def create_app() -> Flask:
                 "last_down_price": snap["last_down_price"],
                 "spot_price": snap["spot_price"],
                 "stats": snap["stats"],
+                "strategy_stats": snap["strategy_stats"],
                 "trades": snap["trades"],
                 "price_history": snap["price_history"],
+                "market_enabled": snap["market_enabled"],
             }
             for entry in snap["log"]:
                 all_logs.append({"market": sym, **entry})
@@ -116,6 +117,25 @@ def create_app() -> Flask:
         bankroll = starting_bankroll + resolved_pnl
         available_cash = bankroll - open_cost
 
+        # Combined per-strategy stats across all markets
+        combined_strategy_stats = {}
+        for strat in ("trigger", "mm", "early_entry"):
+            strat_wins = sum(snapshots[s]["strategy_stats"][strat]["wins"] for s in STATES)
+            strat_losses = sum(snapshots[s]["strategy_stats"][strat]["losses"] for s in STATES)
+            strat_trades = sum(snapshots[s]["strategy_stats"][strat]["trades"] for s in STATES)
+            strat_pnl = sum(snapshots[s]["strategy_stats"][strat]["pnl"] for s in STATES)
+            strat_invested = sum(snapshots[s]["strategy_stats"][strat]["invested"] for s in STATES)
+            strat_resolved = strat_wins + strat_losses
+            combined_strategy_stats[strat] = {
+                "trades": strat_trades,
+                "wins": strat_wins,
+                "losses": strat_losses,
+                "win_rate": (strat_wins / strat_resolved) if strat_resolved else 0.0,
+                "pnl": strat_pnl,
+                "invested": strat_invested,
+                "roi": (strat_pnl / strat_invested) if strat_invested else 0.0,
+            }
+
         return jsonify({
             "markets": markets_data,
             "config": {
@@ -130,6 +150,7 @@ def create_app() -> Flask:
                 "mm_shares": btc_snap["mm_shares"],
                 "mm_last_seconds": btc_snap["mm_last_seconds"],
                 "mm_max_price": btc_snap["mm_max_price"],
+                "early_entry_enabled": btc_snap["early_entry_enabled"],
                 "starting_bankroll": btc_snap["starting_bankroll"],
             },
             "combined_stats": {
@@ -146,6 +167,7 @@ def create_app() -> Flask:
                 "available_cash": available_cash,
                 "uptime_seconds": btc_snap["stats"]["uptime_seconds"],
             },
+            "combined_strategy_stats": combined_strategy_stats,
             "log": all_logs,
             "real_mode_readiness": btc_snap["real_mode_readiness"],
         })
@@ -232,6 +254,9 @@ def create_app() -> Flask:
             except (TypeError, ValueError):
                 pass
 
+        if "early_entry_enabled" in data:
+            updates["early_entry_enabled"] = bool(data["early_entry_enabled"])
+
         if "mode" in data:
             v = str(data["mode"]).lower()
             if v in ("paper", "real"):
@@ -244,12 +269,20 @@ def create_app() -> Flask:
                     }), 400
                 updates["mode"] = v
 
-        # Apply config to ALL markets simultaneously
         accepted = {}
         for st in STATES.values():
             accepted = st.update_runtime_config(**updates)
         logger.info(f"config updated via dashboard: {accepted}", icon="⚙")
         return jsonify({"ok": True, "updated": accepted})
+
+    @app.post("/toggle-market/<sym>")
+    def toggle_market(sym: str):
+        sym = sym.lower()
+        if sym not in STATES:
+            return jsonify({"ok": False, "error": "Unknown market"}), 400
+        enabled = STATES[sym].toggle_market()
+        logger.info(f"market [{sym.upper()}] {'activado' if enabled else 'desactivado'}", icon="🔘")
+        return jsonify({"ok": True, "sym": sym, "enabled": enabled})
 
     @app.get("/healthz")
     def healthz():

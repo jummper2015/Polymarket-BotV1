@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Polymarket Bot — Mercados</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=6" />
+  <link rel="stylesheet" href="static/dashboard.css?v=7" />
 </head>
 <body>
 
@@ -56,6 +56,14 @@
       <span id="kpi-uptime" class="kpi-value">—</span>
       <span class="kpi-sub muted">desde inicio</span>
     </div>
+  </section>
+
+  <!-- ── Métricas por estrategia ── -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Métricas por Estrategia</h2>
+    </div>
+    <div class="strat-metrics-grid" id="strat-metrics"></div>
   </section>
 
   <!-- ── 3 paneles de mercado ── -->
@@ -110,6 +118,6 @@
   Auto-refresh 1s · uptime <span id="uptime">0s</span>
 </footer>
 
-<script src="static/dashboard.js?v=6"></script>
+<script src="static/dashboard.js?v=7"></script>
 </body>
 </html>

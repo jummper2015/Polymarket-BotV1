@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Deque, Dict, List, Optional
 
 
@@ -27,7 +27,7 @@ class Trade:
     order_id: Optional[str] = None
     note: str = ""
     is_hedge: bool = False
-    strategy: str = "trigger"  # "trigger" or "mm"
+    strategy: str = "trigger"  # "trigger", "mm", "early_entry"
 
 
 class BotState:
@@ -55,6 +55,12 @@ class BotState:
         self.mm_shares: float = 20.0
         self.mm_last_seconds: int = 30
         self.mm_max_price: float = 0.95
+
+        # --- early entry config ---
+        self.early_entry_enabled: bool = False
+
+        # --- market enabled toggle ---
+        self.market_enabled: bool = True
 
         # --- bot status ---
         self.bot_status: str = "idle"
@@ -110,7 +116,7 @@ class BotState:
             "trigger_price", "buy_amount", "max_trades_per_window",
             "mode", "hedge_threshold", "last_minute_seconds",
             "active_strategy", "mm_shares", "mm_last_seconds", "mm_max_price",
-            "starting_bankroll",
+            "starting_bankroll", "market_enabled", "early_entry_enabled",
         }
         accepted: Dict[str, object] = {}
         with self._lock:
@@ -119,6 +125,11 @@ class BotState:
                     setattr(self, key, val)
                     accepted[key] = val
         return accepted
+
+    def toggle_market(self) -> bool:
+        with self._lock:
+            self.market_enabled = not self.market_enabled
+            return self.market_enabled
 
     # ----- status helpers -----
 
@@ -163,7 +174,6 @@ class BotState:
             self.spot_price = price
             self.spot_price_updated_at = time.time()
 
-    # Keep old method name as alias for compatibility
     def update_btc_price(self, price: float) -> None:
         self.update_spot_price(price)
 
@@ -220,6 +230,13 @@ class BotState:
                 if t.window_slug == slug and t.strategy == "mm"
             )
 
+    def count_early_entry_trades_for_window(self, slug: str) -> int:
+        with self._lock:
+            return sum(
+                1 for t in self.trades
+                if t.window_slug == slug and t.strategy == "early_entry"
+            )
+
     def resolve_trade(self, trade_id: int, status: str, final_price: float, pnl: float, note: str = "") -> None:
         with self._lock:
             for t in self.trades:
@@ -235,6 +252,25 @@ class BotState:
         entry = {"t": time.time(), "level": level, "message": message}
         with self._lock:
             self.log.append(entry)
+
+    # ----- per-strategy stats -----
+
+    def _strategy_stats(self, strategy_name: str) -> Dict[str, object]:
+        trades = [t for t in self.trades if t.strategy == strategy_name]
+        wins = sum(1 for t in trades if t.status == "won")
+        losses = sum(1 for t in trades if t.status == "lost")
+        resolved = wins + losses
+        pnl = sum((t.pnl or 0.0) for t in trades if t.status in ("won", "lost", "expired", "sold"))
+        invested = sum(t.cost for t in trades)
+        return {
+            "trades": len(trades),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": (wins / resolved) if resolved else 0.0,
+            "pnl": pnl,
+            "invested": invested,
+            "roi": (pnl / invested) if invested else 0.0,
+        }
 
     # ----- real-mode readiness -----
 
@@ -288,6 +324,13 @@ class BotState:
             bankroll = self.starting_bankroll + resolved_pnl
             available_cash = bankroll - open_cost
             now = time.time()
+
+            strategy_stats = {
+                "trigger": self._strategy_stats("trigger"),
+                "mm": self._strategy_stats("mm"),
+                "early_entry": self._strategy_stats("early_entry"),
+            }
+
             return {
                 "mode": self.mode,
                 "has_credentials": self.has_credentials,
@@ -300,6 +343,8 @@ class BotState:
                 "mm_shares": self.mm_shares,
                 "mm_last_seconds": self.mm_last_seconds,
                 "mm_max_price": self.mm_max_price,
+                "early_entry_enabled": self.early_entry_enabled,
+                "market_enabled": self.market_enabled,
                 "bot_status": self.bot_status,
                 "bot_message": self.bot_message,
                 "ws_connected": self.ws_connected,
@@ -336,6 +381,7 @@ class BotState:
                     "windows_traded": self.windows_traded,
                     "uptime_seconds": now - self.started_at,
                 },
+                "strategy_stats": strategy_stats,
                 "trades": [
                     {
                         "id": t.id,

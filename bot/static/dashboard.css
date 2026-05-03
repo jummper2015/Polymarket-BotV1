@@ -9,6 +9,7 @@
   --down: #e74a3b;
   --accent: #5a8dee;
   --warn: #f1b44c;
+  --ee: #a78bfa;
   --radius: 14px;
 }
 
@@ -97,12 +98,47 @@ main {
   letter-spacing: 0.5px; text-transform: uppercase; color: var(--muted);
 }
 
+/* ── STRATEGY METRICS ─────────────────────────────────────── */
+.strat-metrics-grid {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(3, 1fr);
+}
+.strat-metric-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.strat-metric-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px;
+}
+.strat-metric-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px;
+}
+.strat-metric-label { color: var(--muted); }
+.strat-metric-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.strat-active-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--up);
+  box-shadow: 0 0 6px var(--up);
+  flex-shrink: 0;
+}
+.strat-inactive-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); opacity: 0.4;
+  flex-shrink: 0;
+}
+
 /* ── MARKET GRID ──────────────────────────────────────────── */
 .market-grid {
   display: grid; gap: 16px;
   grid-template-columns: repeat(3, 1fr);
 }
-.market-panel { padding: 18px; }
+.market-panel { padding: 18px; position: relative; }
 
 .market-header {
   display: flex; justify-content: space-between; align-items: flex-start;
@@ -117,6 +153,43 @@ main {
   color: var(--muted); font-size: 12px; flex-wrap: wrap;
 }
 .market-meta strong { color: var(--text); }
+
+/* ── MARKET TOGGLE BUTTON ─────────────────────────────────── */
+.btn-mkt-toggle {
+  padding: 5px 12px;
+  border-radius: 7px;
+  font-size: 12px; font-weight: 600;
+  cursor: pointer; border: 1px solid;
+  outline: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.btn-mkt-toggle.active {
+  background: rgba(231,74,59,0.12);
+  color: var(--down);
+  border-color: rgba(231,74,59,0.3);
+}
+.btn-mkt-toggle.active:hover {
+  background: rgba(231,74,59,0.22);
+}
+.btn-mkt-toggle.inactive {
+  background: rgba(28,200,138,0.12);
+  color: var(--up);
+  border-color: rgba(28,200,138,0.3);
+}
+.btn-mkt-toggle.inactive:hover {
+  background: rgba(28,200,138,0.22);
+}
+
+.market-disabled-overlay {
+  margin-top: 20px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  font-style: italic;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
 
 /* ── KPI CARDS ────────────────────────────────────────────── */
 .kpi { display: flex; flex-direction: column; gap: 6px; }
@@ -190,6 +263,37 @@ main {
 .cfg-msg.ok  { color: var(--up); }
 .cfg-msg.err { color: var(--down); }
 
+/* ── TOGGLE SWITCH (Early Entry) ──────────────────────────── */
+.toggle-switch {
+  display: flex; align-items: center; gap: 10px;
+}
+.toggle-switch input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 44px; height: 24px;
+  border-radius: 999px;
+  background: var(--border);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.toggle-switch input[type="checkbox"]:checked {
+  background: var(--ee);
+}
+.toggle-switch input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+}
+.toggle-switch input[type="checkbox"]:checked::after {
+  transform: translateX(20px);
+}
+.toggle-label { font-size: 13px; font-weight: 500; color: var(--text); }
+
 /* ── LOG ──────────────────────────────────────────────────── */
 .log { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 12px; }
 .log li { padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
@@ -235,6 +339,7 @@ tr.row-hedge td { background: rgba(241,180,76,0.04); }
 .pnl-neg { color: var(--down); font-variant-numeric: tabular-nums; }
 .tag.strat-trigger { background: rgba(241,180,76,0.15); color: var(--warn); }
 .tag.strat-mm      { background: rgba(90,141,238,0.18); color: var(--accent); }
+.tag.strat-ee      { background: rgba(167,139,250,0.18); color: var(--ee); }
 .tag.sold          { background: rgba(28,200,138,0.12); color: var(--up); }
 
 /* ── STRATEGY TOGGLE ──────────────────────────────────────── */
@@ -269,11 +374,13 @@ tr.row-hedge td { background: rgba(241,180,76,0.04); }
 @media (max-width: 1200px) {
   .market-grid { grid-template-columns: repeat(2, 1fr); }
   .grid { grid-template-columns: repeat(3, 1fr); }
+  .strat-metrics-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 780px) {
   .market-grid { grid-template-columns: 1fr; }
   .grid { grid-template-columns: repeat(2, 1fr); }
   .cfg-row { grid-template-columns: 1fr; gap: 8px; }
+  .strat-metrics-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .grid { grid-template-columns: 1fr; }

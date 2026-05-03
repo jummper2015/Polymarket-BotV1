@@ -10,9 +10,12 @@ Rules:
      the fixed trigger threshold.  trigger_price is purely an entry signal.
   5. Hedge: if the initial side's price rises to hedge_threshold, buy the opposite
      side with the same number of shares (provided opposite mid < 1.00).
-  6. Emergency hedge: if an open position has NOT been hedged and 10 seconds or
-     fewer remain in the window, buy the opposite side to guarantee coverage.
+  6. Emergency hedge (modified): if an open position has NOT been hedged and 10
+     seconds or fewer remain, WAIT until 5 seconds remain and buy 50% of the
+     initial shares on the opposite side to mitigate losses.
   7. max_trades_per_window controls how many initial (non-hedge) trades per window.
+  8. Early-entry strategy: at window_ts + 40s buy 25% of mm_shares on the dominant
+     side, then apply Kelly criterion for a 1–3% coverage hedge immediately.
 
 All runtime-mutable params (trigger_price, buy_amount, max_trades_per_window,
 hedge_threshold, last_minute_seconds, mode) are read from self.state so dashboard
@@ -34,6 +37,22 @@ from .state import STATES, Trade
 
 def _sleep_ms(ms: int) -> None:
     time.sleep(ms / 1000.0)
+
+
+def _kelly_coverage_fraction(p_dominant: float, p_other: float) -> float:
+    """Compute Kelly hedge fraction clamped to [1%, 3%].
+
+    Uses price spread as an edge signal:
+    - Tight spread (uncertain) → hedge more (up to 3%)
+    - Wide spread (confident) → hedge less (down to 1%)
+    This ensures we always have some coverage while respecting the 1-3% cap.
+    """
+    if p_other <= 0 or p_dominant <= 0 or p_dominant >= 1.0:
+        return 0.01
+    spread = abs(p_dominant - p_other)
+    # More certainty (high spread) → smaller fraction needed
+    fraction = 0.03 - spread * 0.02
+    return max(0.01, min(0.03, fraction))
 
 
 class Trader:
@@ -88,6 +107,14 @@ class Trader:
 
     def _run_one_window(self) -> None:
         sym = self.symbol.upper()
+
+        # Check if this market is enabled; if not, idle-wait and check again
+        if not self.state.market_enabled:
+            self.state.set_status("idle", "Mercado desactivado")
+            logger.info(f"[{sym}] mercado desactivado — esperando 10s", icon="⏸")
+            time.sleep(10.0)
+            return
+
         self.state.set_status("loading_market", "Loading market for current window")
         tokens = load_market_for_current_window(
             self.cfg.gamma_host,
@@ -113,7 +140,20 @@ class Trader:
 
             trigger_active = self.state.active_strategy in ("trigger", "both")
             mm_active = self.state.active_strategy in ("market_making", "both")
+            early_entry_active = self.state.early_entry_enabled
 
+            # --- Early-entry strategy thread (fires at window_ts + 40s) ---
+            early_thread = None
+            if early_entry_active:
+                early_thread = threading.Thread(
+                    target=self._run_early_entry_strategy,
+                    args=(tokens,),
+                    name=f"early-{self.symbol}",
+                    daemon=True,
+                )
+                early_thread.start()
+
+            # --- Market-making thread ---
             mm_thread = None
             if mm_active:
                 from .strategy_mm import MarketMakerStrategy
@@ -165,6 +205,8 @@ class Trader:
 
             if mm_thread is not None and mm_thread.is_alive():
                 mm_thread.join(timeout=10.0)
+            if early_thread is not None and early_thread.is_alive():
+                early_thread.join(timeout=10.0)
 
         finally:
             feed.stop()
@@ -265,7 +307,11 @@ class Trader:
 
     def _hold_and_hedge_until_window_end(self, tokens, initial_trade: Trade) -> None:
         end = tokens.window_ts + 300
-        _EMERGENCY_SECONDS = 10
+        _CHECK_SECONDS = 10   # at this TTL, start monitoring for the half-hedge moment
+        _HEDGE_SECONDS = 5    # at this TTL, fire the 50%-shares opposite-side hedge
+
+        half_hedge_armed = False  # True once we've passed the 10s check
+        half_hedge_placed = False
 
         while not self._stop.is_set():
             now = time.time()
@@ -284,15 +330,8 @@ class Trader:
 
             hedge_placed = self.state.find_hedge_for_window(tokens.slug) is not None
 
-            if not hedge_placed and ttl <= _EMERGENCY_SECONDS:
-                logger.warn(
-                    f"{tokens.slug}  ⚡ last {int(ttl)}s — no hedge reached — buying opposite side",
-                    icon="🚨",
-                )
-                self._fire_emergency_hedge(tokens, initial_trade)
-                return
-
-            if not hedge_placed:
+            # --- Normal hedge: price crosses hedge_threshold ---
+            if not hedge_placed and not half_hedge_placed and ttl > _CHECK_SECONDS:
                 if initial_trade.side == "UP" and up is not None and up >= hedge_threshold:
                     if down is not None and down < 1.00:
                         self._fire_hedge(tokens, initial_trade, "DOWN", tokens.down_token_id, down)
@@ -305,7 +344,168 @@ class Trader:
                     else:
                         logger.warn(f"hedge skipped: UP={up} not < 1.00")
 
-            time.sleep(0.5)
+            # --- Modified emergency half-hedge at last 10s → fires at 5s ---
+            if not hedge_placed and not half_hedge_placed:
+                if ttl <= _CHECK_SECONDS and not half_hedge_armed:
+                    half_hedge_armed = True
+                    logger.warn(
+                        f"{tokens.slug}  ⚡ {int(ttl)}s restantes — sin hedge — esperando 5s para cubrir 50%",
+                        icon="⏳",
+                    )
+
+                if half_hedge_armed and ttl <= _HEDGE_SECONDS:
+                    logger.warn(
+                        f"{tokens.slug}  🚨 {int(ttl)}s — ejecutando semi-cobertura 50% shares lado contrario",
+                        icon="🚨",
+                    )
+                    self._fire_half_hedge(tokens, initial_trade)
+                    half_hedge_placed = True
+                    return
+
+            time.sleep(0.25)
+
+    # ----- early-entry strategy -----
+
+    def _run_early_entry_strategy(self, tokens) -> None:
+        """At window_ts + 40s: buy 25% of mm_shares on dominant side + Kelly hedge."""
+        sym = self.symbol.upper()
+        window_ends = tokens.window_ts + 300
+        entry_time = float(tokens.window_ts) + 40.0
+
+        # Wait until 40s after window start
+        while not self._stop.is_set():
+            now = time.time()
+            if now >= window_ends:
+                return
+            if now >= entry_time:
+                break
+            wait = min(entry_time - now, 1.0)
+            logger.transient(
+                f"EE  {tokens.slug}  ⏳ early-entry en {int(entry_time - now)}s"
+            )
+            time.sleep(wait)
+
+        # Abort if already traded early entry this window
+        if self.state.count_early_entry_trades_for_window(tokens.slug) > 0:
+            return
+
+        up = self.state.last_up_price
+        down = self.state.last_down_price
+        if up is None or down is None:
+            logger.warn(f"EE  {tokens.slug}  sin precios — omitiendo early-entry")
+            return
+
+        # Dominant side = higher price (more likely to win)
+        if up >= down:
+            dom_side, dom_token, dom_price = "UP", tokens.up_token_id, up
+            opp_side, opp_token, opp_price = "DOWN", tokens.down_token_id, down
+        else:
+            dom_side, dom_token, dom_price = "DOWN", tokens.down_token_id, down
+            opp_side, opp_token, opp_price = "UP", tokens.up_token_id, up
+
+        mm_shares = self.state.mm_shares
+        initial_shares = math.floor(mm_shares * 0.25 * 100) / 100.0
+        if initial_shares <= 0:
+            logger.warn(f"EE  {tokens.slug}  shares demasiado pequeños — omitiendo")
+            return
+
+        exec_price = round(dom_price, 4)
+        cost = round(initial_shares * exec_price, 4)
+
+        logger.ok(
+            f"EARLY-ENTRY  side={dom_side}  shares={initial_shares:.2f}  "
+            f"price={exec_price:.4f}  cost=${cost:.4f}",
+            icon="🎯",
+        )
+
+        order_id: Optional[str] = None
+        note = ""
+        is_real_now = self.state.mode == "real"
+
+        if is_real_now and self._client is not None:
+            try:
+                order_id, note = self._place_real_order(dom_token, initial_shares, exec_price)
+            except Exception as exc:
+                logger.err(f"EE order failed: {exc}")
+                note = f"early-entry order failed: {exc}"
+        elif is_real_now and self._client is None:
+            logger.err("EE real mode: CLOB client not initialized")
+            return
+        else:
+            note = f"paper early-entry @ {exec_price:.4f}"
+
+        trade = Trade(
+            id=0,
+            window_slug=tokens.slug,
+            window_ts=tokens.window_ts,
+            side=dom_side,
+            token_id=dom_token,
+            price=exec_price,
+            shares=initial_shares,
+            cost=cost,
+            mode=self.state.mode,
+            opened_at=time.time(),
+            order_id=order_id,
+            note=note,
+            is_hedge=False,
+            strategy="early_entry",
+        )
+        trade = self.state.add_trade(trade)
+        self.state.set_status("ee_traded", f"EE {dom_side} @ {exec_price:.4f}")
+
+        # --- Kelly hedge immediately after entry ---
+        if opp_price is None or opp_price <= 0 or opp_price >= 1.0:
+            logger.warn(f"EE  {tokens.slug}  precio opuesto no válido — sin Kelly hedge")
+            return
+
+        kelly_frac = _kelly_coverage_fraction(dom_price, opp_price)
+        hedge_shares = math.floor(initial_shares * kelly_frac * 100) / 100.0
+        if hedge_shares <= 0:
+            return
+
+        hedge_price = round(opp_price, 4)
+        hedge_cost = round(hedge_shares * hedge_price, 4)
+
+        logger.ok(
+            f"EE KELLY HEDGE  side={opp_side}  Kelly={kelly_frac:.1%}  "
+            f"shares={hedge_shares:.2f}  price={hedge_price:.4f}  cost=${hedge_cost:.4f}",
+            icon="📐",
+        )
+
+        h_order_id: Optional[str] = None
+        h_note = ""
+        if is_real_now and self._client is not None:
+            try:
+                h_order_id, h_note = self._place_real_order(opp_token, hedge_shares, hedge_price)
+            except Exception as exc:
+                logger.err(f"EE Kelly hedge order failed: {exc}")
+                h_note = f"EE kelly hedge failed: {exc}"
+        elif is_real_now and self._client is None:
+            h_note = "real mode: client not initialized"
+        else:
+            h_note = f"paper EE kelly hedge @ {hedge_price:.4f}"
+
+        kelly_hedge = Trade(
+            id=0,
+            window_slug=tokens.slug,
+            window_ts=tokens.window_ts,
+            side=opp_side,
+            token_id=opp_token,
+            price=hedge_price,
+            shares=hedge_shares,
+            cost=hedge_cost,
+            mode=self.state.mode,
+            opened_at=time.time(),
+            order_id=h_order_id,
+            note=h_note,
+            is_hedge=True,
+            strategy="early_entry",
+        )
+        self.state.add_trade(kelly_hedge)
+        self.state.set_status(
+            "ee_hedged",
+            f"EE {dom_side}+{opp_side} Kelly {kelly_frac:.1%}",
+        )
 
     # ----- trade execution -----
 
@@ -353,8 +553,73 @@ class Trader:
 
         self.state.set_status("sold", f"emergency exit @ {round((up or 0), 4)}/{round((down or 0), 4)}")
 
+    def _fire_half_hedge(self, tokens, initial_trade: Trade) -> None:
+        """Buy 50% of initial shares on the opposite side to mitigate losses."""
+        opp_side     = "DOWN" if initial_trade.side == "UP" else "UP"
+        opp_token_id = tokens.down_token_id if initial_trade.side == "UP" else tokens.up_token_id
+        opp_price_raw = (
+            self.state.last_down_price if initial_trade.side == "UP" else self.state.last_up_price
+        )
+
+        if opp_price_raw is None:
+            logger.warn(f"half hedge: sin precio para {opp_side} — omitiendo")
+            return
+
+        if opp_price_raw >= 1.00:
+            logger.warn(
+                f"half hedge: {opp_side} precio {opp_price_raw:.4f} >= 1.00 — omitiendo"
+            )
+            return
+
+        exec_price = round(opp_price_raw, 4)
+        shares = math.floor(initial_trade.shares * 0.50 * 100) / 100.0
+        if shares <= 0:
+            shares = initial_trade.shares
+        cost = round(shares * exec_price, 4)
+
+        logger.ok(
+            f"SEMI-HEDGE 50%  {initial_trade.side}@{initial_trade.price:.4f} "
+            f"→ {opp_side}  {shares:.2f} shares @ {exec_price:.4f}  cost=${cost:.4f}",
+            icon="🛡",
+        )
+
+        order_id: Optional[str] = None
+        note = ""
+        is_real_now = self.state.mode == "real"
+
+        if is_real_now and self._client is not None:
+            try:
+                order_id, note = self._place_real_order(opp_token_id, shares, exec_price)
+            except Exception as exc:
+                logger.err(f"half hedge order failed: {exc}")
+                note = f"half hedge failed: {exc}"
+        elif is_real_now and self._client is None:
+            note = "real mode: CLOB client not initialized — half hedge skipped"
+            logger.err(note)
+        else:
+            note = f"paper semi-hedge 50% @ {exec_price:.4f}"
+
+        hedge = Trade(
+            id=0,
+            window_slug=tokens.slug,
+            window_ts=tokens.window_ts,
+            side=opp_side,
+            token_id=opp_token_id,
+            price=exec_price,
+            shares=shares,
+            cost=cost,
+            mode=self.state.mode,
+            opened_at=time.time(),
+            order_id=order_id,
+            note=note,
+            is_hedge=True,
+            strategy="trigger",
+        )
+        self.state.add_trade(hedge)
+        self.state.set_status("hedged", f"semi-hedge 50% {initial_trade.side}+{opp_side}")
+
     def _fire_emergency_hedge(self, tokens, initial_trade: Trade) -> None:
-        """Buy the opposite side with the same shares as the initial trade."""
+        """Buy the opposite side with the same shares as the initial trade (legacy, kept for reference)."""
         opp_side     = "DOWN" if initial_trade.side == "UP" else "UP"
         opp_token_id = tokens.down_token_id if initial_trade.side == "UP" else tokens.up_token_id
         opp_price_raw = (
@@ -411,6 +676,7 @@ class Trader:
             order_id=order_id,
             note=note,
             is_hedge=True,
+            strategy="trigger",
         )
         self.state.add_trade(hedge)
         self.state.set_status("hedged", f"emergency hedge {initial_trade.side}+{opp_side}")
@@ -459,6 +725,7 @@ class Trader:
             order_id=order_id,
             note=note,
             is_hedge=False,
+            strategy="trigger",
         )
         trade = self.state.add_trade(trade)
         self.state.set_status("traded", f"{side} @ {exec_price:.4f} (signal {trigger:.2f})")
@@ -502,6 +769,7 @@ class Trader:
             order_id=order_id,
             note=note,
             is_hedge=True,
+            strategy="trigger",
         )
         self.state.add_trade(hedge)
         self.state.set_status("hedged", f"{initial_trade.side}+{opp_side} hedged")
