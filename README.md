@@ -1,6 +1,12 @@
-# Polymarket BTC Up/Down 5m Bot
+# Polymarket Multi-Market Bot (BTC / ETH / SOL)
 
-Bot automatizado que opera los mercados de predicción **BTC up/down de 5 minutos** en [Polymarket](https://polymarket.com). Incluye dashboard web en tiempo real con KPIs, historial de operaciones, gráfico de precios y soporte para dos estrategias de trading independientes o simultáneas.
+Bot automatizado que opera los mercados de predicción **BTC, ETH y SOL up/down de 5 minutos** en [Polymarket](https://polymarket.com). Incluye un dashboard web en tiempo real con KPIs globales, métricas por estrategia, historial de operaciones y soporte para tres estrategias de trading independientes o combinadas.
+
+---
+
+## Screenshot
+
+![Dashboard](attached_assets/screenshots/dashboard.jpg)
 
 ---
 
@@ -22,18 +28,20 @@ Bot automatizado que opera los mercados de predicción **BTC up/down de 5 minuto
 
 ## Cómo funciona
 
-Polymarket ofrece mercados de predicción binarios de 5 minutos sobre el precio de Bitcoin. Cada ventana tiene dos tokens:
+Polymarket ofrece mercados de predicción binarios de 5 minutos sobre el precio de Bitcoin, Ethereum y Solana. Cada ventana tiene dos tokens:
 
-- **UP** — paga $1 si BTC sube durante la ventana.
-- **DOWN** — paga $1 si BTC baja durante la ventana.
+- **UP** — paga $1 si el activo sube durante la ventana.
+- **DOWN** — paga $1 si el activo baja durante la ventana.
 
-El precio de cada token oscila entre $0 y $1 y refleja la probabilidad implícita del mercado. El bot monitorea estos precios en tiempo real a través del WebSocket de Polymarket y ejecuta órdenes cuando se cumplen condiciones específicas.
+El precio de cada token oscila entre $0 y $1 y refleja la probabilidad implícita del mercado. El bot monitorea estos precios en tiempo real a través del **WebSocket CLOBv2** de Polymarket y ejecuta órdenes cuando se cumplen condiciones específicas.
+
+El bot lanza **tres traders en paralelo**, uno por cada mercado (BTC, SOL, ETH), cada uno con su propio feed de precios WebSocket, hilo de estrategia y estado aislado. La configuración es global y se aplica a los tres simultáneamente.
 
 ---
 
 ## Estrategias de trading
 
-El bot soporta dos estrategias que pueden activarse de forma independiente o simultánea desde el dashboard.
+El bot soporta tres estrategias. Trigger y Market Making pueden activarse de forma independiente o simultánea. Early Entry es un flag adicional que puede activarse sobre cualquier otra estrategia.
 
 ---
 
@@ -48,26 +56,26 @@ Al inicio de cada ventana, resuelve los token IDs de UP y DOWN para el slug actu
 El bot permanece inactivo hasta que queda `LAST_MINUTE_SECONDS` (por defecto 60 s) para que termine la ventana. Operar cerca del cierre reduce la exposición temporal.
 
 #### 3. Verificar precio de entrada
-Al entrar al último minuto, si algún token ya cotiza por encima del `TRIGGER_PRICE`, la oportunidad se descarta (`SKIP`). Solo se opera cuando el precio **cruza el trigger desde abajo**.
+Al entrar al último minuto, si **ambos** lados tienen precio disponible Y al menos uno ya cotiza por encima del `TRIGGER_PRICE`, la oportunidad se descarta (`SKIP`). Si solo hay datos de un lado (baja liquidez), el bot continúa para no perder ventanas legítimas.
 
 #### 4. Ventana de entrada (primeros 45 s del último minuto)
 Las nuevas posiciones solo se abren durante los **primeros 45 segundos** del último minuto. Pasado ese punto se cierra la ventana de entrada y el bot ya no abre operaciones nuevas en esa ventana.
 
 #### 5. Disparo de orden
 Cuando `precio >= TRIGGER_PRICE` para UP o DOWN dentro del período de entrada:
-- Se compra al **precio de mercado observado** (no al trigger, que es solo señal).
+- Se compra al **precio de mercado observado** (no al trigger, que es solo señal de entrada).
 - El monto invertido es `BUY_AMOUNT` USDC.
 - Máximo `MAX_TRADES_PER_WINDOW` operaciones iniciales por ventana.
 
 #### 6. Cobertura (hedge)
 Mientras se mantiene la posición, si el precio del lado comprado sube hasta `HEDGE_THRESHOLD` (por defecto 0.96), se compra el lado contrario con la misma cantidad de shares, bloqueando ganancia en cualquier resultado.
 
-#### 7. Cobertura de emergencia (últimos 10 s)
-Si al llegar a los últimos 10 segundos la posición sigue abierta y **no se colocó hedge**, el bot compra el lado contrario con la **misma cantidad de shares** que la posición inicial. Esto garantiza exposición en ambos lados antes del settlement, reemplazando la antigua lógica de venta de emergencia.
+#### 7. Semi-cobertura de emergencia (últimos 10 s → se ejecuta a los 5 s)
+Si al llegar a los últimos **10 segundos** la posición sigue abierta y no se colocó hedge, el bot espera hasta que queden **5 segundos** y entonces compra el **50% de los shares iniciales** en el lado contrario. Esto mitiga la pérdida máxima sin comprometer el 100% del capital de cobertura.
 
 #### 8. Settlement
 Al cierre de la ventana, las posiciones abiertas se resuelven según el precio final:
-- Si el lado comprado gana (`precio ≥ 0.99`), paga $1 por share → ganancia.
+- Si el lado comprado gana (`precio ≥ 0.99`), paya $1 por share → ganancia.
 - Si pierde (`precio ≤ 0.05`), el token vale $0 → pérdida del costo.
 
 ---
@@ -79,7 +87,7 @@ Se activa en los últimos `MM_LAST_SECONDS` segundos de cada ventana y compra **
 #### Lógica
 1. El bot espera hasta que el reloj de la ventana llega a `MM_LAST_SECONDS` antes del cierre.
 2. Lee el precio de UP y DOWN **en tiempo real** justo antes de colocar cada orden.
-3. Si el precio de un lado supera `MM_MAX_PRICE`, ese lado se omite (condición de rechazo, no techo de precio).
+3. Si el precio de un lado supera `MM_MAX_PRICE`, ese lado se omite.
 4. Si el precio es aceptable, compra exactamente `MM_SHARES` shares en ese lado.
 5. Al settlement, el lado ganador paga $1/share y el perdedor vale $0.
 
@@ -87,16 +95,61 @@ Se activa en los últimos `MM_LAST_SECONDS` segundos de cada ventana y compra **
 
 | Parámetro | Por defecto | Descripción |
 |---|---|---|
-| `MM_SHARES` | `20` | Shares a comprar por cada lado (UP y DOWN) |
-| `MM_LAST_SECONDS` | `30` | Segundos antes del cierre en que se activa el MM |
-| `MM_MAX_PRICE` | `0.95` | Precio máximo de entrada; si el precio actual lo supera se omite ese lado |
+| `MM_SHARES` | `20` | Shares a comprar por cada lado |
+| `MM_LAST_SECONDS` | `30` | Segundos antes del cierre en que se activa |
+| `MM_MAX_PRICE` | `0.95` | Precio máximo de entrada; si se supera se omite ese lado |
 
-#### Selección de estrategia
+---
 
-Desde el dashboard puedes elegir:
+### 🎯 Estrategia Early Entry
+
+Estrategia de entrada temprana con cobertura condicional. Se activa mediante un toggle independiente desde la página de Configuración.
+
+#### Lógica
+1. A los **40 segundos del inicio** de cada ventana, identifica el **lado dominante** (el que tiene precio más alto en ese momento).
+2. Abre una posición con el **25% de los shares configurados** en `MM_SHARES`.
+3. Inicia un monitor continuo hasta el cierre de la ventana que comprueba dos condiciones en cada tick (cada 250ms):
+   - **Take-profit (+3%)**: si el precio del lado comprado sube ≥ 3% desde el precio de entrada → se vende la posición automáticamente con ganancia. Una vez ejecutado el TP, **no se abre cobertura**.
+   - **Cobertura condicional**: si la posición sigue abierta (no se activó TP) Y la suma `UP + DOWN ≤ 0.97` → se abre una posición en el lado contrario con la **misma cantidad de shares**. La condición `UP + DOWN ≤ 0.97` indica una oportunidad de mercado donde cubrir ambos lados es favorable.
+
+#### Parámetros
+
+| Campo | Valor | Descripción |
+|---|---|---|
+| Shares de entrada | 25% de `MM_SHARES` | Compra fraccional para entrada temprana |
+| Take-profit | +3% desde entrada | Venta automática al alcanzar ganancia del 3% |
+| Cobertura | UP + DOWN ≤ 0.97 | Condición de precio para abrir el lado contrario |
+| Shares de cobertura | Igual que la entrada | Cobertura simétrica 1:1 |
+
+---
+
+### Selección de estrategia
+
+Desde la página de Configuración puedes elegir:
 - **⚡ Trigger** — solo estrategia trigger.
 - **🏦 Market Making** — solo estrategia market making.
 - **⚡+🏦 Ambas** — ambas estrategias corren en paralelo en cada ventana.
+- **🎯 Early Entry** — toggle independiente que puede activarse sobre cualquiera de las anteriores.
+
+---
+
+## Control por mercado
+
+Cada mercado (BTC, SOL, ETH) puede **activarse o desactivarse individualmente** desde el panel de mercados del dashboard mediante los botones "⏸ Desactivar" / "▶ Activar". Un mercado desactivado no abre nuevas ventanas de trading hasta volver a activarse.
+
+---
+
+## Métricas por estrategia
+
+El dashboard muestra en tiempo real métricas separadas para cada estrategia activa:
+
+| Métrica | Descripción |
+|---|---|
+| Trades | Operaciones totales ejecutadas |
+| V / D | Victorias y derrotas |
+| Win Rate | Porcentaje de operaciones ganadoras |
+| P&L | Beneficio/pérdida neto resuelto |
+| ROI | Retorno sobre el capital invertido |
 
 ---
 
@@ -107,24 +160,25 @@ polymarket-bot/
 │
 ├── bot/
 │   ├── __init__.py
-│   ├── main.py          # Punto de entrada: lanza trader + dashboard
-│   ├── config.py        # Configuración desde variables de entorno
-│   ├── state.py         # Estado compartido thread-safe (BotState)
-│   ├── logger.py        # Logger con buffer circular y emojis
-│   ├── market.py        # Carga mercado activo desde Gamma API
-│   ├── price_feed.py    # WebSocket con reconexión automática
-│   ├── trader.py        # Loop principal: trigger → compra → hedge → cobertura
-│   ├── strategy_mm.py   # Estrategia Market Making (ambos lados al cierre)
-│   ├── dashboard.py     # Servidor Flask (UI + API /state)
+│   ├── main.py           # Punto de entrada: lanza traders (BTC/ETH/SOL) + dashboard
+│   ├── config.py         # Configuración desde variables de entorno
+│   ├── state.py          # Estado compartido thread-safe por mercado (BotState × 3)
+│   ├── logger.py         # Logger con buffer circular y niveles de color
+│   ├── market.py         # Carga mercado activo desde Gamma API
+│   ├── price_feed.py     # WebSocket CLOBv2 (book + last_trade_price + user)
+│   ├── trader.py         # Loop principal: trigger → early-entry → hedge → settlement
+│   ├── strategy_mm.py    # Estrategia Market Making (ambos lados al cierre)
+│   ├── dashboard.py      # Servidor Flask: UI + /state + /config + /toggle-market
 │   ├── templates/
-│   │   └── dashboard.html
+│   │   ├── dashboard.html   # Dashboard principal multi-mercado
+│   │   └── settings.html    # Configuración global del bot
 │   └── static/
 │       ├── dashboard.css
 │       └── dashboard.js
 │
-├── run.py               # Entrada: python run.py
+├── run.py                # Entrada: python run.py
 ├── requirements.txt
-├── .env.example         # Plantilla de variables de entorno
+├── .env.example          # Plantilla de variables de entorno
 └── README.md
 ```
 
@@ -133,7 +187,6 @@ polymarket-bot/
 ## Requisitos
 
 - Python 3.11+
-- pip
 
 Dependencias principales (ver `requirements.txt`):
 
@@ -202,7 +255,7 @@ El dashboard queda disponible en `http://localhost:5000`.
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `TRIGGER_PRICE` | `0.90` | Precio mínimo de un token para abrir posición (0.01–0.99) |
+| `TRIGGER_PRICE` | `0.90` | Precio de cruce para abrir posición (0.01–0.99) |
 | `BUY_AMOUNT` | `5.0` | USDC a invertir por operación |
 | `MAX_TRADES_PER_WINDOW` | `1` | Máximo de posiciones iniciales por ventana (1–10) |
 | `HEDGE_THRESHOLD` | `0.96` | Precio al que se activa la cobertura del lado contrario (0.50–0.99) |
@@ -212,7 +265,7 @@ El dashboard queda disponible en `http://localhost:5000`.
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `MM_SHARES` | `20` | Shares a comprar por cada lado en la estrategia MM (1–100000) |
+| `MM_SHARES` | `20` | Shares a comprar por cada lado en la estrategia MM y Early Entry |
 | `MM_LAST_SECONDS` | `30` | Segundos antes del cierre en que se activa el MM (5–120) |
 | `MM_MAX_PRICE` | `0.95` | Precio máximo de entrada MM; si se supera se omite ese lado (0.50–0.99) |
 
@@ -226,10 +279,41 @@ El dashboard queda disponible en `http://localhost:5000`.
 | `SIGNATURE_TYPE` | `2` | Tipo de firma Polymarket (2 = proxy wallet) |
 | `CLOB_HOST` | `https://clob.polymarket.com` | Endpoint REST del CLOB |
 | `GAMMA_HOST` | `https://gamma-api.polymarket.com` | Endpoint de la Gamma API |
-| `CLOB_WS_URL` | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | WebSocket de precios |
+| `CLOB_WS_URL` | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | WebSocket CLOBv2 de mercado |
 | `POLL_INTERVAL_MS` | `50` | Intervalo de polling del loop de trading (ms) |
 | `MARKET_RETRY_SECONDS` | `3` | Segundos entre reintentos al cargar el mercado |
 | `FIRST_PRICE_TIMEOUT` | `5` | Segundos de espera para recibir el primer precio |
+
+---
+
+## WebSocket CLOBv2
+
+El bot utiliza el **WebSocket CLOBv2** de Polymarket con suscripción al canal de mercado:
+
+```
+wss://ws-subscriptions-clob.polymarket.com/ws/market
+```
+
+Mensaje de suscripción:
+```json
+{
+  "auth": null,
+  "markets": [],
+  "assets_ids": ["<up_token_id>", "<down_token_id>"],
+  "type": "market"
+}
+```
+
+Tipos de evento manejados:
+
+| Evento | Descripción |
+|---|---|
+| `book` | Snapshot completo del libro de órdenes; calcula mid = (best_bid + best_ask) / 2 |
+| `last_trade_price` | Precio del último trade ejecutado; señal de precio más actualizada |
+| `price_change` | Actualización incremental del libro; recalcula mid desde best_bid / best_ask |
+| `best_bid_ask` | Snapshot directo de mejor compra/venta |
+
+El bot mantiene una caché de bid/ask por token y emite el precio mid cada vez que recibe cualquier evento. Auto-reconecta cada 3 segundos ante desconexiones.
 
 ---
 
@@ -241,7 +325,7 @@ Por defecto. No se envía ninguna orden real a Polymarket. Las compras se simula
 ### Real
 Requiere `PRIVATE_KEY` y `PROXY_WALLET`. Las órdenes se envían al CLOB de Polymarket como órdenes GTC (Good-Till-Cancelled). Usa fondos reales de tu wallet de Polygon.
 
-Puedes cambiar entre modos desde el dashboard en tiempo real sin reiniciar el bot.
+Puedes cambiar entre modos desde la página de Configuración en tiempo real sin reiniciar el bot.
 
 ---
 
@@ -249,22 +333,38 @@ Puedes cambiar entre modos desde el dashboard en tiempo real sin reiniciar el bo
 
 Disponible en `http://localhost:5000` (o el puerto configurado).
 
+### Página principal (`/`)
+
 | Sección | Descripción |
 |---|---|
-| **Header** | Precio BTC en tiempo real, modo actual, estado del bot, estado WebSocket |
-| **KPIs** | Bankroll, P&L resuelto, Win Rate, conteo de trades, ventanas operadas |
-| **Configuración** | Selector de estrategia (Trigger / Market Making / Ambas) + parámetros de cada una |
-| **Gráfico** | Precio UP/DOWN en tiempo real con canvas |
-| **Historial** | Tabla de operaciones con estado, precio, shares, P&L y etiqueta de estrategia (TRG/MM) |
-| **Log** | Registro de eventos del bot con niveles y timestamps |
+| **Header** | Precio spot BTC/ETH/SOL en tiempo real, modo actual, estado WebSocket por mercado |
+| **KPIs globales** | Bankroll total, P&L resuelto, win rate, operaciones totales, tiempo activo |
+| **Métricas por estrategia** | Tabla de Trigger / Market Making / Early Entry con trades, V/D, win rate, P&L y ROI |
+| **Paneles de mercado** | BTC, SOL y ETH con precio UP/DOWN en tiempo real, estado del bot y botón activar/desactivar |
+| **Tabla de operaciones** | Todas las operaciones de todos los mercados con columna de estrategia (TRG/MM/EE) |
+| **Log de actividad** | Registro de eventos del bot con niveles, timestamps y etiqueta de mercado |
+
+### Página de configuración (`/settings`)
+
+| Sección | Descripción |
+|---|---|
+| **Estrategia activa** | Selector Trigger / Market Making / Ambas |
+| **Trigger** | Precio trigger, monto por trade, trades por ventana, hedge threshold, segundos de entrada |
+| **Semi-cobertura final** | Informativo: se ejecuta automáticamente a los 5s restantes cuando no hay hedge |
+| **Market Making** | Shares por lado, segundos antes del cierre, precio máximo de entrada |
+| **Early Entry (Kelly)** | Toggle de activación, preview de shares calculados |
+| **General** | Bankroll inicial, selector de modo paper/real |
+| **Estado para modo Real** | Checklist de readiness con pasos pendientes para activar el modo real |
 
 ### Endpoints API
 
 | Ruta | Método | Descripción |
 |---|---|---|
-| `/` | GET | Dashboard HTML |
-| `/state` | GET | Snapshot JSON completo del estado del bot |
+| `/` | GET | Dashboard HTML principal |
+| `/settings` | GET | Página de configuración |
+| `/state` | GET | Snapshot JSON completo del estado de todos los mercados |
 | `/config` | POST | Actualizar configuración en tiempo real |
+| `/toggle-market/<sym>` | POST | Activar / desactivar un mercado (btc, eth, sol) |
 | `/healthz` | GET | Health check (`{"ok": true}`) |
 
 ---
@@ -273,8 +373,8 @@ Disponible en `http://localhost:5000` (o el puerto configurado).
 
 1. Crear una cuenta en [Polymarket](https://polymarket.com) y depositar USDC en Polygon.
 2. Obtener tu `PRIVATE_KEY` de la wallet de Polygon que usas en Polymarket.
-3. Obtener la dirección del `PROXY_WALLET` de Polymarket (visible en la URL de tu perfil o en las herramientas de desarrollador).
-4. Configurar las variables de entorno:
+3. Obtener la dirección del `PROXY_WALLET` de Polymarket.
+4. Configurar las variables de entorno en Replit **Tools → Secrets**:
    ```
    TRADING_MODE=real
    PRIVATE_KEY=0x...
@@ -290,5 +390,5 @@ Disponible en `http://localhost:5000` (o el puerto configurado).
 - **Los mercados de predicción son instrumentos especulativos de alto riesgo.** Puedes perder la totalidad del capital invertido.
 - El modo paper no garantiza los mismos resultados en modo real (slippage, liquidez, latencia).
 - Nunca compartas ni subas a un repositorio público tu `PRIVATE_KEY`.
-- Empieza siempre con montos pequeños (`BUY_AMOUNT`, `MM_SHARES`) para validar el comportamiento en producción.
+- Empieza siempre con montos pequeños para validar el comportamiento en producción.
 - Este software se provee tal cual, sin garantía de ningún tipo.

@@ -138,8 +138,8 @@ class Trader:
         try:
             self._wait_for_first_prices(timeout_s=self.cfg.first_price_timeout_seconds)
 
-            trigger_active = self.state.active_strategy in ("trigger", "both")
-            mm_active = self.state.active_strategy in ("market_making", "both")
+            trigger_active     = self.state.active_strategy in ("trigger", "both")
+            mm_active          = self.state.active_strategy in ("market_making", "both")
             early_entry_active = self.state.early_entry_enabled
 
             # --- Early-entry strategy thread (fires at window_ts + 40s) ---
@@ -170,14 +170,20 @@ class Trader:
                 # Phase 1 — wait until last-minute entry point
                 self._wait_for_last_minute(tokens)
 
-                # Phase 2 — check if price already above trigger at entry
-                up_at_entry = self.state.last_up_price
+                # Phase 2 — check if price already above trigger at entry.
+                # Only skip when we have received prices for BOTH sides and at
+                # least one of them is already above the trigger.  If prices for
+                # one side are still missing (illiquid / feed lag), proceed to
+                # the watch loop so we don't silently drop the whole window.
+                up_at_entry   = self.state.last_up_price
                 down_at_entry = self.state.last_down_price
-                trigger = self.state.trigger_price
-                already_above = (
-                    (up_at_entry is not None and up_at_entry >= trigger) or
-                    (down_at_entry is not None and down_at_entry >= trigger)
+                trigger       = self.state.trigger_price
+
+                have_both    = up_at_entry is not None and down_at_entry is not None
+                already_above = have_both and (
+                    up_at_entry >= trigger or down_at_entry >= trigger
                 )
+
                 if already_above:
                     logger.warn(
                         f"[{sym}] SKIP — price already above trigger at last-minute entry  "

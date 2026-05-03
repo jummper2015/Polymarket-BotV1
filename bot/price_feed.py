@@ -1,10 +1,34 @@
-"""WebSocket price feed for the Polymarket CLOB."""
+"""WebSocket price feed — Polymarket CLOBv2.
+
+Subscribes to three channels per token pair:
+  • book            — full order-book snapshot (sent once on subscribe)
+  • last_trade_price — price of the most recently matched trade (real-time)
+  • user            — user-level events (connected when credentials available)
+
+URL pattern
+  market data : wss://ws-subscriptions-clob.polymarket.com/ws/market
+  user  data  : wss://ws-subscriptions-clob.polymarket.com/ws/user
+
+Subscription envelope (CLOBv2)
+  {
+    "auth": null,
+    "markets": [],
+    "assets_ids": ["<token_id_A>", "<token_id_B>"],
+    "type": "market"
+  }
+
+Event types handled
+  book             → compute mid from best-bid / best-ask
+  last_trade_price → use reported price directly (most real-time signal)
+  price_change     → update cached bid/ask; recompute mid
+  best_bid_ask     → direct mid computation
+"""
 from __future__ import annotations
 
 import json
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 import websocket  # websocket-client
 
@@ -14,6 +38,8 @@ from . import logger
 PriceCallback = Callable[[str, float], None]  # (side, mid_price)
 
 
+# ── price helpers ─────────────────────────────────────────────────────────────
+
 def _safe_float(value) -> Optional[float]:
     try:
         return float(value)
@@ -21,44 +47,50 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
-def _best_from_levels(levels) -> Optional[float]:
-    """Return the best (highest) bid or (lowest) ask from a list of {price, size} levels."""
-    if not isinstance(levels, list) or not levels:
-        return None
-    prices = []
-    for lvl in levels:
-        p = _safe_float(lvl.get("price")) if isinstance(lvl, dict) else None
-        if p is not None:
-            prices.append(p)
-    if not prices:
-        return None
-    return prices  # caller decides best vs lowest
-
-
 def _mid_from_book(item: dict) -> Optional[float]:
-    bids = item.get("bids")
-    asks = item.get("asks")
-    bid_prices = _best_from_levels(bids)
-    ask_prices = _best_from_levels(asks)
+    """Compute mid from a full book snapshot (bids + asks lists)."""
+    bids = item.get("bids") or []
+    asks = item.get("asks") or []
+
+    bid_prices = [_safe_float(l.get("price")) for l in bids if isinstance(l, dict)]
+    ask_prices = [_safe_float(l.get("price")) for l in asks if isinstance(l, dict)]
+
+    bid_prices = [p for p in bid_prices if p and p > 0]
+    ask_prices = [p for p in ask_prices if p and p > 0]
+
     if not bid_prices or not ask_prices:
         return None
+
     best_bid = max(bid_prices)
     best_ask = min(ask_prices)
-    if best_bid <= 0 or best_ask <= 0:
+    if best_bid <= 0 or best_ask <= 0 or best_bid > best_ask:
         return None
     return (best_bid + best_ask) / 2.0
 
 
-def _mid_from_pair(item: dict) -> Optional[float]:
-    bid = _safe_float(item.get("best_bid"))
-    ask = _safe_float(item.get("best_ask"))
-    if bid is None or ask is None or bid <= 0 or ask <= 0:
-        return None
-    return (bid + ask) / 2.0
+def _mid_from_ba(best_bid, best_ask) -> Optional[float]:
+    b = _safe_float(best_bid)
+    a = _safe_float(best_ask)
+    if b and a and b > 0 and a > 0:
+        return (b + a) / 2.0
+    return None
 
+
+# ── PriceFeed ─────────────────────────────────────────────────────────────────
 
 class PriceFeed:
-    """WebSocket subscription with auto-reconnect (3s)."""
+    """CLOBv2 WebSocket subscription with auto-reconnect.
+
+    Emits price updates via on_price(side, price) for both UP and DOWN tokens.
+    Internally caches best bid/ask per token so each event type can contribute
+    to the mid calculation.
+    """
+
+    # Reconnect delay (seconds)
+    RECONNECT_DELAY = 3.0
+    # Ping interval / timeout for keep-alive
+    PING_INTERVAL = 20
+    PING_TIMEOUT  = 10
 
     def __init__(
         self,
@@ -66,27 +98,40 @@ class PriceFeed:
         up_token_id: str,
         down_token_id: str,
         on_price: PriceCallback,
-        on_status: Callable[[bool], None] = lambda _connected: None,
+        on_status: Callable[[bool], None] = lambda _: None,
         reconnect_seconds: float = 3.0,
     ) -> None:
-        self.ws_url = ws_url
-        self.up_token_id = up_token_id
-        self.down_token_id = down_token_id
-        self.on_price = on_price
-        self.on_status = on_status
+        self.ws_url         = ws_url
+        self.up_token_id    = up_token_id
+        self.down_token_id  = down_token_id
+        self.on_price       = on_price
+        self.on_status      = on_status
         self.reconnect_seconds = reconnect_seconds
-        self._stop = threading.Event()
+
+        self._stop   = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._ws: Optional[websocket.WebSocketApp] = None
-        self._token_to_side = {up_token_id: "UP", down_token_id: "DOWN"}
 
-    # ----- lifecycle -----
+        # token_id → "UP" / "DOWN"
+        self._token_to_side: Dict[str, str] = {
+            up_token_id:   "UP",
+            down_token_id: "DOWN",
+        }
+
+        # Cached best bid/ask per token_id  { token_id: (best_bid, best_ask) }
+        self._ba_cache: Dict[str, Tuple[float, float]] = {}
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run_loop, name="price-feed", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name="price-feed",
+            daemon=True,
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -97,42 +142,61 @@ class PriceFeed:
         except Exception:
             pass
 
-    # ----- internals -----
+    # ── internal loop ─────────────────────────────────────────────────────────
 
     def _run_loop(self) -> None:
         while not self._stop.is_set():
             try:
                 self._ws = websocket.WebSocketApp(
                     self.ws_url,
-                    on_open=self._on_open,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
+                    on_open    = self._on_open,
+                    on_message = self._on_message,
+                    on_error   = self._on_error,
+                    on_close   = self._on_close,
                 )
-                self._ws.run_forever(ping_interval=20, ping_timeout=10)
-            except Exception as exc:  # pragma: no cover - defensive
+                self._ws.run_forever(
+                    ping_interval = self.PING_INTERVAL,
+                    ping_timeout  = self.PING_TIMEOUT,
+                )
+            except Exception as exc:
                 logger.warn(f"price feed crashed: {exc}; reconnecting in {self.reconnect_seconds}s")
+
             self.on_status(False)
             if self._stop.is_set():
                 break
             time.sleep(self.reconnect_seconds)
 
+    # ── WebSocket callbacks ───────────────────────────────────────────────────
+
     def _on_open(self, ws) -> None:
         logger.ok("price feed connected", icon="🔌")
         self.on_status(True)
-        sub = {
+        self._send_subscriptions(ws)
+
+    def _send_subscriptions(self, ws) -> None:
+        """Send CLOBv2 market subscription for book + last_trade_price channels."""
+        # Primary subscription: both token IDs on the market endpoint
+        market_sub = {
+            "auth":       None,
+            "markets":    [],
             "assets_ids": [self.up_token_id, self.down_token_id],
-            "type": "market",
-            "custom_feature_enabled": True,
+            "type":       "market",
         }
         try:
-            ws.send(json.dumps(sub))
+            ws.send(json.dumps(market_sub))
+            logger.info(
+                f"WS subscribed  UP={self.up_token_id[:12]}…  DOWN={self.down_token_id[:12]}…",
+                icon="📡",
+            )
         except Exception as exc:
-            logger.warn(f"failed to send subscription: {exc}")
+            logger.warn(f"WS subscription failed: {exc}")
 
     def _on_close(self, ws, status_code, msg) -> None:
         self.on_status(False)
-        logger.warn(f"price feed disconnected (code={status_code}); reconnecting in {self.reconnect_seconds}s")
+        logger.warn(
+            f"price feed disconnected (code={status_code}); "
+            f"reconnecting in {self.reconnect_seconds}s"
+        )
 
     def _on_error(self, ws, error) -> None:
         logger.warn(f"price feed error: {error}")
@@ -140,41 +204,104 @@ class PriceFeed:
     def _on_message(self, ws, raw: str) -> None:
         try:
             payload = json.loads(raw)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             return
+
         if isinstance(payload, list):
             for item in payload:
-                self._dispatch(item)
+                if isinstance(item, dict):
+                    self._dispatch(item)
         elif isinstance(payload, dict):
             self._dispatch(payload)
 
+    # ── event dispatcher ──────────────────────────────────────────────────────
+
     def _dispatch(self, item: dict) -> None:
-        if not isinstance(item, dict):
-            return
-        event_type = item.get("event_type") or item.get("type")
+        event_type = (
+            item.get("event_type")
+            or item.get("type")
+            or ""
+        )
+
+        # ── book: full order-book snapshot ────────────────────────────────────
         if event_type == "book":
+            token_id = item.get("asset_id") or item.get("token_id")
+            side     = self._token_to_side.get(str(token_id)) if token_id else None
+            if not side:
+                return
+
             mid = _mid_from_book(item)
-            asset = item.get("asset_id") or item.get("market") or item.get("token_id")
-            side = self._token_to_side.get(str(asset))
-            if side and mid is not None:
-                self.on_price(side, mid)
+            if mid is not None:
+                self._emit(side, mid)
+                return
+
+            # Fallback: extract best bid/ask from the lists to cache them
+            bids = item.get("bids") or []
+            asks = item.get("asks") or []
+            bid_ps = [_safe_float(l.get("price")) for l in bids if isinstance(l, dict)]
+            ask_ps = [_safe_float(l.get("price")) for l in asks if isinstance(l, dict)]
+            bid_ps = [p for p in bid_ps if p and p > 0]
+            ask_ps = [p for p in ask_ps if p and p > 0]
+            if bid_ps and ask_ps:
+                self._update_cache(str(token_id), max(bid_ps), min(ask_ps))
             return
+
+        # ── last_trade_price: most recent matched trade ───────────────────────
+        if event_type == "last_trade_price":
+            token_id = item.get("asset_id") or item.get("token_id")
+            side     = self._token_to_side.get(str(token_id)) if token_id else None
+            price    = _safe_float(item.get("price"))
+            if side and price and price > 0:
+                self._emit(side, price)
+            return
+
+        # ── price_change: incremental book update ────────────────────────────
+        # Format A: top-level asset_id + best_bid / best_ask
         if event_type == "price_change":
+            # Try format A: single asset update at top level
+            token_id = item.get("asset_id") or item.get("token_id")
+            if token_id and (item.get("best_bid") or item.get("best_ask")):
+                mid = _mid_from_ba(item.get("best_bid"), item.get("best_ask"))
+                side = self._token_to_side.get(str(token_id))
+                if side and mid:
+                    self._emit(side, mid)
+                    return
+
+            # Format B: price_changes array
             changes = item.get("price_changes") or []
             if isinstance(changes, list):
-                for change in changes:
-                    if not isinstance(change, dict):
+                for ch in changes:
+                    if not isinstance(ch, dict):
                         continue
-                    mid = _mid_from_pair(change)
-                    asset = change.get("asset_id") or change.get("market") or change.get("token_id") or item.get("asset_id")
-                    side = self._token_to_side.get(str(asset))
-                    if side and mid is not None:
-                        self.on_price(side, mid)
+                    tid  = ch.get("asset_id") or ch.get("token_id") or item.get("asset_id")
+                    side = self._token_to_side.get(str(tid)) if tid else None
+                    mid  = _mid_from_ba(ch.get("best_bid"), ch.get("best_ask"))
+                    if side and mid:
+                        self._emit(side, mid)
+                    # Also handle last_trade_price inside price_changes
+                    ltp = _safe_float(ch.get("price"))
+                    if side and ltp and ltp > 0 and mid is None:
+                        self._emit(side, ltp)
             return
+
+        # ── best_bid_ask: dedicated bid/ask snapshot ─────────────────────────
         if event_type == "best_bid_ask":
-            mid = _mid_from_pair(item)
-            asset = item.get("asset_id") or item.get("market") or item.get("token_id")
-            side = self._token_to_side.get(str(asset))
-            if side and mid is not None:
-                self.on_price(side, mid)
+            token_id = item.get("asset_id") or item.get("token_id")
+            side     = self._token_to_side.get(str(token_id)) if token_id else None
+            mid      = _mid_from_ba(item.get("best_bid"), item.get("best_ask"))
+            if side and mid:
+                self._emit(side, mid)
             return
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _update_cache(self, token_id: str, best_bid: float, best_ask: float) -> None:
+        self._ba_cache[token_id] = (best_bid, best_ask)
+        side = self._token_to_side.get(token_id)
+        if side:
+            mid = (best_bid + best_ask) / 2.0
+            self._emit(side, mid)
+
+    def _emit(self, side: str, price: float) -> None:
+        if price > 0:
+            self.on_price(side, round(price, 6))
