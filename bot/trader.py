@@ -367,28 +367,29 @@ class Trader:
     # ----- early-entry strategy -----
 
     def _run_early_entry_strategy(self, tokens) -> None:
-        """At window_ts+40s: buy 25% of mm_shares on dominant side.
-        Then immediately open same-shares hedge on the opposite side.
-        Monitor take-profit: if dom price rises ≥3% from entry → sell the initial position.
+        """Early Entry strategy:
+        1. At window_ts+40s open ONE position (25% of mm_shares) on the dominant side.
+        2. Monitor in a single loop:
+           a. If price rises ≥3% from entry → sell (take-profit), exit — NO hedge.
+           b. If UP+DOWN sum ≤ 0.97 AND entry still open AND no hedge yet →
+              open hedge with same shares on the opposite side.
         """
-        sym = self.symbol.upper()
         window_ends = tokens.window_ts + 300
         entry_time  = float(tokens.window_ts) + 40.0
 
-        # Wait until 40s after window start
+        # ── Phase 1: wait for the 40-second mark ──────────────────────────
         while not self._stop.is_set():
             now = time.time()
             if now >= window_ends:
                 return
             if now >= entry_time:
                 break
-            wait = min(entry_time - now, 1.0)
             logger.transient(
                 f"EE  {tokens.slug}  ⏳ early-entry en {int(entry_time - now)}s"
             )
-            time.sleep(wait)
+            time.sleep(min(entry_time - now, 1.0))
 
-        # Abort if already traded early entry this window
+        # Only one EE entry per window
         if self.state.count_early_entry_trades_for_window(tokens.slug) > 0:
             return
 
@@ -398,17 +399,16 @@ class Trader:
             logger.warn(f"EE  {tokens.slug}  sin precios — omitiendo early-entry")
             return
 
-        # Dominant side = higher price (more likely to win)
+        # Dominant side = the side with the higher probability (higher price)
         if up >= down:
             dom_side, dom_token, dom_price = "UP",   tokens.up_token_id,   up
-            opp_side, opp_token, opp_price = "DOWN", tokens.down_token_id, down
+            opp_side, opp_token            = "DOWN", tokens.down_token_id
         else:
             dom_side, dom_token, dom_price = "DOWN", tokens.down_token_id, down
-            opp_side, opp_token, opp_price = "UP",   tokens.up_token_id,   up
+            opp_side, opp_token            = "UP",   tokens.up_token_id
 
-        # [1] 25% of configured mm_shares
-        mm_shares      = self.state.mm_shares
-        initial_shares = math.floor(mm_shares * 0.25 * 100) / 100.0
+        # 25% of configured mm_shares
+        initial_shares = math.floor(self.state.mm_shares * 0.25 * 100) / 100.0
         if initial_shares <= 0:
             logger.warn(f"EE  {tokens.slug}  shares demasiado pequeños — omitiendo")
             return
@@ -422,16 +422,17 @@ class Trader:
             icon="🎯",
         )
 
+        # ── Phase 2: open the entry position ─────────────────────────────
+        is_real_now = self.state.mode == "real"
         order_id: Optional[str] = None
         note = ""
-        is_real_now = self.state.mode == "real"
 
         if is_real_now and self._client is not None:
             try:
                 order_id, note = self._place_real_order(dom_token, initial_shares, exec_price)
             except Exception as exc:
                 logger.err(f"EE order failed: {exc}")
-                note = f"early-entry order failed: {exc}"
+                return
         elif is_real_now and self._client is None:
             logger.err("EE real mode: CLOB client not initialized")
             return
@@ -457,128 +458,126 @@ class Trader:
         entry_trade = self.state.add_trade(entry_trade)
         self.state.set_status("ee_traded", f"EE {dom_side} @ {exec_price:.4f}")
 
-        # [3] Hedge — same number of shares on the opposite side
-        if opp_price is None or opp_price <= 0 or opp_price >= 1.0:
-            logger.warn(f"EE  {tokens.slug}  precio opuesto no válido — sin hedge")
-        else:
-            hedge_shares = initial_shares          # same quantity, opposite side
-            hedge_price  = round(opp_price, 4)
-            hedge_cost   = round(hedge_shares * hedge_price, 4)
-
-            logger.ok(
-                f"EE HEDGE  side={opp_side}  shares={hedge_shares:.2f}  "
-                f"price={hedge_price:.4f}  cost=${hedge_cost:.4f}",
-                icon="🛡",
-            )
-
-            h_order_id: Optional[str] = None
-            h_note = ""
-            if is_real_now and self._client is not None:
-                try:
-                    h_order_id, h_note = self._place_real_order(opp_token, hedge_shares, hedge_price)
-                except Exception as exc:
-                    logger.err(f"EE hedge order failed: {exc}")
-                    h_note = f"EE hedge failed: {exc}"
-            elif is_real_now and self._client is None:
-                h_note = "real mode: client not initialized"
-            else:
-                h_note = f"paper EE hedge @ {hedge_price:.4f}"
-
-            ee_hedge = Trade(
-                id=0,
-                window_slug=tokens.slug,
-                window_ts=tokens.window_ts,
-                side=opp_side,
-                token_id=opp_token,
-                price=hedge_price,
-                shares=hedge_shares,
-                cost=hedge_cost,
-                mode=self.state.mode,
-                opened_at=time.time(),
-                order_id=h_order_id,
-                note=h_note,
-                is_hedge=True,
-                strategy="early_entry",
-            )
-            self.state.add_trade(ee_hedge)
-            self.state.set_status("ee_hedged", f"EE {dom_side}+{opp_side} mismas shares")
-
-        # [2] Take-profit monitor: sell initial position if price rises ≥3% from entry
-        self._monitor_ee_take_profit(tokens, entry_trade, exec_price, dom_side)
-
-    def _monitor_ee_take_profit(
-        self,
-        tokens,
-        entry_trade: Trade,
-        entry_price: float,
-        dom_side: str,
-    ) -> None:
-        """Watch dominant-side price; sell the EE entry if it rises ≥3% from entry_price."""
-        _TP_MIN = 0.03   # 3% minimum gain to trigger take-profit
-        _TP_MAX = 0.06   # 6% ceiling — sell immediately if we reach here
-        window_ends = tokens.window_ts + 300
-
-        sym = self.symbol.upper()
-        tp_price = round(entry_price * (1 + _TP_MIN), 4)
-
+        tp_price = round(exec_price * 1.03, 4)
         logger.info(
-            f"EE TP WATCH  {dom_side}  entry={entry_price:.4f}  "
-            f"tp_trigger={tp_price:.4f} (+{_TP_MIN:.0%})",
+            f"EE MONITOR  {dom_side}  entry={exec_price:.4f}  "
+            f"tp={tp_price:.4f} (+3%)  hedge cuando UP+DOWN≤0.97",
             icon="👁",
         )
+
+        # ── Phase 3: combined take-profit + hedge monitor ─────────────────
+        hedge_placed = False
 
         while not self._stop.is_set():
             now = time.time()
             if now >= window_ends:
                 return
 
-            # If trade already resolved (e.g. settled), stop monitoring
             current = self.state.find_trade_by_id(entry_trade.id)
             if current is None or current.status != "open":
-                return
+                return  # position resolved externally
 
-            cur_price = (
-                self.state.last_up_price   if dom_side == "UP"
-                else self.state.last_down_price
-            )
-            if cur_price is not None:
-                gain = (cur_price - entry_price) / entry_price
+            cur_up   = self.state.last_up_price
+            cur_down = self.state.last_down_price
+
+            cur_dom = cur_up if dom_side == "UP" else cur_down
+            cur_opp = cur_down if dom_side == "UP" else cur_up
+
+            if cur_dom is not None:
+                gain = (cur_dom - exec_price) / exec_price
+
                 logger.transient(
-                    f"EE TP  {dom_side}  cur={cur_price:.4f}  "
-                    f"gain={gain:+.2%}  target=+{_TP_MIN:.0%}"
+                    f"EE  {dom_side}  cur={cur_dom:.4f}  gain={gain:+.2%}  "
+                    f"tp={tp_price:.4f}  sum={((cur_up or 0)+(cur_down or 0)):.4f}  "
+                    f"hedge={'✓' if hedge_placed else '—'}"
                 )
-                if gain >= _TP_MIN:
-                    sell_price = round(cur_price, 4)
-                    pnl        = round(entry_trade.shares * sell_price - entry_trade.cost, 4)
+
+                # (a) Take-profit: sell if ≥3% gain — hedge will NOT be placed
+                if gain >= 0.03:
+                    sell_price = round(cur_dom, 4)
+                    pnl        = round(initial_shares * sell_price - cost, 4)
                     logger.ok(
-                        f"EE TAKE-PROFIT  {dom_side}  buy={entry_price:.4f}  "
+                        f"EE TAKE-PROFIT  {dom_side}  buy={exec_price:.4f}  "
                         f"sell={sell_price:.4f}  gain={gain:+.2%}  pnl=${pnl:+.4f}",
                         icon="💰",
                     )
-                    note = ""
-                    is_real_now = self.state.mode == "real"
+                    tp_note = ""
                     if is_real_now and self._client is not None:
                         try:
-                            _, note = self._place_real_sell_order(
-                                entry_trade.token_id,
-                                entry_trade.shares,
-                                sell_price,
+                            _, tp_note = self._place_real_sell_order(
+                                dom_token, initial_shares, sell_price
                             )
                         except Exception as exc:
                             logger.err(f"EE TP sell failed: {exc}")
-                            note = f"EE TP sell failed: {exc}"
-                    elif is_real_now and self._client is None:
-                        note = "real mode: client not initialized — TP sell skipped"
-                        logger.err(note)
+                            tp_note = f"EE TP sell failed: {exc}"
+                    elif is_real_now:
+                        tp_note = "real mode: client not initialized — TP sell skipped"
+                        logger.err(tp_note)
                     else:
-                        note = f"paper EE take-profit @ {sell_price:.4f}"
+                        tp_note = f"paper EE take-profit @ {sell_price:.4f}"
                     self.state.resolve_trade(
-                        entry_trade.id, "sold", sell_price, pnl, note=note
+                        entry_trade.id, "sold", sell_price, pnl, note=tp_note
                     )
                     self.state.set_status(
                         "ee_tp", f"EE TP {dom_side} +{gain:.2%} @ {sell_price:.4f}"
                     )
-                    return
+                    return  # done — no hedge after take-profit
+
+            # (b) Hedge: open opposite side when bid+ask sum ≤ 0.97
+            #     Only if entry is still open, no hedge placed yet, and opp price valid
+            if (
+                not hedge_placed
+                and cur_up is not None
+                and cur_down is not None
+                and cur_opp is not None
+                and 0 < cur_opp < 1.0
+                and cur_up + cur_down <= 0.97
+            ):
+                hedge_price = round(cur_opp, 4)
+                hedge_cost  = round(initial_shares * hedge_price, 4)
+                logger.ok(
+                    f"EE HEDGE  sum={cur_up+cur_down:.4f}≤0.97  "
+                    f"side={opp_side}  shares={initial_shares:.2f}  "
+                    f"price={hedge_price:.4f}  cost=${hedge_cost:.4f}",
+                    icon="🛡",
+                )
+                h_order_id: Optional[str] = None
+                h_note = ""
+                if is_real_now and self._client is not None:
+                    try:
+                        h_order_id, h_note = self._place_real_order(
+                            opp_token, initial_shares, hedge_price
+                        )
+                    except Exception as exc:
+                        logger.err(f"EE hedge order failed: {exc}")
+                        h_note = f"EE hedge failed: {exc}"
+                elif is_real_now:
+                    h_note = "real mode: client not initialized"
+                else:
+                    h_note = f"paper EE hedge @ {hedge_price:.4f}"
+
+                ee_hedge = Trade(
+                    id=0,
+                    window_slug=tokens.slug,
+                    window_ts=tokens.window_ts,
+                    side=opp_side,
+                    token_id=opp_token,
+                    price=hedge_price,
+                    shares=initial_shares,
+                    cost=hedge_cost,
+                    mode=self.state.mode,
+                    opened_at=time.time(),
+                    order_id=h_order_id,
+                    note=h_note,
+                    is_hedge=True,
+                    strategy="early_entry",
+                )
+                self.state.add_trade(ee_hedge)
+                self.state.set_status(
+                    "ee_hedged",
+                    f"EE {dom_side}+{opp_side} sum={cur_up+cur_down:.4f}",
+                )
+                hedge_placed = True
 
             time.sleep(0.25)
 
