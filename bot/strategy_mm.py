@@ -64,13 +64,16 @@ class MarketMakerStrategy:
         )
 
         # Read both prices atomically once before iterating sides
-        up_price, down_price = self.state.get_prices()
+        up_mid, down_mid = self.state.get_prices()
+        up_ask, down_ask = self.state.get_asks()
 
         for side, token_id in [
             ("UP",   tokens.up_token_id),
             ("DOWN", tokens.down_token_id),
         ]:
-            current_price = up_price if side == "UP" else down_price
+            current_mid  = up_mid  if side == "UP" else down_mid
+            current_ask  = up_ask  if side == "UP" else down_ask
+            current_price = current_mid  # mid used for filter/display
 
             if current_price is None:
                 logger.warn(f"MM  {tokens.slug}  {side} sin precio — omitiendo lado")
@@ -91,12 +94,13 @@ class MarketMakerStrategy:
                 )
                 continue
 
-            exec_price = round(current_price, 4)
+            # Use ask for actual execution cost; fall back to mid if unavailable
+            exec_price = round(current_ask or current_price, 4)
             shares = mm_shares
             cost = round(shares * exec_price, 4)
 
             logger.ok(
-                f"MM BUY  side={side}  exec_price={exec_price:.4f}  "
+                f"MM BUY  side={side}  mid={current_price:.4f}  ask={exec_price:.4f}  "
                 f"shares={shares:.2f}  cost=${cost:.4f}",
                 icon="🏦",
             )
