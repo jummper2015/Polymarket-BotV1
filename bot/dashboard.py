@@ -54,6 +54,7 @@ def start_btc_fetcher() -> None:
 
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
     CORS(app)
 
     @app.after_request
@@ -151,6 +152,9 @@ def create_app() -> Flask:
                 "mm_last_seconds": btc_snap["mm_last_seconds"],
                 "mm_max_price": btc_snap["mm_max_price"],
                 "early_entry_enabled": btc_snap["early_entry_enabled"],
+                "ee_shares": btc_snap["ee_shares"],
+                "ee_tp_pct": btc_snap["ee_tp_pct"],
+                "ee_entry_seconds": btc_snap["ee_entry_seconds"],
                 "starting_bankroll": btc_snap["starting_bankroll"],
             },
             "combined_stats": {
@@ -256,6 +260,30 @@ def create_app() -> Flask:
 
         if "early_entry_enabled" in data:
             updates["early_entry_enabled"] = bool(data["early_entry_enabled"])
+
+        if "ee_shares" in data:
+            try:
+                v = float(data["ee_shares"])
+                if 0.01 <= v <= 100_000:
+                    updates["ee_shares"] = v
+            except (TypeError, ValueError):
+                pass
+
+        if "ee_tp_pct" in data:
+            try:
+                v = float(data["ee_tp_pct"])
+                if 0.1 <= v <= 100.0:
+                    updates["ee_tp_pct"] = v
+            except (TypeError, ValueError):
+                pass
+
+        if "ee_entry_seconds" in data:
+            try:
+                v = int(data["ee_entry_seconds"])
+                if 5 <= v <= 270:
+                    updates["ee_entry_seconds"] = v
+            except (TypeError, ValueError):
+                pass
 
         if "mode" in data:
             v = str(data["mode"]).lower()

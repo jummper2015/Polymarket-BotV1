@@ -30,6 +30,8 @@ class MarketMakerStrategy:
 
     def run_for_window(self, tokens) -> None:
         """Block until the MM strategy for this window completes."""
+        from . import logger as _logger
+        _logger.set_context(self.state)  # route logs in this thread to the correct market
         window_ends = tokens.window_ts + 300
         mm_seconds = self.state.mm_last_seconds
         entry_time = window_ends - mm_seconds

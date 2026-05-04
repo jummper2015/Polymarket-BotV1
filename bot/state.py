@@ -43,21 +43,28 @@ class BotState:
         # --- runtime-mutable config ---
         self.mode: str = "paper"
         self.has_credentials: bool = False
+        self.starting_bankroll: float = 1000.0
+
+        # ── Trigger strategy config ───────────────────────────────────────────
         self.trigger_price: float = 0.90
         self.buy_amount: float = 5.0
-        self.starting_bankroll: float = 1000.0
         self.max_trades_per_window: int = 1
         self.hedge_threshold: float = 0.96
         self.last_minute_seconds: int = 60
 
-        # --- active strategy + market-making config ---
+        # ── active strategy selector ──────────────────────────────────────────
         self.active_strategy: str = "trigger"
+
+        # ── Market Making config ──────────────────────────────────────────────
         self.mm_shares: float = 20.0
         self.mm_last_seconds: int = 30
         self.mm_max_price: float = 0.95
 
-        # --- early entry config ---
+        # ── Early Entry config (independent from MM) ──────────────────────────
         self.early_entry_enabled: bool = False
+        self.ee_shares: float = 5.0       # shares to open on the dominant side
+        self.ee_tp_pct: float = 3.0       # take-profit threshold in % (3 = 3%)
+        self.ee_entry_seconds: int = 40   # seconds from window start to entry
 
         # --- market enabled toggle ---
         self.market_enabled: bool = True
@@ -113,10 +120,16 @@ class BotState:
 
     def update_runtime_config(self, **kwargs) -> Dict[str, object]:
         allowed = {
+            # Trigger
             "trigger_price", "buy_amount", "max_trades_per_window",
-            "mode", "hedge_threshold", "last_minute_seconds",
-            "active_strategy", "mm_shares", "mm_last_seconds", "mm_max_price",
-            "starting_bankroll", "market_enabled", "early_entry_enabled",
+            "hedge_threshold", "last_minute_seconds",
+            # General
+            "mode", "active_strategy", "starting_bankroll",
+            "market_enabled",
+            # Market Making
+            "mm_shares", "mm_last_seconds", "mm_max_price",
+            # Early Entry
+            "early_entry_enabled", "ee_shares", "ee_tp_pct", "ee_entry_seconds",
         }
         accepted: Dict[str, object] = {}
         with self._lock:
@@ -185,10 +198,21 @@ class BotState:
 
     def add_trade(self, trade: Trade) -> Trade:
         with self._lock:
+            # Increment windows_traded only for the FIRST non-hedge trade in a
+            # given window slug.  Hedges and subsequent trades in the same window
+            # must NOT increment the counter again.
+            is_first_initial = (
+                not trade.is_hedge
+                and not any(
+                    t.window_slug == trade.window_slug and not t.is_hedge
+                    for t in self.trades
+                )
+            )
             trade.id = self._next_trade_id
             self._next_trade_id += 1
             self.trades.append(trade)
-            self.windows_traded += 1
+            if is_first_initial:
+                self.windows_traded += 1
             return trade
 
     def find_open_trade_for_window(self, slug: str) -> Optional[Trade]:
@@ -341,17 +365,27 @@ class BotState:
             return {
                 "mode": self.mode,
                 "has_credentials": self.has_credentials,
+                # Trigger
                 "trigger_price": self.trigger_price,
                 "buy_amount": self.buy_amount,
                 "max_trades_per_window": self.max_trades_per_window,
                 "hedge_threshold": self.hedge_threshold,
                 "last_minute_seconds": self.last_minute_seconds,
+                # Strategy selector
                 "active_strategy": self.active_strategy,
+                # Market Making
                 "mm_shares": self.mm_shares,
                 "mm_last_seconds": self.mm_last_seconds,
                 "mm_max_price": self.mm_max_price,
+                # Early Entry
                 "early_entry_enabled": self.early_entry_enabled,
+                "ee_shares": self.ee_shares,
+                "ee_tp_pct": self.ee_tp_pct,
+                "ee_entry_seconds": self.ee_entry_seconds,
+                # General
+                "starting_bankroll": self.starting_bankroll,
                 "market_enabled": self.market_enabled,
+                # Bot status
                 "bot_status": self.bot_status,
                 "bot_message": self.bot_message,
                 "ws_connected": self.ws_connected,
@@ -366,7 +400,6 @@ class BotState:
                 "last_up_price": self.last_up_price,
                 "last_down_price": self.last_down_price,
                 "last_price_update": self.last_price_update,
-                "starting_bankroll": self.starting_bankroll,
                 "spot_price": self.spot_price,
                 "spot_price_updated_at": self.spot_price_updated_at,
                 "real_mode_readiness": self.real_mode_readiness(),
@@ -423,4 +456,4 @@ STATES = {
     "sol": BotState(),
     "eth": BotState(),
 }
-STATE = STATES["btc"]  # backward compat alias
+STATE = STATES["btc"]  # backward-compat alias (logger fallback)

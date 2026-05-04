@@ -1,11 +1,29 @@
-"""Simple stdout logger that also pushes to shared state."""
+"""Per-market logger: writes to the BotState bound to the current thread.
+
+Each trader thread (and its MM / EE sub-threads) must call
+`logger.set_context(state)` once at the top of their entry function so that
+log entries are routed to the correct market's log buffer.  Threads that never
+call set_context fall back to the global BTC state (backward-compat alias).
+"""
 from __future__ import annotations
 
 import sys
+import threading
 import time
-from typing import Optional
 
-from .state import STATE
+from .state import STATE  # fallback: BTC state (backward-compat)
+
+
+_local = threading.local()
+
+
+def set_context(state) -> None:
+    """Bind a BotState to the current thread for routing log events."""
+    _local.state = state
+
+
+def _current_state():
+    return getattr(_local, "state", STATE)
 
 
 def _stamp() -> str:
@@ -13,16 +31,15 @@ def _stamp() -> str:
 
 
 def log(level: str, icon: str, message: str, *, transient: bool = False) -> None:
-    """Print a line and (unless transient) record it in the dashboard log."""
+    """Print a line and (unless transient) record it in the per-market log."""
     line = f"{_stamp()} {icon} {message}"
     if transient:
         sys.stdout.write("\r" + line.ljust(120))
         sys.stdout.flush()
         return
-    # Move past any transient line.
     sys.stdout.write("\r" + " " * 120 + "\r")
     print(line, flush=True)
-    STATE.log_event(level, message)
+    _current_state().log_event(level, message)
 
 
 def info(message: str, icon: str = "ℹ") -> None:

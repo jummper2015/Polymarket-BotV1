@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Polymarket Bot — Configuración</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=7" />
+  <link rel="stylesheet" href="static/dashboard.css?v=8" />
 </head>
 <body>
 
@@ -25,7 +25,6 @@
 </header>
 
 <main>
-  <!-- ── Formulario de configuración ── -->
   <section class="grid config-grid">
     <div class="card wide config-card">
       <div class="card-head">
@@ -126,26 +125,47 @@
         </div>
 
         <!-- ── EARLY ENTRY ── -->
-        <div class="cfg-section-header">🎯 Early Entry (Kelly)</div>
+        <div class="cfg-section-header">🎯 Early Entry</div>
         <div class="cfg-row">
           <label class="cfg-label">
             Activar Early Entry
-            <span class="cfg-hint">A los 40s del inicio compra 25% de los shares configurados en el lado dominante y aplica Kelly (1–3%) de cobertura</span>
+            <span class="cfg-hint">Abre posición temprana en el lado dominante y monitorea TP y cobertura automática</span>
           </label>
           <label class="toggle-switch">
             <input type="checkbox" id="cfg-early-entry" />
             <span class="toggle-label" id="early-entry-label">Desactivado</span>
           </label>
         </div>
-        <div id="early-entry-info" style="display:none">
+
+        <div id="early-entry-config" style="display:none">
           <div class="cfg-row">
             <label class="cfg-label">
-              Shares de referencia
-              <span class="cfg-hint">Usa el valor de "Shares por lado" del MM como base para el 25%</span>
+              Shares de entrada
+              <span class="cfg-hint">Cantidad de shares a comprar en el lado dominante (0.01 – 100000)</span>
             </label>
-            <div style="font-size:12px;color:var(--muted);padding:8px 0;">
-              Se tomará el 25% de <strong id="ee-shares-preview">—</strong> shares = <strong id="ee-shares-calc">—</strong> shares en el lado dominante.<br/>
-              La cobertura Kelly (1–3%) se coloca inmediatamente en el lado contrario.
+            <input id="cfg-ee-shares" type="number" class="cfg-input" step="0.5" min="0.01" max="100000" placeholder="5" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Take-profit (%)
+              <span class="cfg-hint">Venta automática cuando la ganancia alcanza este % (0.1 – 100)</span>
+            </label>
+            <input id="cfg-ee-tp-pct" type="number" class="cfg-input" step="0.5" min="0.1" max="100" placeholder="3" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Segundos de entrada
+              <span class="cfg-hint">Momento de entrada desde el inicio de la ventana (5 – 270 s)</span>
+            </label>
+            <input id="cfg-ee-entry-sec" type="number" class="cfg-input" step="5" min="5" max="270" placeholder="40" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Cobertura automática
+              <span class="cfg-hint">Se abre el lado contrario cuando la condición de precio se cumple, si no se activó el TP</span>
+            </label>
+            <div style="font-size:12px;color:var(--muted);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px 12px;">
+              Automática — condición: sum(UP + DOWN) ≤ 0.97 · Shares: igual a la entrada
             </div>
           </div>
         </div>
@@ -204,7 +224,6 @@
     const showM = s === "market_making" || s === "both";
     $("trigger-config-section").style.display = showT ? "" : "none";
     $("mm-config-section").style.display      = showM ? "" : "none";
-    updateEEPreview();
   }
   $("btn-strat-trigger").addEventListener("click", () => setStrategyUI("trigger"));
   $("btn-strat-mm").addEventListener("click",      () => setStrategyUI("market_making"));
@@ -221,25 +240,15 @@
   $("btn-real").addEventListener("click",  () => setModeUI("real"));
 
   // ── early entry toggle ──
-  const eeCheck = $("cfg-early-entry");
-  const eeInfo  = $("early-entry-info");
-  const eeLabel = $("early-entry-label");
-
-  function updateEEPreview() {
-    const shares = parseFloat($("cfg-mm-shares").value) || 20;
-    const calc   = Math.floor(shares * 0.25 * 100) / 100;
-    const sp = $("ee-shares-preview"); if (sp) sp.textContent = shares;
-    const sc = $("ee-shares-calc");    if (sc) sc.textContent = calc;
-  }
+  const eeCheck  = $("cfg-early-entry");
+  const eeCfg    = $("early-entry-config");
+  const eeLabel  = $("early-entry-label");
 
   eeCheck.addEventListener("change", () => {
     const on = eeCheck.checked;
-    eeLabel.textContent = on ? "Activado" : "Desactivado";
-    eeInfo.style.display = on ? "" : "none";
-    updateEEPreview();
+    eeLabel.textContent    = on ? "Activado" : "Desactivado";
+    eeCfg.style.display    = on ? "" : "none";
   });
-
-  $("cfg-mm-shares").addEventListener("input", updateEEPreview);
 
   // ── load state ──
   async function loadState() {
@@ -248,30 +257,38 @@
       if (!resp.ok) return;
       const s = await resp.json();
       const c = s.config || {};
-      $("cfg-trigger").value    = c.trigger_price    ?? 0.90;
-      $("cfg-buy").value        = c.buy_amount        ?? 5.0;
-      $("cfg-max-trades").value = c.max_trades_per_window ?? 1;
-      $("cfg-hedge").value      = c.hedge_threshold   ?? 0.96;
-      $("cfg-lastmin").value    = c.last_minute_seconds ?? 60;
-      $("cfg-mm-shares").value    = c.mm_shares    ?? 20;
+
+      // Trigger
+      $("cfg-trigger").value    = c.trigger_price          ?? 0.90;
+      $("cfg-buy").value        = c.buy_amount              ?? 5.0;
+      $("cfg-max-trades").value = c.max_trades_per_window   ?? 1;
+      $("cfg-hedge").value      = c.hedge_threshold         ?? 0.96;
+      $("cfg-lastmin").value    = c.last_minute_seconds     ?? 60;
+
+      // Market Making
+      $("cfg-mm-shares").value    = c.mm_shares      ?? 20;
       $("cfg-mm-last-sec").value  = c.mm_last_seconds ?? 30;
-      $("cfg-mm-max-price").value = c.mm_max_price ?? 0.95;
-      $("cfg-bankroll").value     = c.starting_bankroll ?? 1000;
+      $("cfg-mm-max-price").value = c.mm_max_price    ?? 0.95;
+
+      // Early Entry
+      const ee = c.early_entry_enabled || false;
+      eeCheck.checked       = ee;
+      eeLabel.textContent   = ee ? "Activado" : "Desactivado";
+      eeCfg.style.display   = ee ? "" : "none";
+      $("cfg-ee-shares").value    = c.ee_shares       ?? 5;
+      $("cfg-ee-tp-pct").value    = c.ee_tp_pct       ?? 3;
+      $("cfg-ee-entry-sec").value = c.ee_entry_seconds ?? 40;
+
+      // General
+      $("cfg-bankroll").value = c.starting_bankroll ?? 1000;
       setModeUI(c.mode || "paper");
       setStrategyUI(c.active_strategy || "trigger");
 
-      // early entry
-      const ee = c.early_entry_enabled || false;
-      eeCheck.checked = ee;
-      eeLabel.textContent = ee ? "Activado" : "Desactivado";
-      eeInfo.style.display = ee ? "" : "none";
-      updateEEPreview();
-
       const mBadge = $("mode-badge");
       mBadge.textContent = (c.mode || "paper").toUpperCase();
-      mBadge.className = "badge " + (c.mode === "real" ? "real" : "paper");
+      mBadge.className   = "badge " + (c.mode === "real" ? "real" : "paper");
 
-      // readiness
+      // readiness checklist
       const r = s.real_mode_readiness;
       if (r) {
         $("readiness-badge").textContent = r.ready ? "✓ Listo para Real" : "✗ Pendiente";
@@ -293,26 +310,35 @@
   function showMsg(text, type) {
     const el = $("cfg-save-msg");
     el.textContent = text;
-    el.className = "cfg-msg " + type;
+    el.className   = "cfg-msg " + type;
     setTimeout(() => { el.textContent = ""; el.className = "cfg-msg"; }, 4000);
   }
 
   $("cfg-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const body = {
+      // Trigger
       trigger_price:         parseFloat($("cfg-trigger").value),
       buy_amount:            parseFloat($("cfg-buy").value),
       max_trades_per_window: parseInt($("cfg-max-trades").value, 10),
       hedge_threshold:       parseFloat($("cfg-hedge").value),
       last_minute_seconds:   parseInt($("cfg-lastmin").value, 10),
+      // Strategy selector
       active_strategy:       _selectedStrategy,
+      // Market Making
       mm_shares:             parseFloat($("cfg-mm-shares").value),
       mm_last_seconds:       parseInt($("cfg-mm-last-sec").value, 10),
       mm_max_price:          parseFloat($("cfg-mm-max-price").value),
-      starting_bankroll:     parseFloat($("cfg-bankroll").value),
+      // Early Entry
       early_entry_enabled:   eeCheck.checked,
+      ee_shares:             parseFloat($("cfg-ee-shares").value),
+      ee_tp_pct:             parseFloat($("cfg-ee-tp-pct").value),
+      ee_entry_seconds:      parseInt($("cfg-ee-entry-sec").value, 10),
+      // General
+      starting_bankroll:     parseFloat($("cfg-bankroll").value),
       mode:                  _selectedMode,
     };
+    // Strip NaN values
     Object.keys(body).forEach((k) => {
       if (typeof body[k] === "number" && isNaN(body[k])) delete body[k];
     });

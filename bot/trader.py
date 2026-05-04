@@ -85,6 +85,7 @@ class Trader:
     # ----- core loop -----
 
     def _run(self) -> None:
+        logger.set_context(self.state)  # route all logs in this thread to the correct market
         sym = self.symbol.upper()
         logger.info(
             f"[{sym}] starting bot — mode={self.state.mode} trigger={self.state.trigger_price} "
@@ -374,14 +375,15 @@ class Trader:
 
     def _run_early_entry_strategy(self, tokens) -> None:
         """Early Entry strategy:
-        1. At window_ts+40s open ONE position (25% of mm_shares) on the dominant side.
+        1. At window_ts + ee_entry_seconds open ONE position (ee_shares) on the dominant side.
         2. Monitor in a single loop:
-           a. If price rises ≥3% from entry → sell (take-profit), exit — NO hedge.
+           a. If price rises ≥ ee_tp_pct% from entry → sell (take-profit), exit — NO hedge.
            b. If UP+DOWN sum ≤ 0.97 AND entry still open AND no hedge yet →
               open hedge with same shares on the opposite side.
         """
+        logger.set_context(self.state)  # route all logs in this thread to the correct market
         window_ends = tokens.window_ts + 300
-        entry_time  = float(tokens.window_ts) + 40.0
+        entry_time  = float(tokens.window_ts) + float(self.state.ee_entry_seconds)
 
         # ── Phase 1: wait for the 40-second mark ──────────────────────────
         while not self._stop.is_set():
@@ -413,8 +415,8 @@ class Trader:
             dom_side, dom_token, dom_price = "DOWN", tokens.down_token_id, down
             opp_side, opp_token            = "UP",   tokens.up_token_id
 
-        # 25% of configured mm_shares
-        initial_shares = math.floor(self.state.mm_shares * 0.25 * 100) / 100.0
+        # Use the dedicated EE shares setting (independent from MM shares)
+        initial_shares = self.state.ee_shares
         if initial_shares <= 0:
             logger.warn(f"EE  {tokens.slug}  shares demasiado pequeños — omitiendo")
             return
@@ -464,10 +466,11 @@ class Trader:
         entry_trade = self.state.add_trade(entry_trade)
         self.state.set_status("ee_traded", f"EE {dom_side} @ {exec_price:.4f}")
 
-        tp_price = round(exec_price * 1.03, 4)
+        tp_threshold = self.state.ee_tp_pct / 100.0
+        tp_price = round(exec_price * (1.0 + tp_threshold), 4)
         logger.info(
             f"EE MONITOR  {dom_side}  entry={exec_price:.4f}  "
-            f"tp={tp_price:.4f} (+3%)  hedge cuando UP+DOWN≤0.97",
+            f"tp={tp_price:.4f} (+{self.state.ee_tp_pct:.1f}%)  hedge cuando UP+DOWN≤0.97",
             icon="👁",
         )
 
@@ -498,8 +501,8 @@ class Trader:
                     f"hedge={'✓' if hedge_placed else '—'}"
                 )
 
-                # (a) Take-profit: sell if ≥3% gain — hedge will NOT be placed
-                if gain >= 0.03:
+                # (a) Take-profit: sell if ≥ ee_tp_pct% gain — hedge will NOT be placed
+                if gain >= tp_threshold:
                     sell_price = round(cur_dom, 4)
                     pnl        = round(initial_shares * sell_price - cost, 4)
                     logger.ok(
