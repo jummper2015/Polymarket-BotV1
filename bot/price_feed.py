@@ -35,7 +35,7 @@ import websocket  # websocket-client
 from . import logger
 
 
-PriceCallback = Callable[[str, float], None]  # (side, mid_price)
+PriceCallback = Callable[[str, float, float, float], None]  # (side, bid, ask, mid)
 
 
 # ── price helpers ─────────────────────────────────────────────────────────────
@@ -235,18 +235,14 @@ class PriceFeed:
             if not side:
                 return
 
-            mid = _mid_from_book(item)
-            if mid is not None:
-                self._emit(side, mid)
-                return
-
-            # Fallback: extract best bid/ask from the lists to cache them
             bids = item.get("bids") or []
             asks = item.get("asks") or []
             best_bid = _best_from_levels(bids, max)
             best_ask = _best_from_levels(asks, min)
-            if best_bid is not None and best_ask is not None:
-                self._update_cache(str(token_id), best_bid, best_ask)
+
+            if best_bid is not None and best_ask is not None and best_bid > 0 and best_ask > 0 and best_bid <= best_ask:
+                mid = (best_bid + best_ask) / 2.0
+                self._emit(side, best_bid, best_ask, mid)
             return
 
         # ── last_trade_price: most recent matched trade ───────────────────────
@@ -255,19 +251,28 @@ class PriceFeed:
             side     = self._token_to_side.get(str(token_id)) if token_id else None
             price    = _safe_float(item.get("price"))
             if side and price and price > 0:
-                self._emit(side, price)
+                # last_trade_price has no spread info; use cached bid/ask if available,
+                # otherwise treat the trade price as both bid and ask (mid = price)
+                cached = self._ba_cache.get(str(token_id))
+                if cached:
+                    bid, ask = cached
+                    mid = (bid + ask) / 2.0
+                    self._emit(side, bid, ask, mid)
+                else:
+                    self._emit(side, price, price, price)
             return
 
         # ── price_change: incremental book update ────────────────────────────
-        # Format A: top-level asset_id + best_bid / best_ask
         if event_type == "price_change":
             # Try format A: single asset update at top level
             token_id = item.get("asset_id") or item.get("token_id")
             if token_id and (item.get("best_bid") or item.get("best_ask")):
-                mid = _mid_from_ba(item.get("best_bid"), item.get("best_ask"))
+                b = _safe_float(item.get("best_bid"))
+                a = _safe_float(item.get("best_ask"))
                 side = self._token_to_side.get(str(token_id))
-                if side and mid:
-                    self._emit(side, mid)
+                if side and b and a and b > 0 and a > 0:
+                    mid = (b + a) / 2.0
+                    self._emit(side, b, a, mid)
                     return
 
             # Format B: price_changes array
@@ -278,22 +283,22 @@ class PriceFeed:
                         continue
                     tid  = ch.get("asset_id") or ch.get("token_id") or item.get("asset_id")
                     side = self._token_to_side.get(str(tid)) if tid else None
-                    mid  = _mid_from_ba(ch.get("best_bid"), ch.get("best_ask"))
-                    if side and mid:
-                        self._emit(side, mid)
-                    # Also handle last_trade_price inside price_changes
-                    ltp = _safe_float(ch.get("price"))
-                    if side and ltp and ltp > 0 and mid is None:
-                        self._emit(side, ltp)
+                    b = _safe_float(ch.get("best_bid"))
+                    a = _safe_float(ch.get("best_ask"))
+                    if side and b and a and b > 0 and a > 0:
+                        mid = (b + a) / 2.0
+                        self._emit(side, b, a, mid)
             return
 
         # ── best_bid_ask: dedicated bid/ask snapshot ─────────────────────────
         if event_type == "best_bid_ask":
             token_id = item.get("asset_id") or item.get("token_id")
             side     = self._token_to_side.get(str(token_id)) if token_id else None
-            mid      = _mid_from_ba(item.get("best_bid"), item.get("best_ask"))
-            if side and mid:
-                self._emit(side, mid)
+            b = _safe_float(item.get("best_bid"))
+            a = _safe_float(item.get("best_ask"))
+            if side and b and a and b > 0 and a > 0:
+                mid = (b + a) / 2.0
+                self._emit(side, b, a, mid)
             return
 
     # ── helpers ───────────────────────────────────────────────────────────────
@@ -303,8 +308,14 @@ class PriceFeed:
         side = self._token_to_side.get(token_id)
         if side:
             mid = (best_bid + best_ask) / 2.0
-            self._emit(side, mid)
+            self._emit(side, best_bid, best_ask, mid)
 
-    def _emit(self, side: str, price: float) -> None:
-        if price > 0:
-            self.on_price(side, round(price, 6))
+    def _emit(self, side: str, bid: float, ask: float, mid: float) -> None:
+        """Emit a price update with bid, ask, and mid separated.
+
+        - bid: best bid (used for sell-side reference)
+        - ask: best ask (actual execution price when buying)
+        - mid: (bid+ask)/2 used only for display and trigger signals
+        """
+        if mid > 0:
+            self.on_price(side, round(bid, 6), round(ask, 6), round(mid, 6))
