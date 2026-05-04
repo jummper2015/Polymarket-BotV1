@@ -77,8 +77,12 @@ class BotState:
         self.current_window_ends_at: Optional[float] = None
         self.up_token_id: Optional[str] = None
         self.down_token_id: Optional[str] = None
-        self.last_up_price: Optional[float] = None
-        self.last_down_price: Optional[float] = None
+        self.last_up_price: Optional[float] = None      # mid — used for triggers and display
+        self.last_down_price: Optional[float] = None    # mid — used for triggers and display
+        self.last_up_bid: Optional[float] = None        # best bid (sell reference)
+        self.last_up_ask: Optional[float] = None        # best ask (actual buy price)
+        self.last_down_bid: Optional[float] = None
+        self.last_down_ask: Optional[float] = None
         self.last_price_update: Optional[float] = None
         self.ws_connected: bool = False
 
@@ -162,6 +166,10 @@ class BotState:
             self.down_token_id = None
             self.last_up_price = None
             self.last_down_price = None
+            self.last_up_bid = None
+            self.last_up_ask = None
+            self.last_down_bid = None
+            self.last_down_ask = None
             self.up_price_history.clear()
             self.down_price_history.clear()
 
@@ -170,28 +178,34 @@ class BotState:
             self.up_token_id = up_token_id
             self.down_token_id = down_token_id
 
-    def update_price(self, side: str, price: float) -> None:
+    def update_price(self, side: str, bid: float, ask: float, mid: float) -> None:
         now = time.time()
         with self._lock:
             self.last_price_update = now
-            entry = {"t": now, "p": price}
+            entry = {"t": now, "p": mid, "bid": bid, "ask": ask}
             if side == "UP":
-                self.last_up_price = price
+                self.last_up_price = mid
+                self.last_up_bid   = bid
+                self.last_up_ask   = ask
                 self.up_price_history.append(entry)
             elif side == "DOWN":
-                self.last_down_price = price
+                self.last_down_price = mid
+                self.last_down_bid   = bid
+                self.last_down_ask   = ask
                 self.down_price_history.append(entry)
 
     def get_prices(self) -> Tuple[Optional[float], Optional[float]]:
-        """Return (last_up_price, last_down_price) under a single lock acquisition.
-
-        Reading both prices inside one lock ensures they always belong to the
-        same consistent snapshot — the two-statement read pattern is not atomic
-        even under Python's GIL because UP and DOWN may be updated separately
-        between the two reads.
-        """
+        """Return (last_up_price, last_down_price) mid prices under a single lock acquisition."""
         with self._lock:
             return self.last_up_price, self.last_down_price
+
+    def get_asks(self) -> Tuple[Optional[float], Optional[float]]:
+        """Return (last_up_ask, last_down_ask) under a single lock acquisition.
+
+        Use these for actual order execution cost calculations — never the mid.
+        """
+        with self._lock:
+            return self.last_up_ask, self.last_down_ask
 
     def update_spot_price(self, price: float) -> None:
         with self._lock:
