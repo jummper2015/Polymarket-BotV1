@@ -4,7 +4,28 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Polymarket Bot — Configuración</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=8" />
+  <link rel="stylesheet" href="static/dashboard.css?v=9" />
+  <style>
+    .market-tabs { display:flex; gap:6px; margin-bottom:18px; }
+    .market-tab {
+      flex:1; padding:9px 10px; border-radius:8px;
+      background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.10);
+      color:var(--muted); font-size:13px; font-weight:600; cursor:pointer;
+      transition:background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .market-tab:hover { background:rgba(255,255,255,0.09); color:var(--text); }
+    .market-tab.active {
+      background:rgba(59,130,246,0.14); border-color:rgba(59,130,246,0.45);
+      color:#60a5fa;
+    }
+    .cfg-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:14px 0 4px; }
+    .btn-apply-all {
+      background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.14);
+      color:var(--muted); font-size:13px; padding:9px 20px; border-radius:8px;
+      cursor:pointer; transition:all 0.15s;
+    }
+    .btn-apply-all:hover { background:rgba(255,255,255,0.12); color:var(--text); }
+  </style>
 </head>
 <body>
 
@@ -31,9 +52,14 @@
         <h2>⚙ Configuración de la operativa</h2>
         <span id="cfg-save-msg" class="cfg-msg"></span>
       </div>
-      <p class="muted" style="font-size:13px;margin:0 0 8px;">
-        La configuración se aplica simultáneamente a los tres mercados (BTC, SOL, ETH).
-      </p>
+
+      <!-- Market selector tabs -->
+      <div class="market-tabs">
+        <button type="button" class="market-tab active" data-sym="btc">₿ Bitcoin</button>
+        <button type="button" class="market-tab"        data-sym="sol">◎ Solana</button>
+        <button type="button" class="market-tab"        data-sym="eth">⬡ Ethereum</button>
+      </div>
+
       <form id="cfg-form" class="cfg-form" autocomplete="off">
 
         <!-- Estrategia activa -->
@@ -191,7 +217,8 @@
         </div>
 
         <div class="cfg-actions">
-          <button type="submit" class="btn-apply">Aplicar cambios a los 3 mercados</button>
+          <button type="submit"  id="btn-apply-one" class="btn-apply">Aplicar a BTC</button>
+          <button type="button" id="btn-apply-all" class="btn-apply-all">Aplicar a los 3 mercados</button>
         </div>
       </form>
     </div>
@@ -212,6 +239,20 @@
 <script>
 (function () {
   const $ = (id) => document.getElementById(id);
+
+  // ── market tab state ──
+  const MARKET_LABELS = { btc: "BTC", sol: "SOL", eth: "ETH" };
+  let currentMarket = "btc";
+
+  document.querySelectorAll(".market-tab").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".market-tab").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentMarket = btn.dataset.sym;
+      $("btn-apply-one").textContent = `Aplicar a ${MARKET_LABELS[currentMarket]}`;
+      loadState();
+    });
+  });
 
   // ── strategy selector ──
   let _selectedStrategy = "trigger";
@@ -240,23 +281,24 @@
   $("btn-real").addEventListener("click",  () => setModeUI("real"));
 
   // ── early entry toggle ──
-  const eeCheck  = $("cfg-early-entry");
-  const eeCfg    = $("early-entry-config");
-  const eeLabel  = $("early-entry-label");
-
+  const eeCheck = $("cfg-early-entry");
+  const eeCfg   = $("early-entry-config");
+  const eeLabel = $("early-entry-label");
   eeCheck.addEventListener("change", () => {
     const on = eeCheck.checked;
-    eeLabel.textContent    = on ? "Activado" : "Desactivado";
-    eeCfg.style.display    = on ? "" : "none";
+    eeLabel.textContent = on ? "Activado" : "Desactivado";
+    eeCfg.style.display = on ? "" : "none";
   });
 
   // ── load state ──
   async function loadState() {
     try {
-      const resp = await fetch("state", { cache: "no-store" });
+      const resp = await fetch("/state", { cache: "no-store" });
       if (!resp.ok) return;
       const s = await resp.json();
-      const c = s.config || {};
+
+      // Per-market config (from markets[currentMarket].config)
+      const c = (s.markets && s.markets[currentMarket] && s.markets[currentMarket].config) || s.config || {};
 
       // Trigger
       $("cfg-trigger").value    = c.trigger_price          ?? 0.90;
@@ -272,9 +314,9 @@
 
       // Early Entry
       const ee = c.early_entry_enabled || false;
-      eeCheck.checked       = ee;
-      eeLabel.textContent   = ee ? "Activado" : "Desactivado";
-      eeCfg.style.display   = ee ? "" : "none";
+      eeCheck.checked     = ee;
+      eeLabel.textContent = ee ? "Activado" : "Desactivado";
+      eeCfg.style.display = ee ? "" : "none";
       $("cfg-ee-shares").value    = c.ee_shares       ?? 5;
       $("cfg-ee-tp-pct").value    = c.ee_tp_pct       ?? 3;
       $("cfg-ee-entry-sec").value = c.ee_entry_seconds ?? 40;
@@ -306,7 +348,32 @@
   }
   loadState();
 
-  // ── form submit ──
+  // ── build payload from form ──
+  function buildPayload() {
+    const body = {
+      trigger_price:         parseFloat($("cfg-trigger").value),
+      buy_amount:            parseFloat($("cfg-buy").value),
+      max_trades_per_window: parseInt($("cfg-max-trades").value, 10),
+      hedge_threshold:       parseFloat($("cfg-hedge").value),
+      last_minute_seconds:   parseInt($("cfg-lastmin").value, 10),
+      active_strategy:       _selectedStrategy,
+      mm_shares:             parseFloat($("cfg-mm-shares").value),
+      mm_last_seconds:       parseInt($("cfg-mm-last-sec").value, 10),
+      mm_max_price:          parseFloat($("cfg-mm-max-price").value),
+      early_entry_enabled:   eeCheck.checked,
+      ee_shares:             parseFloat($("cfg-ee-shares").value),
+      ee_tp_pct:             parseFloat($("cfg-ee-tp-pct").value),
+      ee_entry_seconds:      parseInt($("cfg-ee-entry-sec").value, 10),
+      starting_bankroll:     parseFloat($("cfg-bankroll").value),
+      mode:                  _selectedMode,
+    };
+    Object.keys(body).forEach(k => {
+      if (typeof body[k] === "number" && isNaN(body[k])) delete body[k];
+    });
+    return body;
+  }
+
+  // ── shared submit helper ──
   function showMsg(text, type) {
     const el = $("cfg-save-msg");
     el.textContent = text;
@@ -314,49 +381,37 @@
     setTimeout(() => { el.textContent = ""; el.className = "cfg-msg"; }, 4000);
   }
 
+  async function postConfig(url, payload) {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    const data = await resp.json();
+    if (resp.ok && data.ok) {
+      const keys = Object.keys(data.updated || {});
+      showMsg("✓ Guardado: " + (keys.length ? keys.join(", ") : "sin cambios"), "ok");
+      loadState();
+    } else {
+      showMsg("✗ " + (data.error || "Error al guardar"), "err");
+    }
+  }
+
+  // ── submit: apply to current market only ──
   $("cfg-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const body = {
-      // Trigger
-      trigger_price:         parseFloat($("cfg-trigger").value),
-      buy_amount:            parseFloat($("cfg-buy").value),
-      max_trades_per_window: parseInt($("cfg-max-trades").value, 10),
-      hedge_threshold:       parseFloat($("cfg-hedge").value),
-      last_minute_seconds:   parseInt($("cfg-lastmin").value, 10),
-      // Strategy selector
-      active_strategy:       _selectedStrategy,
-      // Market Making
-      mm_shares:             parseFloat($("cfg-mm-shares").value),
-      mm_last_seconds:       parseInt($("cfg-mm-last-sec").value, 10),
-      mm_max_price:          parseFloat($("cfg-mm-max-price").value),
-      // Early Entry
-      early_entry_enabled:   eeCheck.checked,
-      ee_shares:             parseFloat($("cfg-ee-shares").value),
-      ee_tp_pct:             parseFloat($("cfg-ee-tp-pct").value),
-      ee_entry_seconds:      parseInt($("cfg-ee-entry-sec").value, 10),
-      // General
-      starting_bankroll:     parseFloat($("cfg-bankroll").value),
-      mode:                  _selectedMode,
-    };
-    // Strip NaN values
-    Object.keys(body).forEach((k) => {
-      if (typeof body[k] === "number" && isNaN(body[k])) delete body[k];
-    });
     try {
-      const resp = await fetch("config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        cache: "no-store",
-      });
-      const data = await resp.json();
-      if (resp.ok && data.ok) {
-        const keys = Object.keys(data.updated || {});
-        showMsg("✓ Guardado: " + (keys.length ? keys.join(", ") : "sin cambios"), "ok");
-        loadState();
-      } else {
-        showMsg("✗ " + (data.error || "Error al guardar"), "err");
-      }
+      await postConfig(`/config/${currentMarket}`, buildPayload());
+    } catch (err) {
+      showMsg("✗ Error de red: " + err.message, "err");
+    }
+  });
+
+  // ── apply to all markets ──
+  $("btn-apply-all").addEventListener("click", async () => {
+    try {
+      await postConfig("/config", buildPayload());
     } catch (err) {
       showMsg("✗ Error de red: " + err.message, "err");
     }

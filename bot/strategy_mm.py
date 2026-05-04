@@ -63,13 +63,14 @@ class MarketMakerStrategy:
             icon="🏦",
         )
 
+        # Read both prices atomically once before iterating sides
+        up_price, down_price = self.state.get_prices()
+
         for side, token_id in [
             ("UP",   tokens.up_token_id),
             ("DOWN", tokens.down_token_id),
         ]:
-            current_price = (
-                self.state.last_up_price if side == "UP" else self.state.last_down_price
-            )
+            current_price = up_price if side == "UP" else down_price
 
             if current_price is None:
                 logger.warn(f"MM  {tokens.slug}  {side} sin precio — omitiendo lado")

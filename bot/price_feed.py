@@ -47,22 +47,27 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
+def _best_from_levels(levels: list, fn) -> Optional[float]:
+    """Return the single best price from a list of order-book level dicts.
+
+    ``fn`` must be ``max`` for bids (highest bid) or ``min`` for asks
+    (lowest ask).  Always returns ``Optional[float]`` — never a list.
+    """
+    prices = [_safe_float(l.get("price")) for l in levels if isinstance(l, dict)]
+    prices = [p for p in prices if p and p > 0]
+    return fn(prices) if prices else None
+
+
 def _mid_from_book(item: dict) -> Optional[float]:
     """Compute mid from a full book snapshot (bids + asks lists)."""
     bids = item.get("bids") or []
     asks = item.get("asks") or []
 
-    bid_prices = [_safe_float(l.get("price")) for l in bids if isinstance(l, dict)]
-    ask_prices = [_safe_float(l.get("price")) for l in asks if isinstance(l, dict)]
+    best_bid = _best_from_levels(bids, max)
+    best_ask = _best_from_levels(asks, min)
 
-    bid_prices = [p for p in bid_prices if p and p > 0]
-    ask_prices = [p for p in ask_prices if p and p > 0]
-
-    if not bid_prices or not ask_prices:
+    if best_bid is None or best_ask is None:
         return None
-
-    best_bid = max(bid_prices)
-    best_ask = min(ask_prices)
     if best_bid <= 0 or best_ask <= 0 or best_bid > best_ask:
         return None
     return (best_bid + best_ask) / 2.0
@@ -238,12 +243,10 @@ class PriceFeed:
             # Fallback: extract best bid/ask from the lists to cache them
             bids = item.get("bids") or []
             asks = item.get("asks") or []
-            bid_ps = [_safe_float(l.get("price")) for l in bids if isinstance(l, dict)]
-            ask_ps = [_safe_float(l.get("price")) for l in asks if isinstance(l, dict)]
-            bid_ps = [p for p in bid_ps if p and p > 0]
-            ask_ps = [p for p in ask_ps if p and p > 0]
-            if bid_ps and ask_ps:
-                self._update_cache(str(token_id), max(bid_ps), min(ask_ps))
+            best_bid = _best_from_levels(bids, max)
+            best_ask = _best_from_levels(asks, min)
+            if best_bid is not None and best_ask is not None:
+                self._update_cache(str(token_id), best_bid, best_ask)
             return
 
         # ── last_trade_price: most recent matched trade ───────────────────────

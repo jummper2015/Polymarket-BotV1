@@ -52,6 +52,138 @@ def start_btc_fetcher() -> None:
     start_price_fetcher()
 
 
+def _build_config_updates(data: dict, state) -> tuple:
+    """Validate a config payload dict.
+
+    Returns ``(updates_dict, None)`` on success or
+    ``(None, flask_error_response_tuple)`` when the request must be rejected.
+    All numeric bounds are enforced here so both the global and per-market
+    config endpoints share identical validation.
+    """
+    updates: dict = {}
+
+    if "trigger_price" in data:
+        try:
+            v = float(data["trigger_price"])
+            if 0.01 <= v <= 0.99:
+                updates["trigger_price"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "buy_amount" in data:
+        try:
+            v = float(data["buy_amount"])
+            if 0.50 <= v <= 100_000:
+                updates["buy_amount"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "max_trades_per_window" in data:
+        try:
+            v = int(data["max_trades_per_window"])
+            if 1 <= v <= 10:
+                updates["max_trades_per_window"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "hedge_threshold" in data:
+        try:
+            v = float(data["hedge_threshold"])
+            if 0.50 <= v <= 0.99:
+                updates["hedge_threshold"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "last_minute_seconds" in data:
+        try:
+            v = int(data["last_minute_seconds"])
+            if 10 <= v <= 240:
+                updates["last_minute_seconds"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "active_strategy" in data:
+        v = str(data["active_strategy"]).lower()
+        if v in ("trigger", "market_making", "both"):
+            updates["active_strategy"] = v
+
+    if "mm_shares" in data:
+        try:
+            v = float(data["mm_shares"])
+            if 1 <= v <= 100_000:
+                updates["mm_shares"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "mm_last_seconds" in data:
+        try:
+            v = int(data["mm_last_seconds"])
+            if 5 <= v <= 120:
+                updates["mm_last_seconds"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "mm_max_price" in data:
+        try:
+            v = float(data["mm_max_price"])
+            if 0.50 <= v <= 0.99:
+                updates["mm_max_price"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "starting_bankroll" in data:
+        try:
+            v = float(data["starting_bankroll"])
+            if 1.0 <= v <= 10_000_000:
+                updates["starting_bankroll"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "early_entry_enabled" in data:
+        updates["early_entry_enabled"] = bool(data["early_entry_enabled"])
+
+    if "ee_shares" in data:
+        try:
+            v = float(data["ee_shares"])
+            if 0.01 <= v <= 100_000:
+                updates["ee_shares"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "ee_tp_pct" in data:
+        try:
+            v = float(data["ee_tp_pct"])
+            if 0.1 <= v <= 100.0:
+                updates["ee_tp_pct"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "ee_entry_seconds" in data:
+        try:
+            v = int(data["ee_entry_seconds"])
+            if 5 <= v <= 270:
+                updates["ee_entry_seconds"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "mode" in data:
+        v = str(data["mode"]).lower()
+        if v in ("paper", "real"):
+            if v == "real" and not state.has_credentials:
+                rmr = state.real_mode_readiness()
+                return None, (
+                    jsonify({
+                        "ok": False,
+                        "error": "Credenciales incompletas para modo real",
+                        "readiness": rmr,
+                    }),
+                    400,
+                )
+            updates["mode"] = v
+
+    return updates, None
+
+
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -95,6 +227,24 @@ def create_app() -> Flask:
                 "trades": snap["trades"],
                 "price_history": snap["price_history"],
                 "market_enabled": snap["market_enabled"],
+                "config": {
+                    "trigger_price": snap["trigger_price"],
+                    "buy_amount": snap["buy_amount"],
+                    "max_trades_per_window": snap["max_trades_per_window"],
+                    "hedge_threshold": snap["hedge_threshold"],
+                    "last_minute_seconds": snap["last_minute_seconds"],
+                    "active_strategy": snap["active_strategy"],
+                    "mm_shares": snap["mm_shares"],
+                    "mm_last_seconds": snap["mm_last_seconds"],
+                    "mm_max_price": snap["mm_max_price"],
+                    "early_entry_enabled": snap["early_entry_enabled"],
+                    "ee_shares": snap["ee_shares"],
+                    "ee_tp_pct": snap["ee_tp_pct"],
+                    "ee_entry_seconds": snap["ee_entry_seconds"],
+                    "starting_bankroll": snap["starting_bankroll"],
+                    "mode": snap["mode"],
+                    "market_enabled": snap["market_enabled"],
+                },
             }
             for entry in snap["log"]:
                 all_logs.append({"market": sym, **entry})
@@ -178,129 +328,29 @@ def create_app() -> Flask:
 
     @app.post("/config")
     def update_config():
+        """Apply config to all three markets simultaneously."""
         data = request.get_json(force=True, silent=True) or {}
-        updates: dict = {}
-
-        if "trigger_price" in data:
-            try:
-                v = float(data["trigger_price"])
-                if 0.01 <= v <= 0.99:
-                    updates["trigger_price"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "buy_amount" in data:
-            try:
-                v = float(data["buy_amount"])
-                if 0.50 <= v <= 100_000:
-                    updates["buy_amount"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "max_trades_per_window" in data:
-            try:
-                v = int(data["max_trades_per_window"])
-                if 1 <= v <= 10:
-                    updates["max_trades_per_window"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "hedge_threshold" in data:
-            try:
-                v = float(data["hedge_threshold"])
-                if 0.50 <= v <= 0.99:
-                    updates["hedge_threshold"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "last_minute_seconds" in data:
-            try:
-                v = int(data["last_minute_seconds"])
-                if 10 <= v <= 240:
-                    updates["last_minute_seconds"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "active_strategy" in data:
-            v = str(data["active_strategy"]).lower()
-            if v in ("trigger", "market_making", "both"):
-                updates["active_strategy"] = v
-
-        if "mm_shares" in data:
-            try:
-                v = float(data["mm_shares"])
-                if 1 <= v <= 100_000:
-                    updates["mm_shares"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "mm_last_seconds" in data:
-            try:
-                v = int(data["mm_last_seconds"])
-                if 5 <= v <= 120:
-                    updates["mm_last_seconds"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "mm_max_price" in data:
-            try:
-                v = float(data["mm_max_price"])
-                if 0.50 <= v <= 0.99:
-                    updates["mm_max_price"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "starting_bankroll" in data:
-            try:
-                v = float(data["starting_bankroll"])
-                if 1.0 <= v <= 10_000_000:
-                    updates["starting_bankroll"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "early_entry_enabled" in data:
-            updates["early_entry_enabled"] = bool(data["early_entry_enabled"])
-
-        if "ee_shares" in data:
-            try:
-                v = float(data["ee_shares"])
-                if 0.01 <= v <= 100_000:
-                    updates["ee_shares"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "ee_tp_pct" in data:
-            try:
-                v = float(data["ee_tp_pct"])
-                if 0.1 <= v <= 100.0:
-                    updates["ee_tp_pct"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "ee_entry_seconds" in data:
-            try:
-                v = int(data["ee_entry_seconds"])
-                if 5 <= v <= 270:
-                    updates["ee_entry_seconds"] = v
-            except (TypeError, ValueError):
-                pass
-
-        if "mode" in data:
-            v = str(data["mode"]).lower()
-            if v in ("paper", "real"):
-                if v == "real" and not STATES["btc"].has_credentials:
-                    rmr = STATES["btc"].real_mode_readiness()
-                    return jsonify({
-                        "ok": False,
-                        "error": "Credenciales incompletas para modo real",
-                        "readiness": rmr,
-                    }), 400
-                updates["mode"] = v
-
+        updates, err = _build_config_updates(data, STATES["btc"])
+        if err:
+            return err
         accepted = {}
         for st in STATES.values():
             accepted = st.update_runtime_config(**updates)
-        logger.info(f"config updated via dashboard: {accepted}", icon="⚙")
+        logger.info(f"config (all markets) updated: {accepted}", icon="⚙")
+        return jsonify({"ok": True, "updated": accepted})
+
+    @app.post("/config/<sym>")
+    def update_config_for_market(sym: str):
+        """Apply config to a single market only."""
+        sym = sym.lower()
+        if sym not in STATES:
+            return jsonify({"ok": False, "error": "Unknown market"}), 400
+        data = request.get_json(force=True, silent=True) or {}
+        updates, err = _build_config_updates(data, STATES[sym])
+        if err:
+            return err
+        accepted = STATES[sym].update_runtime_config(**updates)
+        logger.info(f"config [{sym.upper()}] updated: {accepted}", icon="⚙")
         return jsonify({"ok": True, "updated": accepted})
 
     @app.post("/toggle-market/<sym>")

@@ -6,7 +6,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, List, Optional
+from typing import Deque, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -181,6 +181,17 @@ class BotState:
             elif side == "DOWN":
                 self.last_down_price = price
                 self.down_price_history.append(entry)
+
+    def get_prices(self) -> Tuple[Optional[float], Optional[float]]:
+        """Return (last_up_price, last_down_price) under a single lock acquisition.
+
+        Reading both prices inside one lock ensures they always belong to the
+        same consistent snapshot — the two-statement read pattern is not atomic
+        even under Python's GIL because UP and DOWN may be updated separately
+        between the two reads.
+        """
+        with self._lock:
+            return self.last_up_price, self.last_down_price
 
     def update_spot_price(self, price: float) -> None:
         with self._lock:
