@@ -226,8 +226,8 @@ class Trader:
 
     # ----- helpers -----
 
-    def _on_price(self, side: str, mid: float) -> None:
-        self.state.update_price(side, mid)
+    def _on_price(self, side: str, bid: float, ask: float, mid: float) -> None:
+        self.state.update_price(side, bid, ask, mid)
 
     def _sleep_until(self, target_unix: float) -> None:
         while not self._stop.is_set():
@@ -899,46 +899,62 @@ class Trader:
 
     def _build_client(self):
         try:
-            from py_clob_client.client import ClobClient
+            from py_clob_client_v2 import ClobClient
         except Exception as exc:
-            logger.err(f"py_clob_client not available: {exc}")
+            logger.err(f"py_clob_client_v2 not available: {exc}")
             return None
         try:
-            client = ClobClient(
-                self.cfg.clob_host,
-                key=self.cfg.private_key,
+            # CLOB V2: derive API credentials then build an authenticated client.
+            # No signature_type / funder args in V2 — those fields were removed.
+            seed_client = ClobClient(
+                host=self.cfg.clob_host,
                 chain_id=self.cfg.chain_id,
-                signature_type=self.cfg.signature_type,
-                funder=self.cfg.proxy_wallet,
+                key=self.cfg.private_key,
             )
-            client.set_api_creds(client.create_or_derive_api_creds())
-            logger.ok("CLOB client authenticated", icon="🔑")
+            creds = seed_client.create_or_derive_api_key()
+            client = ClobClient(
+                host=self.cfg.clob_host,
+                chain_id=self.cfg.chain_id,
+                key=self.cfg.private_key,
+                creds=creds,
+            )
+            logger.ok("CLOB V2 client authenticated (pUSD collateral)", icon="🔑")
             return client
         except Exception as exc:
-            logger.err(f"CLOB authentication failed: {exc}")
+            logger.err(f"CLOB V2 authentication failed: {exc}")
             return None
 
     def _place_real_order(self, token_id: str, shares: float, price: float):
-        from py_clob_client.clob_types import OrderArgs, OrderType
-        from py_clob_client.order_builder.constants import BUY
+        from py_clob_client_v2 import OrderArgs, OrderType, PartialCreateOrderOptions, Side
 
-        order = self._client.create_order(
-            OrderArgs(price=price, size=shares, side=BUY, token_id=token_id)
+        resp = self._client.create_and_post_order(
+            order_args=OrderArgs(
+                token_id=token_id,
+                price=price,
+                size=shares,
+                side=Side.BUY,
+            ),
+            options=PartialCreateOrderOptions(tick_size="0.01"),
+            order_type=OrderType.GTC,
         )
-        resp = self._client.post_order(order, OrderType.GTC)
         order_id = None
         if isinstance(resp, dict):
             order_id = resp.get("orderID") or resp.get("order_id") or resp.get("id")
         return str(order_id) if order_id else None, "real order placed"
 
     def _place_real_sell_order(self, token_id: str, shares: float, price: float):
-        from py_clob_client.clob_types import OrderArgs, OrderType
-        from py_clob_client.order_builder.constants import SELL
+        from py_clob_client_v2 import OrderArgs, OrderType, PartialCreateOrderOptions, Side
 
-        order = self._client.create_order(
-            OrderArgs(price=price, size=shares, side=SELL, token_id=token_id)
+        resp = self._client.create_and_post_order(
+            order_args=OrderArgs(
+                token_id=token_id,
+                price=price,
+                size=shares,
+                side=Side.SELL,
+            ),
+            options=PartialCreateOrderOptions(tick_size="0.01"),
+            order_type=OrderType.GTC,
         )
-        resp = self._client.post_order(order, OrderType.GTC)
         order_id = None
         if isinstance(resp, dict):
             order_id = resp.get("orderID") or resp.get("order_id") or resp.get("id")

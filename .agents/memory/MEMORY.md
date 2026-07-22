@@ -1,0 +1,1 @@
+- [Polymarket CLOB V2 Migration](polymarket-clob-v2-migration.md) — CLOB V2 live Apr 28 2026; py-clob-client-v2 replaces py-clob-client; new SDK init, order placement, Side enum, pUSD collateral.

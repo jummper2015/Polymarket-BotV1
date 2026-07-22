@@ -145,33 +145,43 @@ class MarketMakerStrategy:
 
     def _build_client(self):
         try:
-            from py_clob_client.client import ClobClient
+            from py_clob_client_v2 import ClobClient
         except Exception as exc:
-            logger.err(f"MM: py_clob_client no disponible: {exc}")
+            logger.err(f"MM: py_clob_client_v2 no disponible: {exc}")
             return None
         try:
-            client = ClobClient(
-                self.cfg.clob_host,
-                key=self.cfg.private_key,
+            # CLOB V2: derive credentials first, then build an authenticated client.
+            seed_client = ClobClient(
+                host=self.cfg.clob_host,
                 chain_id=self.cfg.chain_id,
-                signature_type=self.cfg.signature_type,
-                funder=self.cfg.proxy_wallet,
+                key=self.cfg.private_key,
             )
-            client.set_api_creds(client.create_or_derive_api_creds())
-            logger.ok("MM: cliente CLOB autenticado", icon="🔑")
+            creds = seed_client.create_or_derive_api_key()
+            client = ClobClient(
+                host=self.cfg.clob_host,
+                chain_id=self.cfg.chain_id,
+                key=self.cfg.private_key,
+                creds=creds,
+            )
+            logger.ok("MM: cliente CLOB V2 autenticado (pUSD)", icon="🔑")
             return client
         except Exception as exc:
-            logger.err(f"MM: autenticación CLOB falló: {exc}")
+            logger.err(f"MM: autenticación CLOB V2 falló: {exc}")
             return None
 
     def _place_real_order(self, token_id: str, shares: float, price: float):
-        from py_clob_client.clob_types import OrderArgs, OrderType
-        from py_clob_client.order_builder.constants import BUY
+        from py_clob_client_v2 import OrderArgs, OrderType, PartialCreateOrderOptions, Side
 
-        order = self._client.create_order(
-            OrderArgs(price=price, size=shares, side=BUY, token_id=token_id)
+        resp = self._client.create_and_post_order(
+            order_args=OrderArgs(
+                token_id=token_id,
+                price=price,
+                size=shares,
+                side=Side.BUY,
+            ),
+            options=PartialCreateOrderOptions(tick_size="0.01"),
+            order_type=OrderType.GTC,
         )
-        resp = self._client.post_order(order, OrderType.GTC)
         order_id = None
         if isinstance(resp, dict):
             order_id = resp.get("orderID") or resp.get("order_id") or resp.get("id")

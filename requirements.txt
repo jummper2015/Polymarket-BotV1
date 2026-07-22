@@ -1,4 +1,4 @@
-py-clob-client>=0.34.6
+py-clob-client-v2>=1.1.0
 websocket-client>=1.9.0
 requests>=2.32.0
 eth-account>=0.13.0
