@@ -107,27 +107,35 @@ def _build_config_updates(data: dict, state) -> tuple:
         if v in ("trigger", "market_making", "both"):
             updates["active_strategy"] = v
 
-    if "mm_shares" in data:
+    if "mm_shares_per_leg" in data:
         try:
-            v = float(data["mm_shares"])
+            v = float(data["mm_shares_per_leg"])
             if 1 <= v <= 100_000:
-                updates["mm_shares"] = v
+                updates["mm_shares_per_leg"] = v
         except (TypeError, ValueError):
             pass
 
-    if "mm_last_seconds" in data:
+    if "mm_arm_spread_sum" in data:
         try:
-            v = int(data["mm_last_seconds"])
-            if 5 <= v <= 120:
-                updates["mm_last_seconds"] = v
+            v = float(data["mm_arm_spread_sum"])
+            if 1.00 <= v <= 1.20:
+                updates["mm_arm_spread_sum"] = v
         except (TypeError, ValueError):
             pass
 
-    if "mm_max_price" in data:
+    if "mm_bid_sum_cap" in data:
         try:
-            v = float(data["mm_max_price"])
-            if 0.50 <= v <= 0.99:
-                updates["mm_max_price"] = v
+            v = float(data["mm_bid_sum_cap"])
+            if 0.70 <= v <= 0.99:
+                updates["mm_bid_sum_cap"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "mm_quote_cutoff_sec" in data:
+        try:
+            v = int(data["mm_quote_cutoff_sec"])
+            if 60 <= v <= 270:
+                updates["mm_quote_cutoff_sec"] = v
         except (TypeError, ValueError):
             pass
 
@@ -234,9 +242,10 @@ def create_app() -> Flask:
                     "hedge_threshold": snap["hedge_threshold"],
                     "last_minute_seconds": snap["last_minute_seconds"],
                     "active_strategy": snap["active_strategy"],
-                    "mm_shares": snap["mm_shares"],
-                    "mm_last_seconds": snap["mm_last_seconds"],
-                    "mm_max_price": snap["mm_max_price"],
+                    "mm_shares_per_leg": snap["mm_shares_per_leg"],
+                    "mm_arm_spread_sum": snap["mm_arm_spread_sum"],
+                    "mm_bid_sum_cap": snap["mm_bid_sum_cap"],
+                    "mm_quote_cutoff_sec": snap["mm_quote_cutoff_sec"],
                     "early_entry_enabled": snap["early_entry_enabled"],
                     "ee_shares": snap["ee_shares"],
                     "ee_tp_pct": snap["ee_tp_pct"],
@@ -298,9 +307,10 @@ def create_app() -> Flask:
                 "hedge_threshold": btc_snap["hedge_threshold"],
                 "last_minute_seconds": btc_snap["last_minute_seconds"],
                 "active_strategy": btc_snap["active_strategy"],
-                "mm_shares": btc_snap["mm_shares"],
-                "mm_last_seconds": btc_snap["mm_last_seconds"],
-                "mm_max_price": btc_snap["mm_max_price"],
+                "mm_shares_per_leg": btc_snap["mm_shares_per_leg"],
+                "mm_arm_spread_sum": btc_snap["mm_arm_spread_sum"],
+                "mm_bid_sum_cap": btc_snap["mm_bid_sum_cap"],
+                "mm_quote_cutoff_sec": btc_snap["mm_quote_cutoff_sec"],
                 "early_entry_enabled": btc_snap["early_entry_enabled"],
                 "ee_shares": btc_snap["ee_shares"],
                 "ee_tp_pct": btc_snap["ee_tp_pct"],

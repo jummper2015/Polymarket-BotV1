@@ -55,10 +55,11 @@ class BotState:
         # ── active strategy selector ──────────────────────────────────────────
         self.active_strategy: str = "trigger"
 
-        # ── Market Making config ──────────────────────────────────────────────
-        self.mm_shares: float = 20.0
-        self.mm_last_seconds: int = 30
-        self.mm_max_price: float = 0.95
+        # ── Box Builder (Market Making) config ───────────────────────────────────
+        self.mm_shares_per_leg: float  = 5.0    # shares per leg (same count both sides)
+        self.mm_arm_spread_sum: float  = 1.03   # arm gate: ask_UP + ask_DOWN ≥ this
+        self.mm_bid_sum_cap: float     = 0.94   # max bid_UP + bid_DOWN (≥ 6c/box target)
+        self.mm_quote_cutoff_sec: int  = 150    # no new quotes after T-N seconds from end
 
         # ── Early Entry config (independent from MM) ──────────────────────────
         self.early_entry_enabled: bool = False
@@ -130,8 +131,8 @@ class BotState:
             # General
             "mode", "active_strategy", "starting_bankroll",
             "market_enabled",
-            # Market Making
-            "mm_shares", "mm_last_seconds", "mm_max_price",
+            # Box Builder (Market Making)
+            "mm_shares_per_leg", "mm_arm_spread_sum", "mm_bid_sum_cap", "mm_quote_cutoff_sec",
             # Early Entry
             "early_entry_enabled", "ee_shares", "ee_tp_pct", "ee_entry_seconds",
         }
@@ -206,6 +207,11 @@ class BotState:
         """
         with self._lock:
             return self.last_up_ask, self.last_down_ask
+
+    def get_bids(self) -> Tuple[Optional[float], Optional[float]]:
+        """Return (last_up_bid, last_down_bid) under a single lock acquisition."""
+        with self._lock:
+            return self.last_up_bid, self.last_down_bid
 
     def update_spot_price(self, price: float) -> None:
         with self._lock:
@@ -398,10 +404,11 @@ class BotState:
                 "last_minute_seconds": self.last_minute_seconds,
                 # Strategy selector
                 "active_strategy": self.active_strategy,
-                # Market Making
-                "mm_shares": self.mm_shares,
-                "mm_last_seconds": self.mm_last_seconds,
-                "mm_max_price": self.mm_max_price,
+                # Box Builder (Market Making)
+                "mm_shares_per_leg": self.mm_shares_per_leg,
+                "mm_arm_spread_sum": self.mm_arm_spread_sum,
+                "mm_bid_sum_cap": self.mm_bid_sum_cap,
+                "mm_quote_cutoff_sec": self.mm_quote_cutoff_sec,
                 # Early Entry
                 "early_entry_enabled": self.early_entry_enabled,
                 "ee_shares": self.ee_shares,

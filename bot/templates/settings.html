@@ -124,29 +124,58 @@
           </div>
         </div>
 
-        <!-- ── MARKET MAKING ── -->
+        <!-- ── BOX BUILDER (MARKET MAKING) ── -->
         <div id="mm-config-section" style="display:none">
-          <div class="cfg-section-header">🏦 Market Making</div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Shares por lado
-              <span class="cfg-hint">Cantidad de shares en UP y DOWN (misma cantidad por lado)</span>
-            </label>
-            <input id="cfg-mm-shares" type="number" class="cfg-input" step="1" min="1" max="100000" placeholder="20" />
+          <div class="cfg-section-header">📦 Box Builder (Market Making)</div>
+          <div style="font-size:12px;color:var(--muted);background:rgba(96,165,250,0.07);border:1px solid rgba(96,165,250,0.20);border-radius:8px;padding:10px 14px;margin-bottom:14px;line-height:1.6">
+            <strong style="color:#60a5fa">Estrategia Box Builder:</strong> puja post-only en AMBOS lados (UP + DOWN)
+            en la primera mitad de la ventana. Si ambas piernas se llenan, la caja redime
+            exactamente <strong>$1.00</strong> en resolución — sin importar qué lado gana.
+            Ganancia bloqueada = 1.00 − (bid_UP + bid_DOWN).<br/>
+            <span style="color:#f59e0b">⚠ Puerta de armado:</span> sólo arma si
+            <code>ask_UP + ask_DOWN ≥ arm_gate</code>. Sin puja después de T-cutoff.
+            Pierna varada a T-90 → corte al mejor bid.
           </div>
           <div class="cfg-row">
             <label class="cfg-label">
-              Segundos antes del cierre
-              <span class="cfg-hint">Momento de activación del MM (5 – 120 s)</span>
+              Shares por pierna
+              <span class="cfg-hint">Misma cantidad en UP y DOWN para que la caja redima limpia (mín 5)</span>
             </label>
-            <input id="cfg-mm-last-sec" type="number" class="cfg-input" step="1" min="5" max="120" placeholder="30" />
+            <input id="cfg-mm-shares" type="number" class="cfg-input" step="1" min="1" max="100000" placeholder="5" />
           </div>
           <div class="cfg-row">
             <label class="cfg-label">
-              Precio máximo de compra
-              <span class="cfg-hint">Techo de precio de entrada MM (0.50 – 0.99)</span>
+              Puerta de armado (ask_UP + ask_DN ≥)
+              <span class="cfg-hint">Suma mínima de asks para armar el box. Si el mercado está muy ajustado se omite (1.00 – 1.20)</span>
             </label>
-            <input id="cfg-mm-max-price" type="number" class="cfg-input" step="0.01" min="0.50" max="0.99" placeholder="0.95" />
+            <input id="cfg-mm-arm-spread" type="number" class="cfg-input" step="0.01" min="1.00" max="1.20" placeholder="1.03" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Techo de suma de pujas (bid_UP + bid_DN ≤)
+              <span class="cfg-hint">Ganancia mínima bloqueada = 1.00 − cap. Con 0.94 → ≥ 6 cts/par (0.70 – 0.99)</span>
+            </label>
+            <input id="cfg-mm-bid-cap" type="number" class="cfg-input" step="0.01" min="0.70" max="0.99" placeholder="0.94" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Corte de cotización (T-N segundos)
+              <span class="cfg-hint">Sin nuevas pujas dos lados después de este tiempo restante. Las pujas existentes continúan (60 – 270 s)</span>
+            </label>
+            <input id="cfg-mm-cutoff" type="number" class="cfg-input" step="10" min="60" max="270" placeholder="150" />
+          </div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Parámetros fijos
+              <span class="cfg-hint">No configurables — valores probados en producción</span>
+            </label>
+            <div style="font-size:12px;color:var(--muted);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px 12px;line-height:1.8">
+              Escalera maker: bid → min(best_bid, <strong>0.97</strong>−p1) · 
+              Lift taker: ask ≤ <strong>0.99</strong>−p1 · 
+              Rebote máximo: <strong>20s</strong> / sólo si &gt;2 cts detrás · 
+              Corte varada: T-<strong>90s</strong> → vende al bid · 
+              Cancelación final: T-<strong>10s</strong>
+            </div>
           </div>
         </div>
 
@@ -308,9 +337,10 @@
       $("cfg-lastmin").value    = c.last_minute_seconds     ?? 60;
 
       // Market Making
-      $("cfg-mm-shares").value    = c.mm_shares      ?? 20;
-      $("cfg-mm-last-sec").value  = c.mm_last_seconds ?? 30;
-      $("cfg-mm-max-price").value = c.mm_max_price    ?? 0.95;
+      $("cfg-mm-shares").value     = c.mm_shares_per_leg  ?? 5;
+      $("cfg-mm-arm-spread").value = c.mm_arm_spread_sum  ?? 1.03;
+      $("cfg-mm-bid-cap").value    = c.mm_bid_sum_cap     ?? 0.94;
+      $("cfg-mm-cutoff").value     = c.mm_quote_cutoff_sec ?? 150;
 
       // Early Entry
       const ee = c.early_entry_enabled || false;
@@ -357,9 +387,10 @@
       hedge_threshold:       parseFloat($("cfg-hedge").value),
       last_minute_seconds:   parseInt($("cfg-lastmin").value, 10),
       active_strategy:       _selectedStrategy,
-      mm_shares:             parseFloat($("cfg-mm-shares").value),
-      mm_last_seconds:       parseInt($("cfg-mm-last-sec").value, 10),
-      mm_max_price:          parseFloat($("cfg-mm-max-price").value),
+      mm_shares_per_leg:     parseFloat($("cfg-mm-shares").value),
+      mm_arm_spread_sum:     parseFloat($("cfg-mm-arm-spread").value),
+      mm_bid_sum_cap:        parseFloat($("cfg-mm-bid-cap").value),
+      mm_quote_cutoff_sec:   parseInt($("cfg-mm-cutoff").value, 10),
       early_entry_enabled:   eeCheck.checked,
       ee_shares:             parseFloat($("cfg-ee-shares").value),
       ee_tp_pct:             parseFloat($("cfg-ee-tp-pct").value),
