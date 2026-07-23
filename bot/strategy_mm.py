@@ -290,18 +290,46 @@ class BoxBuilderStrategy:
 
         bid_up, bid_dn = self._cap_bids(up_book["best_bid"], dn_book["best_bid"])
 
+        # ── bid-below-ask guard ───────────────────────────────────────────────
+        # Post-only orders are rejected the instant bid ≥ best_ask.
+        # Clamp each bid to strictly one tick below its respective ask so we
+        # never trigger a cross-book reject on either leg.
+        bid_up = max(self.PRICE_TICK, min(bid_up, round(up_book["best_ask"] - self.PRICE_TICK, 2)))
+        bid_dn = max(self.PRICE_TICK, min(bid_dn, round(dn_book["best_ask"] - self.PRICE_TICK, 2)))
+
+        # After clamping, re-check sum cap (clamping can only reduce, so it
+        # stays ≤ cap — but verify defensively).
+        if round(bid_up + bid_dn, 2) > self.state.mm_bid_sum_cap:
+            bid_up, bid_dn = self._cap_bids(bid_up, bid_dn)
+
         logger.info(
             f"BOX  ARMAR  UP bid={bid_up:.2f}  DN bid={bid_dn:.2f}  "
             f"sum={bid_up + bid_dn:.2f}  spread_sum={spread_sum:.2f}  shares={shares}",
             icon="📦",
         )
 
-        ok_up = self._place_leg_bid(legs["UP"],   bid_up, shares)
-        ok_dn = self._place_leg_bid(legs["DOWN"],  bid_dn, shares)
+        ok_up = self._place_leg_bid(legs["UP"],  bid_up, shares)
+        ok_dn = self._place_leg_bid(legs["DOWN"], bid_dn, shares)
 
-        if not ok_up and not ok_dn:
+        # ── BOTH legs must succeed — partial arm is worse than no arm ─────────
+        # If only one order landed, the bot holds a naked position with no
+        # complementary hedge; cancel the placed leg and abort this window.
+        if not ok_up or not ok_dn:
+            if ok_up:
+                self._cancel_leg(legs["UP"])
+                logger.warn("BOX  DOWN leg falló — cancelando UP y abortando arm")
+            elif ok_dn:
+                self._cancel_leg(legs["DOWN"])
+                logger.warn("BOX  UP leg falló — cancelando DOWN y abortando arm")
+            else:
+                logger.warn("BOX  ambas piernas fallaron — abortando arm")
             return False, "SKIP_ORDER_FAIL", 0.0
 
+        logger.ok(
+            f"BOX  ambas piernas colocadas ✓  UP@{bid_up:.2f}  DN@{bid_dn:.2f}  "
+            f"box_cost={bid_up + bid_dn:.2f}  locked≥${round(1.0 - bid_up - bid_dn, 2):.2f}/share",
+            icon="📦",
+        )
         return True, "", time.time()
 
     # ── static reprice ────────────────────────────────────────────────────────

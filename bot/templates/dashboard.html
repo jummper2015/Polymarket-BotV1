@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Polymarket Bot — Mercados</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=7" />
+  <link rel="stylesheet" href="static/dashboard.css?v=8" />
 </head>
 <body>
 
@@ -66,6 +66,25 @@
     <div class="strat-metrics-grid" id="strat-metrics"></div>
   </section>
 
+  <!-- ── Gráfico de operaciones ── -->
+  <section class="card" id="chart-section">
+    <div class="card-head chart-head">
+      <h2>Comportamiento de Operaciones</h2>
+      <div class="chart-tabs">
+        <button class="chart-tab active" data-tab="cumulative">P&amp;L Acumulado</button>
+        <button class="chart-tab" data-tab="per-trade">Por Operación</button>
+      </div>
+    </div>
+    <div class="chart-legend" id="chart-legend"></div>
+    <div class="chart-wrap" id="chart-wrap">
+      <div class="chart-empty" id="chart-empty">
+        Sin operaciones resueltas aún — el gráfico aparece cuando se completan operaciones.
+      </div>
+      <svg id="trades-chart" width="100%" style="display:none;overflow:visible;" aria-label="Gráfico de operaciones"></svg>
+    </div>
+    <div id="chart-tooltip" class="chart-tooltip" style="display:none;"></div>
+  </section>
+
   <!-- ── 3 paneles de mercado ── -->
   <section class="market-grid">
     <div id="panel-btc" class="market-panel card">
@@ -118,6 +137,6 @@
   Auto-refresh 1s · uptime <span id="uptime">0s</span>
 </footer>
 
-<script src="static/dashboard.js?v=7"></script>
+<script src="static/dashboard.js?v=8"></script>
 </body>
 </html>
