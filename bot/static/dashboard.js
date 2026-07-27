@@ -48,12 +48,23 @@
     error: "err",
   };
 
-  const MARKET_ICONS = { btc: "₿", sol: "◎", eth: "Ξ" };
-  const MARKET_COLOR = { btc: "#f7931a", sol: "#9945ff", eth: "#627eea" };
+  const MARKET_ICONS = { btc: "₿", sol: "◎", eth: "Ξ", btc15: "🌙" };
+  const MARKET_COLOR = { btc: "#f7931a", sol: "#9945ff", eth: "#627eea", btc15: "#a78bfa" };
 
-  const STRAT_LABELS = { trigger: "⚡ Trigger", mm: "📦 Box Builder", early_entry: "🎯 Early Entry" };
-  const STRAT_CLASS  = { trigger: "strat-trigger", mm: "strat-mm", early_entry: "strat-ee" };
-  const STRAT_COLOR  = { trigger: "#f1b44c", mm: "#5a8dee", early_entry: "#a78bfa" };
+  const STRAT_LABELS = {
+    trigger:     "⚡ Trigger",
+    mm:          "📦 Box Builder",
+    early_entry: "🎯 Early Entry",
+    corridor:    "🌙 Corridor",
+  };
+  const STRAT_CLASS  = {
+    trigger: "strat-trigger", mm: "strat-mm",
+    early_entry: "strat-ee",  corridor: "strat-corridor",
+  };
+  const STRAT_COLOR  = {
+    trigger: "#f1b44c", mm: "#5a8dee",
+    early_entry: "#a78bfa", corridor: "#a78bfa",
+  };
 
   // ── element refs ─────────────────────────────────────────────────────────
   const $ = (id) => document.getElementById(id);
@@ -81,22 +92,38 @@
     }
 
     const markets = s.markets || {};
+
+    // 5m market WS badges
     ["btc", "sol", "eth"].forEach((sym) => {
-      const el = $(["ws-" + sym]);
+      const el = $("ws-" + sym);
       if (!el) return;
       const m = markets[sym];
       const ok = m && m.ws_connected;
       el.className = "badge " + (ok ? "ok" : "err");
     });
 
+    // BTC 15m Corridor WS badge (only show when corridor enabled)
+    const ws15El = $("ws-btc15");
+    if (ws15El) {
+      const m15 = markets["btc15"];
+      const ccEnabled = m15 && m15.config && m15.config.cc_enabled;
+      ws15El.style.display = ccEnabled ? "" : "none";
+      if (ccEnabled) {
+        ws15El.className = "badge " + (m15.ws_connected ? "ok" : "err");
+      }
+    }
+
     const sp = $("spot-prices");
     if (sp) {
-      sp.innerHTML = Object.entries(markets).map(([sym, m]) =>
-        `<div class="spot-item">
+      // Show BTC, SOL, ETH spot prices (btc15 shares BTC price — skip it)
+      sp.innerHTML = ["btc", "sol", "eth"].map((sym) => {
+        const m = markets[sym];
+        if (!m) return "";
+        return `<div class="spot-item">
           <span class="spot-label" style="color:${MARKET_COLOR[sym]}">${sym.toUpperCase()}</span>
           <span class="spot-val">${fmtSpot(m.spot_price)}</span>
-        </div>`
-      ).join("");
+        </div>`;
+      }).join("");
     }
   }
 
@@ -153,17 +180,23 @@
     const el = $("strat-metrics");
     if (!el) return;
     const ss = s.combined_strategy_stats || {};
-    const activeStrat = (s.config || {}).active_strategy || "trigger";
-    const earlyEnabled = (s.config || {}).early_entry_enabled || false;
+    const markets = s.markets || {};
+    const btcCfg  = (markets.btc && markets.btc.config) || s.config || {};
+    const btc15Cfg = (markets.btc15 && markets.btc15.config) || {};
 
-    const stratOrder = ["trigger", "mm", "early_entry"];
+    const activeStrat  = btcCfg.active_strategy || "trigger";
+    const earlyEnabled = btcCfg.early_entry_enabled || false;
+    const ccEnabled    = btc15Cfg.cc_enabled || false;
+
+    const stratOrder = ["trigger", "mm", "early_entry", "corridor"];
     el.innerHTML = stratOrder.map((key) => {
       const st = ss[key] || { trades: 0, wins: 0, losses: 0, win_rate: 0, pnl: 0, roi: 0 };
       const resolved = (st.wins || 0) + (st.losses || 0);
       const isActive =
-        (key === "trigger" && (activeStrat === "trigger" || activeStrat === "both")) ||
-        (key === "mm"      && (activeStrat === "market_making" || activeStrat === "both")) ||
-        (key === "early_entry" && earlyEnabled);
+        (key === "trigger"     && (activeStrat === "trigger" || activeStrat === "both")) ||
+        (key === "mm"          && (activeStrat === "market_making" || activeStrat === "both")) ||
+        (key === "early_entry" && earlyEnabled) ||
+        (key === "corridor"    && ccEnabled);
       const activeDot = isActive
         ? `<span class="strat-active-dot"></span>`
         : `<span class="strat-inactive-dot"></span>`;
@@ -172,7 +205,7 @@
       return `
         <div class="strat-metric-card">
           <div class="strat-metric-header">
-            <span class="tag ${STRAT_CLASS[key]}">${STRAT_LABELS[key]}</span>
+            <span class="tag ${STRAT_CLASS[key] || 'strat-trigger'}">${STRAT_LABELS[key]}</span>
             ${activeDot}
           </div>
           <div class="strat-metric-row">
@@ -359,7 +392,7 @@
           <div class="chart-tooltip-title" style="color:${STRAT_COLOR[trade.strategy] || '#fff'}">
             ${STRAT_LABELS[trade.strategy] || trade.strategy}
           </div>
-          <div class="chart-tooltip-row"><span>Mercado</span><span class="chart-tooltip-val" style="color:${MARKET_COLOR[trade._sym]}">${trade._sym.toUpperCase()}</span></div>
+          <div class="chart-tooltip-row"><span>Mercado</span><span class="chart-tooltip-val" style="color:${MARKET_COLOR[trade._sym] || '#aaa'}">${trade._sym.toUpperCase()}</span></div>
           <div class="chart-tooltip-row"><span>Lado</span><span class="chart-tooltip-val">${trade.side}</span></div>
           <div class="chart-tooltip-row"><span>Precio</span><span class="chart-tooltip-val">${Number(trade.price).toFixed(4)}</span></div>
           <div class="chart-tooltip-row"><span>Estado</span><span class="chart-tooltip-val" style="color:${trade.status === 'won' ? '#1cc88a' : '#e74a3b'}">${trade.status}</span></div>
@@ -432,7 +465,7 @@
           <div class="chart-tooltip-title" style="color:${STRAT_COLOR[trade.strategy] || '#fff'}">
             ${STRAT_LABELS[trade.strategy] || trade.strategy}
           </div>
-          <div class="chart-tooltip-row"><span>Mercado</span><span class="chart-tooltip-val" style="color:${MARKET_COLOR[trade._sym]}">${trade._sym.toUpperCase()}</span></div>
+          <div class="chart-tooltip-row"><span>Mercado</span><span class="chart-tooltip-val" style="color:${MARKET_COLOR[trade._sym] || '#aaa'}">${trade._sym.toUpperCase()}</span></div>
           <div class="chart-tooltip-row"><span>Lado</span><span class="chart-tooltip-val">${trade.side}</span></div>
           <div class="chart-tooltip-row"><span>Precio</span><span class="chart-tooltip-val">${Number(trade.price).toFixed(4)}</span></div>
           <div class="chart-tooltip-row"><span>Shares</span><span class="chart-tooltip-val">${Number(trade.shares).toFixed(2)}</span></div>
@@ -488,6 +521,51 @@
     const enabled = m.market_enabled !== false;
     const resolved = (st.wins || 0) + (st.losses || 0);
 
+    // Special corridor panel for btc15
+    if (sym === "btc15") {
+      const ccEnabled = m.config && m.config.cc_enabled;
+      const ccPaused  = m.config && m.config.cc_paused;
+      panel.innerHTML = `
+        <div class="market-header">
+          <div class="market-title">
+            <span class="market-icon" style="color:${color}">${icon}</span>
+            <div>
+              <div class="market-name">Bitcoin 15m <span class="muted" style="font-size:12px;font-weight:400;">(Corridor)</span>
+                ${ccPaused ? `<span class="badge err" style="font-size:10px;padding:2px 6px;margin-left:6px;">KILL SWITCH</span>` : ""}
+              </div>
+              <div class="mono muted" style="font-size:11px;">${slug}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span class="badge ${stCls}">${stLbl}</span>
+            <span class="badge ${wsCls}">WS ●</span>
+          </div>
+        </div>
+
+        <div class="prices" style="margin-top:14px;">
+          <div class="price up">
+            <span class="side">▲ SUBE 15m</span>
+            <span class="value">${up != null ? up.toFixed(4) : "—"}</span>
+            <div class="bar"><div class="bar-fill" style="width:${up != null ? (up * 100).toFixed(1) : 0}%"></div></div>
+          </div>
+          <div class="price down">
+            <span class="side">▼ BAJA 15m</span>
+            <span class="value">${down != null ? down.toFixed(4) : "—"}</span>
+            <div class="bar"><div class="bar-fill" style="width:${down != null ? (down * 100).toFixed(1) : 0}%"></div></div>
+          </div>
+        </div>
+
+        <div class="market-meta">
+          <span>⏱ <strong>${ttl}</strong></span>
+          <span>Pares <strong>${st.trades || 0}</strong></span>
+          <span>Victoria <strong class="${resolved > 0 && st.win_rate >= 0.5 ? 'pnl-pos' : resolved > 0 ? 'pnl-neg' : ''}">${resolved > 0 ? (st.win_rate * 100).toFixed(0) + "%" : "—"}</strong></span>
+          <span class="${pnlCls}">P&L <strong>${fmtSigned(st.resolved_pnl || 0)}</strong></span>
+        </div>
+      `;
+      return;
+    }
+
+    // Standard 5m panel
     const toggleLabel = enabled ? "⏸ Desactivar" : "▶ Activar";
     const toggleCls   = enabled ? "btn-mkt-toggle active" : "btn-mkt-toggle inactive";
     const wrDisplay   = resolved > 0 ? `${(st.win_rate * 100).toFixed(0)}%` : "—";
@@ -553,7 +631,7 @@
       return;
     }
 
-    const MKT_COLOR = { btc: "#f7931a", sol: "#9945ff", eth: "#627eea" };
+    const MKT_COLOR = { btc: "#f7931a", sol: "#9945ff", eth: "#627eea", btc15: "#a78bfa" };
     tbody.innerHTML = allTrades.map((t) => {
       const pnlCls  = t.pnl == null ? "" : t.pnl >= 0 ? "pnl-pos" : "pnl-neg";
       const pnlText = t.pnl == null ? "—" : fmtSigned(t.pnl);
@@ -561,8 +639,9 @@
         ? `<span class="tag hedge">HEDGE</span>`
         : `<span class="tag initial">INIT</span>`;
       let stratTag;
-      if (t.strategy === "mm")               stratTag = `<span class="tag strat-mm">BOX</span>`;
+      if      (t.strategy === "mm")          stratTag = `<span class="tag strat-mm">BOX</span>`;
       else if (t.strategy === "early_entry") stratTag = `<span class="tag strat-ee">EE</span>`;
+      else if (t.strategy === "corridor")    stratTag = `<span class="tag strat-corridor">CORR</span>`;
       else                                   stratTag = `<span class="tag strat-trigger">TRG</span>`;
       const sym = t._sym;
       const symColor = MKT_COLOR[sym] || "#aaa";
@@ -586,7 +665,7 @@
     const logEl = $("log");
     if (!logEl || !s.log) return;
     const items = [...s.log].reverse();
-    const MKT_COLOR = { btc: "#f7931a", sol: "#9945ff", eth: "#627eea" };
+    const MKT_COLOR = { btc: "#f7931a", sol: "#9945ff", eth: "#627eea", btc15: "#a78bfa" };
     logEl.innerHTML = items.map((entry) => {
       const mkt = entry.market;
       const mktTag = mkt
@@ -605,16 +684,30 @@
     });
   }
 
+  // ── show/hide corridor section ───────────────────────────────────────────
+  function updateCorridorSection(s) {
+    const section = $("corridor-section");
+    if (!section) return;
+    const markets = s.markets || {};
+    const btc15   = markets.btc15;
+    const ccEnabled = btc15 && btc15.config && btc15.config.cc_enabled;
+    section.style.display = ccEnabled ? "" : "none";
+  }
+
   // ── main render ──────────────────────────────────────────────────────────
   function render(s) {
     renderHeader(s);
     renderKpis(s);
     renderStrategyMetrics(s);
     renderTradesChart(s);
+    updateCorridorSection(s);
     const markets = s.markets || {};
-    for (const [sym, m] of Object.entries(markets)) {
-      renderMarket(sym, m);
-    }
+    // Render 5m markets
+    ["btc", "sol", "eth"].forEach((sym) => {
+      if (markets[sym]) renderMarket(sym, markets[sym]);
+    });
+    // Render corridor panel (inside the corridor section — only if visible)
+    if (markets.btc15) renderMarket("btc15", markets.btc15);
     renderTrades(s);
     renderLog(s);
   }

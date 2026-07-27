@@ -67,6 +67,17 @@ class BotState:
         self.ee_tp_pct: float = 3.0       # take-profit threshold in % (3 = 3%)
         self.ee_entry_seconds: int = 40   # seconds from window start to entry
 
+        # ── Corridor Collector config (btc15 only) ────────────────────────────
+        self.cc_enabled: bool = False         # master toggle for the corridor strategy
+        self.cc_shares: int = 5               # shares per leg (both 15m and 5m)
+        self.cc_zone_lead_min: float = 5.0    # zone gate: min lead in bps
+        self.cc_zone_lead_max: float = 30.0   # zone gate: max lead in bps
+        self.cc_zone_min_atr: float = 1.0     # zone gate: min lead/ATR14 ratio
+        self.cc_edge: float = 0.08            # price gate: required edge (fair_sum − live_sum)
+        self.cc_ask5_cap: float = 0.55        # sanity cap on 5m opposite ask
+        self.cc_ask15_cap: float = 0.93       # sanity cap on 15m leader ask
+        self.cc_paused: bool = False          # kill switch (set by kill-switch logic)
+
         # --- market enabled toggle ---
         self.market_enabled: bool = True
 
@@ -135,6 +146,9 @@ class BotState:
             "mm_shares_per_leg", "mm_arm_spread_sum", "mm_bid_sum_cap", "mm_quote_cutoff_sec",
             # Early Entry
             "early_entry_enabled", "ee_shares", "ee_tp_pct", "ee_entry_seconds",
+            # Corridor Collector
+            "cc_enabled", "cc_shares", "cc_zone_lead_min", "cc_zone_lead_max",
+            "cc_zone_min_atr", "cc_edge", "cc_ask5_cap", "cc_ask15_cap",
         }
         accepted: Dict[str, object] = {}
         with self._lock:
@@ -156,13 +170,13 @@ class BotState:
             self.bot_status = status
             self.bot_message = message
 
-    def set_window(self, slug: str, ts: int) -> None:
+    def set_window(self, slug: str, ts: int, window_duration: int = 300) -> None:
         with self._lock:
             if slug != self.current_slug:
                 self.windows_observed += 1
             self.current_slug = slug
             self.current_window_ts = ts
-            self.current_window_ends_at = float(ts + 300)
+            self.current_window_ends_at = float(ts + window_duration)
             self.up_token_id = None
             self.down_token_id = None
             self.last_up_price = None
@@ -391,6 +405,7 @@ class BotState:
                 "trigger": self._strategy_stats("trigger"),
                 "mm": self._strategy_stats("mm"),
                 "early_entry": self._strategy_stats("early_entry"),
+                "corridor": self._strategy_stats("corridor"),
             }
 
             return {
@@ -414,6 +429,16 @@ class BotState:
                 "ee_shares": self.ee_shares,
                 "ee_tp_pct": self.ee_tp_pct,
                 "ee_entry_seconds": self.ee_entry_seconds,
+                # Corridor Collector
+                "cc_enabled": self.cc_enabled,
+                "cc_shares": self.cc_shares,
+                "cc_zone_lead_min": self.cc_zone_lead_min,
+                "cc_zone_lead_max": self.cc_zone_lead_max,
+                "cc_zone_min_atr": self.cc_zone_min_atr,
+                "cc_edge": self.cc_edge,
+                "cc_ask5_cap": self.cc_ask5_cap,
+                "cc_ask15_cap": self.cc_ask15_cap,
+                "cc_paused": self.cc_paused,
                 # General
                 "starting_bankroll": self.starting_bankroll,
                 "market_enabled": self.market_enabled,
@@ -487,5 +512,9 @@ STATES = {
     "btc": BotState(),
     "sol": BotState(),
     "eth": BotState(),
+    "btc15": BotState(),   # Corridor Collector — 15-min BTC window
 }
 STATE = STATES["btc"]  # backward-compat alias (logger fallback)
+
+# Markets that run the regular 5m Trader (btc15 uses CorridorTrader)
+TRADING_STATES = {k: v for k, v in STATES.items() if k != "btc15"}

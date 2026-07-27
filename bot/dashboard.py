@@ -17,12 +17,14 @@ _COINGECKO_IDS = {
     "btc": "bitcoin",
     "sol": "solana",
     "eth": "ethereum",
+    "btc15": "bitcoin",    # same price feed as btc
 }
 
 _MARKET_LABELS = {
     "btc": "Bitcoin",
     "sol": "Solana",
     "eth": "Ethereum",
+    "btc15": "Bitcoin 15m",
 }
 
 
@@ -150,6 +152,67 @@ def _build_config_updates(data: dict, state) -> tuple:
     if "early_entry_enabled" in data:
         updates["early_entry_enabled"] = bool(data["early_entry_enabled"])
 
+    # ── Corridor Collector ────────────────────────────────────────────────────
+
+    if "cc_enabled" in data:
+        updates["cc_enabled"] = bool(data["cc_enabled"])
+
+    if "cc_shares" in data:
+        try:
+            v = int(data["cc_shares"])
+            if 1 <= v <= 100_000:
+                updates["cc_shares"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "cc_zone_lead_min" in data:
+        try:
+            v = float(data["cc_zone_lead_min"])
+            if 1.0 <= v <= 100.0:
+                updates["cc_zone_lead_min"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "cc_zone_lead_max" in data:
+        try:
+            v = float(data["cc_zone_lead_max"])
+            if 1.0 <= v <= 500.0:
+                updates["cc_zone_lead_max"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "cc_zone_min_atr" in data:
+        try:
+            v = float(data["cc_zone_min_atr"])
+            if 0.1 <= v <= 10.0:
+                updates["cc_zone_min_atr"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "cc_edge" in data:
+        try:
+            v = float(data["cc_edge"])
+            if 0.01 <= v <= 0.50:
+                updates["cc_edge"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "cc_ask5_cap" in data:
+        try:
+            v = float(data["cc_ask5_cap"])
+            if 0.10 <= v <= 0.90:
+                updates["cc_ask5_cap"] = v
+        except (TypeError, ValueError):
+            pass
+
+    if "cc_ask15_cap" in data:
+        try:
+            v = float(data["cc_ask15_cap"])
+            if 0.10 <= v <= 0.99:
+                updates["cc_ask15_cap"] = v
+        except (TypeError, ValueError):
+            pass
+
     if "ee_shares" in data:
         try:
             v = float(data["ee_shares"])
@@ -250,6 +313,15 @@ def create_app() -> Flask:
                     "ee_shares": snap["ee_shares"],
                     "ee_tp_pct": snap["ee_tp_pct"],
                     "ee_entry_seconds": snap["ee_entry_seconds"],
+                    "cc_enabled": snap["cc_enabled"],
+                    "cc_shares": snap["cc_shares"],
+                    "cc_zone_lead_min": snap["cc_zone_lead_min"],
+                    "cc_zone_lead_max": snap["cc_zone_lead_max"],
+                    "cc_zone_min_atr": snap["cc_zone_min_atr"],
+                    "cc_edge": snap["cc_edge"],
+                    "cc_ask5_cap": snap["cc_ask5_cap"],
+                    "cc_ask15_cap": snap["cc_ask15_cap"],
+                    "cc_paused": snap.get("cc_paused", False),
                     "starting_bankroll": snap["starting_bankroll"],
                     "mode": snap["mode"],
                     "market_enabled": snap["market_enabled"],
@@ -279,7 +351,7 @@ def create_app() -> Flask:
 
         # Combined per-strategy stats across all markets
         combined_strategy_stats = {}
-        for strat in ("trigger", "mm", "early_entry"):
+        for strat in ("trigger", "mm", "early_entry", "corridor"):
             strat_wins = sum(snapshots[s]["strategy_stats"][strat]["wins"] for s in STATES)
             strat_losses = sum(snapshots[s]["strategy_stats"][strat]["losses"] for s in STATES)
             strat_trades = sum(snapshots[s]["strategy_stats"][strat]["trades"] for s in STATES)

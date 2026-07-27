@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Polymarket Bot — Mercados</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=8" />
+  <link rel="stylesheet" href="static/dashboard.css?v=9" />
 </head>
 <body>
 
@@ -24,6 +24,7 @@
       <span id="ws-btc" class="badge err">BTC ●</span>
       <span id="ws-sol" class="badge err">SOL ●</span>
       <span id="ws-eth" class="badge err">ETH ●</span>
+      <span id="ws-btc15" class="badge err" style="display:none;">15m ●</span>
     </div>
   </div>
 </header>
@@ -85,7 +86,7 @@
     <div id="chart-tooltip" class="chart-tooltip" style="display:none;"></div>
   </section>
 
-  <!-- ── 3 paneles de mercado ── -->
+  <!-- ── 3 paneles de mercado 5m ── -->
   <section class="market-grid">
     <div id="panel-btc" class="market-panel card">
       <div style="padding:24px;color:var(--muted);">Conectando Bitcoin…</div>
@@ -95,6 +96,17 @@
     </div>
     <div id="panel-eth" class="market-panel card">
       <div style="padding:24px;color:var(--muted);">Conectando Ethereum…</div>
+    </div>
+  </section>
+
+  <!-- ── Panel BTC 15m Corridor (visible only when cc_enabled) ── -->
+  <section id="corridor-section" style="display:none;">
+    <div style="display:flex;align-items:center;gap:10px;margin:6px 0 10px;">
+      <span style="color:#a78bfa;font-size:18px;">🌙</span>
+      <h2 style="margin:0;font-size:15px;color:#a78bfa;">Corridor Collector — BTC 15m</h2>
+    </div>
+    <div id="panel-btc15" class="market-panel card" style="border-color:rgba(167,139,250,0.30);">
+      <div style="padding:24px;color:var(--muted);">Iniciando Corridor Trader…</div>
     </div>
   </section>
 
@@ -137,6 +149,6 @@
   Auto-refresh 1s · uptime <span id="uptime">0s</span>
 </footer>
 
-<script src="static/dashboard.js?v=8"></script>
+<script src="static/dashboard.js?v=9"></script>
 </body>
 </html>

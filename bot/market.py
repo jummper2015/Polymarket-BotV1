@@ -20,6 +20,16 @@ def current_slug(symbol: str = "btc") -> Tuple[str, int]:
     return slug_for_timestamp(int(time.time()), symbol)
 
 
+def slug_for_15m_timestamp(unix_seconds: int) -> Tuple[str, int]:
+    """Return (slug, window_ts) for the 15-min BTC corridor window containing unix_seconds."""
+    window_ts = (unix_seconds // 900) * 900
+    return f"btc-updown-15m-{window_ts}", window_ts
+
+
+def current_15m_slug() -> Tuple[str, int]:
+    return slug_for_15m_timestamp(int(time.time()))
+
+
 @dataclass
 class MarketTokens:
     slug: str

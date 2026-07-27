@@ -1,16 +1,18 @@
-"""Entry point: launches 3 trader threads (BTC, SOL, ETH) and the Flask dashboard."""
+"""Entry point: launches 3 trader threads (BTC, SOL, ETH) + Corridor Trader (BTC15) + Flask dashboard."""
 from __future__ import annotations
 
 from . import logger
 from .config import load_config
+from .corridor_trader import CorridorTrader
 from .dashboard import create_app, start_price_fetcher
-from .state import STATES
+from .state import STATES, TRADING_STATES
 from .trader import Trader
 
 
 def main() -> None:
     cfg = load_config()
 
+    # Configure all markets (including btc15 which shares general settings)
     for sym, state in STATES.items():
         state.configure(
             mode=cfg.mode,
@@ -31,10 +33,16 @@ def main() -> None:
 
     start_price_fetcher()
 
-    for sym in STATES:
+    # Start regular 5m traders for BTC, SOL, ETH
+    for sym in TRADING_STATES:
         trader = Trader(cfg, sym)
         trader.start()
         logger.ok(f"trader [{sym.upper()}] started", icon="▶")
+
+    # Start Corridor Trader for BTC15 (15-min window; idles when cc_enabled=False)
+    corridor = CorridorTrader(cfg)
+    corridor.start()
+    logger.ok("trader [BTC15 Corridor] started", icon="🌙")
 
     app = create_app()
     logger.ok(f"dashboard listening on http://{cfg.dashboard_host}:{cfg.dashboard_port}", icon="🌐")
