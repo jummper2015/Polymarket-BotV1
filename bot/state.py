@@ -54,6 +54,9 @@ class BotState:
 
         # ── active strategy selector ──────────────────────────────────────────
         self.active_strategy: str = "trigger"
+        # Individual strategy enable flags (source of truth; active_strategy is derived)
+        self.trigger_enabled: bool = True
+        self.mm_enabled: bool = False
 
         # ── Box Builder (Market Making) config ───────────────────────────────────
         self.mm_shares_per_leg: float  = 5.0    # shares per leg (same count both sides)
@@ -142,6 +145,8 @@ class BotState:
             # General
             "mode", "active_strategy", "starting_bankroll",
             "market_enabled",
+            # Per-strategy enable flags
+            "trigger_enabled", "mm_enabled",
             # Box Builder (Market Making)
             "mm_shares_per_leg", "mm_arm_spread_sum", "mm_bid_sum_cap", "mm_quote_cutoff_sec",
             # Early Entry
@@ -150,6 +155,21 @@ class BotState:
             "cc_enabled", "cc_shares", "cc_zone_lead_min", "cc_zone_lead_max",
             "cc_zone_min_atr", "cc_edge", "cc_ask5_cap", "cc_ask15_cap",
         }
+        # Sync active_strategy ↔ trigger_enabled/mm_enabled
+        if "trigger_enabled" in kwargs or "mm_enabled" in kwargs:
+            te = kwargs.get("trigger_enabled", self.trigger_enabled)
+            me = kwargs.get("mm_enabled", self.mm_enabled)
+            if te and me:
+                kwargs["active_strategy"] = "both"
+            elif me:
+                kwargs["active_strategy"] = "market_making"
+            else:
+                kwargs["active_strategy"] = "trigger"
+        elif "active_strategy" in kwargs:
+            v = kwargs["active_strategy"]
+            kwargs["trigger_enabled"] = v in ("trigger", "both")
+            kwargs["mm_enabled"] = v in ("market_making", "both")
+
         accepted: Dict[str, object] = {}
         with self._lock:
             for key, val in kwargs.items():
@@ -417,8 +437,10 @@ class BotState:
                 "max_trades_per_window": self.max_trades_per_window,
                 "hedge_threshold": self.hedge_threshold,
                 "last_minute_seconds": self.last_minute_seconds,
-                # Strategy selector
+                # Strategy selector + individual flags
                 "active_strategy": self.active_strategy,
+                "trigger_enabled": self.trigger_enabled,
+                "mm_enabled": self.mm_enabled,
                 # Box Builder (Market Making)
                 "mm_shares_per_leg": self.mm_shares_per_leg,
                 "mm_arm_spread_sum": self.mm_arm_spread_sum,

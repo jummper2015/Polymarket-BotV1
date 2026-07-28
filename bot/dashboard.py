@@ -152,6 +152,20 @@ def _build_config_updates(data: dict, state) -> tuple:
     if "early_entry_enabled" in data:
         updates["early_entry_enabled"] = bool(data["early_entry_enabled"])
 
+    # ── Per-strategy enable flags ─────────────────────────────────────────────
+    if "trigger_enabled" in data or "mm_enabled" in data:
+        te = bool(data.get("trigger_enabled", state.trigger_enabled))
+        me = bool(data.get("mm_enabled", state.mm_enabled))
+        updates["trigger_enabled"] = te
+        updates["mm_enabled"] = me
+        # Derive active_strategy for backward-compat with trader.py
+        if te and me:
+            updates["active_strategy"] = "both"
+        elif me:
+            updates["active_strategy"] = "market_making"
+        else:
+            updates["active_strategy"] = "trigger"
+
     # ── Corridor Collector ────────────────────────────────────────────────────
 
     if "cc_enabled" in data:
@@ -305,6 +319,8 @@ def create_app() -> Flask:
                     "hedge_threshold": snap["hedge_threshold"],
                     "last_minute_seconds": snap["last_minute_seconds"],
                     "active_strategy": snap["active_strategy"],
+                    "trigger_enabled": snap["trigger_enabled"],
+                    "mm_enabled": snap["mm_enabled"],
                     "mm_shares_per_leg": snap["mm_shares_per_leg"],
                     "mm_arm_spread_sum": snap["mm_arm_spread_sum"],
                     "mm_bid_sum_cap": snap["mm_bid_sum_cap"],
@@ -379,6 +395,8 @@ def create_app() -> Flask:
                 "hedge_threshold": btc_snap["hedge_threshold"],
                 "last_minute_seconds": btc_snap["last_minute_seconds"],
                 "active_strategy": btc_snap["active_strategy"],
+                "trigger_enabled": btc_snap["trigger_enabled"],
+                "mm_enabled": btc_snap["mm_enabled"],
                 "mm_shares_per_leg": btc_snap["mm_shares_per_leg"],
                 "mm_arm_spread_sum": btc_snap["mm_arm_spread_sum"],
                 "mm_bid_sum_cap": btc_snap["mm_bid_sum_cap"],

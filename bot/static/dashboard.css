@@ -419,6 +419,13 @@ tr.row-hedge td { background: rgba(241,180,76,0.04); }
 }
 .chart-tooltip-val { font-variant-numeric: tabular-nums; }
 
+/* ── STRATEGY TAGS ───────────────────────────────────────── */
+.tag.strat-corridor {
+  background: rgba(167,139,250,0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(167,139,250,0.35);
+}
+
 /* ── FOOTER ───────────────────────────────────────────────── */
 .footer { padding: 18px 24px; text-align: center; font-size: 12px; }
 

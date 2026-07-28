@@ -70,22 +70,19 @@
         <!-- ══ STANDARD 5m MARKET CONFIG ══ -->
         <div id="standard-config">
 
-          <!-- Estrategia activa -->
-          <div class="cfg-row" id="strategy-row">
-            <label class="cfg-label">
-              Estrategia activa
-              <span class="cfg-hint">Selecciona qué estrategia ejecutar en cada ventana</span>
-            </label>
-            <div class="strategy-toggle">
-              <button type="button" id="btn-strat-trigger" class="strategy-btn active" data-strat="trigger">⚡ Trigger</button>
-              <button type="button" id="btn-strat-mm"      class="strategy-btn"        data-strat="market_making">🏦 Market Making</button>
-              <button type="button" id="btn-strat-both"    class="strategy-btn"        data-strat="both">⚡+🏦 Ambas</button>
-            </div>
-          </div>
-
           <!-- ── TRIGGER STRATEGY ── -->
+          <div class="cfg-section-header">⚡ Estrategia Trigger</div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Activar Trigger
+              <span class="cfg-hint">Compra cuando el precio supera el umbral al final de la ventana</span>
+            </label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="cfg-trigger-enabled" />
+              <span class="toggle-label" id="trigger-enabled-label">Desactivado</span>
+            </label>
+          </div>
           <div id="trigger-config-section">
-            <div class="cfg-section-header">⚡ Estrategia Trigger</div>
             <div class="cfg-row">
               <label class="cfg-label">
                 Precio trigger
@@ -133,8 +130,18 @@
           </div>
 
           <!-- ── BOX BUILDER (MARKET MAKING) ── -->
+          <div class="cfg-section-header">📦 Box Builder (Market Making)</div>
+          <div class="cfg-row">
+            <label class="cfg-label">
+              Activar Market Making
+              <span class="cfg-hint">Puja post-only en ambos lados para capturar el spread del corredor</span>
+            </label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="cfg-mm-enabled" />
+              <span class="toggle-label" id="mm-enabled-label">Desactivado</span>
+            </label>
+          </div>
           <div id="mm-config-section" style="display:none">
-            <div class="cfg-section-header">📦 Box Builder (Market Making)</div>
             <div style="font-size:12px;color:var(--muted);background:rgba(96,165,250,0.07);border:1px solid rgba(96,165,250,0.20);border-radius:8px;padding:10px 14px;margin-bottom:14px;line-height:1.6">
               <strong style="color:#60a5fa">Estrategia Box Builder:</strong> puja post-only en AMBOS lados (UP + DOWN)
               en la primera mitad de la ventana. Si ambas piernas se llenan, la caja redime
@@ -375,21 +382,24 @@
     $("corridor-config").style.display  = isCorridor ? "" : "none";
   }
 
-  // ── strategy selector ──
-  let _selectedStrategy = "trigger";
-  function setStrategyUI(s) {
-    _selectedStrategy = s;
-    $("btn-strat-trigger").classList.toggle("active", s === "trigger");
-    $("btn-strat-mm").classList.toggle("active",      s === "market_making");
-    $("btn-strat-both").classList.toggle("active",    s === "both");
-    const showT = s === "trigger" || s === "both";
-    const showM = s === "market_making" || s === "both";
-    $("trigger-config-section").style.display = showT ? "" : "none";
-    $("mm-config-section").style.display      = showM ? "" : "none";
+  // ── per-strategy toggles ──
+  const triggerCheck = $("cfg-trigger-enabled");
+  const triggerLabel = $("trigger-enabled-label");
+  const triggerCfg   = $("trigger-config-section");
+  const mmCheck      = $("cfg-mm-enabled");
+  const mmLabel      = $("mm-enabled-label");
+  const mmCfg        = $("mm-config-section");
+
+  function applyTriggerToggle(on) {
+    triggerLabel.textContent    = on ? "Activado" : "Desactivado";
+    triggerCfg.style.display    = on ? "" : "none";
   }
-  $("btn-strat-trigger").addEventListener("click", () => setStrategyUI("trigger"));
-  $("btn-strat-mm").addEventListener("click",      () => setStrategyUI("market_making"));
-  $("btn-strat-both").addEventListener("click",    () => setStrategyUI("both"));
+  function applyMmToggle(on) {
+    mmLabel.textContent = on ? "Activado" : "Desactivado";
+    mmCfg.style.display = on ? "" : "none";
+  }
+  triggerCheck.addEventListener("change", () => applyTriggerToggle(triggerCheck.checked));
+  mmCheck.addEventListener("change",      () => applyMmToggle(mmCheck.checked));
 
   // ── mode selector ──
   let _selectedMode = "paper";
@@ -462,9 +472,18 @@
         $("cfg-ee-tp-pct").value    = c.ee_tp_pct       ?? 3;
         $("cfg-ee-entry-sec").value = c.ee_entry_seconds ?? 40;
 
+        // Per-strategy enable toggles
+        const tOn = (c.trigger_enabled !== undefined) ? c.trigger_enabled
+                    : (c.active_strategy !== "market_making");
+        const mOn = (c.mm_enabled !== undefined) ? c.mm_enabled
+                    : (c.active_strategy === "market_making" || c.active_strategy === "both");
+        triggerCheck.checked = tOn;
+        mmCheck.checked      = mOn;
+        applyTriggerToggle(tOn);
+        applyMmToggle(mOn);
+
         $("cfg-bankroll").value = c.starting_bankroll ?? 1000;
         setModeUI(c.mode || "paper");
-        setStrategyUI(c.active_strategy || "trigger");
 
         $("btn-apply-one").textContent = `Aplicar a ${MARKET_LABELS[currentMarket]}`;
       }
@@ -500,7 +519,8 @@
       max_trades_per_window: parseInt($("cfg-max-trades").value, 10),
       hedge_threshold:       parseFloat($("cfg-hedge").value),
       last_minute_seconds:   parseInt($("cfg-lastmin").value, 10),
-      active_strategy:       _selectedStrategy,
+      trigger_enabled:       triggerCheck.checked,
+      mm_enabled:            mmCheck.checked,
       mm_shares_per_leg:     parseFloat($("cfg-mm-shares").value),
       mm_arm_spread_sum:     parseFloat($("cfg-mm-arm-spread").value),
       mm_bid_sum_cap:        parseFloat($("cfg-mm-bid-cap").value),
