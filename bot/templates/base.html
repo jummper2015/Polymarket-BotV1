@@ -1,0 +1,78 @@
+{# Shared shell for every dashboard page.
+
+   Built on Notika's class names (see bot/static/vendor/NOTICE.md). Notika's own
+   markup isn't reusable — it's assembled by Vite — so this is ours, written
+   against the theme's stylesheet.
+
+   The header used to be copy-pasted between dashboard.html and settings.html and
+   drifted apart; it lives here now. #}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Streak Snapper{% endblock %}</title>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/icons/bootstrap-icons.min.css') }}" />
+  {# modern.css carries the design tokens (--notika-shadow et al) and must come
+     before anything that uses them. style.css is the older theme sheet. #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/notika/modern.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/notika/style.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/notika/css/widgets-consistent.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/notika/css/responsive.css') }}" />
+  {# Ours last so it can override the theme. #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}" />
+  {% block head %}{% endblock %}
+</head>
+<body class="ss-body">
+
+{% block header %}
+<header class="ss-topbar">
+  <div class="container-fluid">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+
+      <div class="ss-brand d-flex align-items-center gap-2">
+        <span class="ss-logo"><i class="bi bi-lightning-charge-fill"></i></span>
+        <span>
+          <strong>Streak Snapper</strong>
+          <small class="text-muted d-block d-sm-inline">v2 · BTC 5m</small>
+        </span>
+      </div>
+
+      <nav class="ss-nav d-flex gap-1">
+        <a href="{{ url_for('index') }}"
+           class="ss-nav-link {% if active_page == 'dashboard' %}active{% endif %}">
+          <i class="bi bi-graph-up-arrow"></i> Dashboard
+        </a>
+        <a href="{{ url_for('settings') }}"
+           class="ss-nav-link {% if active_page == 'settings' %}active{% endif %}">
+          <i class="bi bi-sliders"></i> Configuración
+        </a>
+      </nav>
+
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <div id="spot-btc" class="ss-spot"></div>
+        <span id="mode-badge" class="ss-badge paper">PAPER</span>
+        <span id="ws-badge" class="ss-badge err">● WS</span>
+        {# Chainlink TWAP: filter only, never settlement (docs/CHAINLINK_TWAP.md §3) #}
+        <span id="cl-badge" class="ss-badge off" title="Chainlink TWAP">● CL</span>
+        {% if auth_enabled %}
+        <a href="{{ url_for('logout') }}" class="ss-badge off text-decoration-none"
+           title="Cerrar sesión"><i class="bi bi-box-arrow-right"></i></a>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+</header>
+{% endblock %}
+
+<main class="container-fluid ss-main">
+  {% block content %}{% endblock %}
+</main>
+
+<script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

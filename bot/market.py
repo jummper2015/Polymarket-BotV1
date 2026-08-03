@@ -131,7 +131,7 @@ def load_market_for_current_window(
             return MarketTokens(slug=slug, window_ts=ts, up_token_id=tokens[0], down_token_id=tokens[1])
 
         time.sleep(retry_seconds)
-        new_slug, new_ts = current_slug()
+        new_slug, new_ts = current_slug(symbol)
         if new_slug != slug:
             logger.info(f"window rolled over while waiting; switching to {new_slug}", icon="↻")
             slug, ts = new_slug, new_ts

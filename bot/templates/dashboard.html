@@ -1,154 +1,308 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Polymarket Bot — Mercados</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=9" />
-</head>
-<body>
+{% extends "base.html" %}
+{% block title %}Streak Snapper — Dashboard{% endblock %}
 
-<header class="topbar">
-  <div class="brand">
-    <span class="logo">⏱</span>
-    <h1>Polymarket Bot <span class="muted" style="font-weight:400;font-size:14px;">Multi-Market</span></h1>
-  </div>
-  <nav class="nav-links">
-    <a href="/" class="nav-link active">📊 Mercados</a>
-    <a href="/settings" class="nav-link">⚙ Configuración</a>
-  </nav>
-  <div class="topbar-right">
-    <div id="spot-prices" class="spot-prices"></div>
-    <div class="badges">
-      <span id="mode-badge" class="badge paper">PAPER</span>
-      <span id="ws-btc" class="badge err">BTC ●</span>
-      <span id="ws-sol" class="badge err">SOL ●</span>
-      <span id="ws-eth" class="badge err">ETH ●</span>
-      <span id="ws-btc15" class="badge err" style="display:none;">15m ●</span>
+{% block content %}
+
+{# ── KPIs ── #}
+<div class="row g-3 mt-1">
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">P&amp;L Total</span>
+      <span id="kpi-pnl" class="ss-kpi-value">—</span>
+      <span id="kpi-roi" class="ss-kpi-sub">ROI —</span>
     </div>
   </div>
-</header>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Win Rate</span>
+      <span id="kpi-winrate" class="ss-kpi-value">—</span>
+      <span id="kpi-wl" class="ss-kpi-sub">—</span>
+    </div>
+  </div>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Trades</span>
+      <span id="kpi-trades" class="ss-kpi-value">—</span>
+      <span id="kpi-open" class="ss-kpi-sub">— abiertas</span>
+    </div>
+  </div>
+  {# Split out because "bankroll" alone hid the cash locked in open positions. #}
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Saldo disponible</span>
+      <span id="kpi-available" class="ss-kpi-value">—</span>
+      <span id="kpi-committed" class="ss-kpi-sub">— comprometido</span>
+    </div>
+  </div>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Saldo total</span>
+      <span id="kpi-bankroll" class="ss-kpi-value">—</span>
+      <span id="kpi-bankroll-base" class="ss-kpi-sub">base —</span>
+    </div>
+  </div>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Max Drawdown</span>
+      <span id="kpi-drawdown" class="ss-kpi-value">—</span>
+      <span id="kpi-drawdown-pct" class="ss-kpi-sub">—</span>
+    </div>
+  </div>
+</div>
 
-<main>
-  <!-- ── KPIs globales ── -->
-  <section class="grid">
-    <div class="card kpi">
-      <span class="kpi-label">Bankroll Total</span>
-      <span id="kpi-bankroll" class="kpi-value">—</span>
-      <span id="kpi-cash" class="kpi-sub muted">efectivo —</span>
+{# ── Charts ── #}
+<div class="row g-3 mt-1">
+  <div class="col-lg-8">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-graph-up"></i> Curva de capital</h2>
+        <div class="btn-group btn-group-sm" role="group">
+          <button type="button" class="btn btn-outline-secondary active" data-equity-mode="global">Global</button>
+          <button type="button" class="btn btn-outline-secondary" data-equity-mode="strategy">Por estrategia</button>
+        </div>
+      </div>
+      <div class="ss-chart-box"><canvas id="chart-equity"></canvas></div>
     </div>
-    <div class="card kpi">
-      <span class="kpi-label">P&amp;L Resuelto</span>
-      <span id="kpi-pnl" class="kpi-value">—</span>
-      <span id="kpi-roi" class="kpi-sub muted">ROI —</span>
+  </div>
+  <div class="col-lg-4">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-arrow-down-right"></i> Drawdown</h2></div>
+      <div class="ss-chart-box"><canvas id="chart-drawdown"></canvas></div>
     </div>
-    <div class="card kpi">
-      <span class="kpi-label">Tasa de Victoria</span>
-      <span id="kpi-winrate" class="kpi-value">—</span>
-      <span id="kpi-wl" class="kpi-sub muted">— victorias / — derrotas</span>
-    </div>
-    <div class="card kpi">
-      <span class="kpi-label">Operaciones</span>
-      <span id="kpi-trades" class="kpi-value">—</span>
-      <span id="kpi-open" class="kpi-sub muted">— abiertas</span>
-    </div>
-    <div class="card kpi">
-      <span class="kpi-label">Tiempo activo</span>
-      <span id="kpi-uptime" class="kpi-value">—</span>
-      <span class="kpi-sub muted">desde inicio</span>
-    </div>
-  </section>
+  </div>
+</div>
 
-  <!-- ── Métricas por estrategia ── -->
-  <section class="card">
-    <div class="card-head">
-      <h2>Métricas por Estrategia</h2>
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-percent"></i> Win rate</h2>
+        <span class="text-muted small" id="winrate-note">acumulado vs móvil</span>
+      </div>
+      <div class="ss-chart-box"><canvas id="chart-winrate"></canvas></div>
     </div>
-    <div class="strat-metrics-grid" id="strat-metrics"></div>
-  </section>
+  </div>
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-bar-chart"></i> P&amp;L por estrategia</h2></div>
+      <div class="ss-chart-box"><canvas id="chart-strategy"></canvas></div>
+    </div>
+  </div>
+</div>
 
-  <!-- ── Gráfico de operaciones ── -->
-  <section class="card" id="chart-section">
-    <div class="card-head chart-head">
-      <h2>Comportamiento de Operaciones</h2>
-      <div class="chart-tabs">
-        <button class="chart-tab active" data-tab="cumulative">P&amp;L Acumulado</button>
-        <button class="chart-tab" data-tab="per-trade">Por Operación</button>
+{# ── Martingale + bot status ── #}
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-dice-3"></i> Estado Martingale</h2></div>
+      <div class="row g-2">
+        <div class="col-sm-6">
+          <div class="ss-mart fade">
+            <div class="ss-mart-head"><i class="bi bi-arrow-repeat"></i> Fade</div>
+            <div class="ss-mart-row"><span>Multiplicador</span><span id="fade-mult" class="ss-mart-val">×1.00</span></div>
+            <div class="ss-mart-row"><span>Racha pérdidas</span><span id="fade-streak" class="ss-mart-val">0</span></div>
+            <div class="ss-mart-row"><span>Próxima apuesta</span><span id="fade-next-bet" class="ss-mart-val">5.00 sh</span></div>
+          </div>
+        </div>
+        <div class="col-sm-6">
+          <div class="ss-mart trend">
+            <div class="ss-mart-head"><i class="bi bi-graph-up-arrow"></i> Trend</div>
+            <div class="ss-mart-row"><span>Multiplicador</span><span id="trend-mult" class="ss-mart-val">×1.00</span></div>
+            <div class="ss-mart-row"><span>Racha pérdidas</span><span id="trend-streak" class="ss-mart-val">0</span></div>
+            <div class="ss-mart-row"><span>Próxima apuesta</span><span id="trend-next-bet" class="ss-mart-val">5.00 sh</span></div>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="chart-legend" id="chart-legend"></div>
-    <div class="chart-wrap" id="chart-wrap">
-      <div class="chart-empty" id="chart-empty">
-        Sin operaciones resueltas aún — el gráfico aparece cuando se completan operaciones.
+  </div>
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-robot"></i> Estado del Bot</h2></div>
+      <div class="ss-status-row">
+        <span class="ss-status-dot" id="status-dot"></span><span id="status-text">—</span>
       </div>
-      <svg id="trades-chart" width="100%" style="display:none;overflow:visible;" aria-label="Gráfico de operaciones"></svg>
+      <div class="text-muted small mb-2" id="status-msg"></div>
+      <div class="ss-meta">
+        <div class="ss-meta-row"><span>Ventana</span><span id="status-slug">—</span></div>
+        <div class="ss-meta-row"><span>TTL</span><span id="status-ttl">—</span></div>
+        <div class="ss-meta-row"><span>Modo activo</span><span id="status-mode">—</span></div>
+        <div class="ss-meta-row"><span>BTC Spot</span><span id="status-btc">—</span></div>
+      </div>
     </div>
-    <div id="chart-tooltip" class="chart-tooltip" style="display:none;"></div>
-  </section>
+  </div>
+</div>
 
-  <!-- ── 3 paneles de mercado 5m ── -->
-  <section class="market-grid">
-    <div id="panel-btc" class="market-panel card">
-      <div style="padding:24px;color:var(--muted);">Conectando Bitcoin…</div>
+{# ── Live prices + order book ── #}
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-broadcast"></i> Precios en Vivo</h2></div>
+      <div class="row g-2">
+        <div class="col-6">
+          <div class="ss-price up">
+            <div class="ss-price-label">UP</div>
+            <div class="ss-price-mid" id="price-up-mid">—</div>
+            <div class="ss-price-bidask">
+              <span class="bid">Bid <span id="price-up-bid">—</span></span>
+              <span class="ask">Ask <span id="price-up-ask">—</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="col-6">
+          <div class="ss-price down">
+            <div class="ss-price-label">DOWN</div>
+            <div class="ss-price-mid" id="price-down-mid">—</div>
+            <div class="ss-price-bidask">
+              <span class="bid">Bid <span id="price-down-bid">—</span></span>
+              <span class="ask">Ask <span id="price-down-ask">—</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ss-sparklines mt-2" id="price-sparklines"></div>
     </div>
-    <div id="panel-sol" class="market-panel card">
-      <div style="padding:24px;color:var(--muted);">Conectando Solana…</div>
+  </div>
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-journal-text"></i> Libro de Órdenes</h2></div>
+      <div class="row g-2" id="order-book">
+        <div class="ss-empty">Esperando libro de órdenes...</div>
+      </div>
     </div>
-    <div id="panel-eth" class="market-panel card">
-      <div style="padding:24px;color:var(--muted);">Conectando Ethereum…</div>
-    </div>
-  </section>
+  </div>
+</div>
 
-  <!-- ── Panel BTC 15m Corridor (visible only when cc_enabled) ── -->
-  <section id="corridor-section" style="display:none;">
-    <div style="display:flex;align-items:center;gap:10px;margin:6px 0 10px;">
-      <span style="color:#a78bfa;font-size:18px;">🌙</span>
-      <h2 style="margin:0;font-size:15px;color:#a78bfa;">Corridor Collector — BTC 15m</h2>
+{# ── Event price chart (hand-built SVG, kept: it re-renders at 1 Hz) ── #}
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="ss-card notika-shadow">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-activity"></i> Comportamiento del Precio</h2>
+        <span class="text-muted small" id="chart-timer">—</span>
+      </div>
+      <div id="price-chart-container" class="ss-price-chart">
+        <div class="ss-empty">Esperando datos del WebSocket...</div>
+      </div>
     </div>
-    <div id="panel-btc15" class="market-panel card" style="border-color:rgba(167,139,250,0.30);">
-      <div style="padding:24px;color:var(--muted);">Iniciando Corridor Trader…</div>
-    </div>
-  </section>
+  </div>
+</div>
 
-  <!-- ── Tabla de operaciones ── -->
-  <section class="card">
-    <div class="card-head">
-      <h2>Operaciones — Todos los mercados</h2>
+{# ── Per-strategy metrics ── #}
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="ss-card notika-shadow">
+      <div class="ss-card-head"><h2><i class="bi bi-pie-chart"></i> Métricas por Estrategia</h2></div>
+      <div class="row g-2" id="strat-metrics"></div>
     </div>
-    <div class="table-wrap">
-      <table class="trades">
-        <thead>
-          <tr>
-            <th>Mercado</th>
-            <th>#</th>
-            <th>Strat</th>
-            <th>Ventana</th>
-            <th>Lado</th>
-            <th>Precio</th>
-            <th>Shares</th>
-            <th>Costo</th>
-            <th>Estado</th>
-            <th>P&amp;L</th>
-          </tr>
-        </thead>
-        <tbody id="trades-body">
-          <tr><td colspan="10" class="empty">Sin operaciones — esperando datos.</td></tr>
-        </tbody>
-      </table>
+  </div>
+</div>
+
+{# ── Trades: filters + table + pager ── #}
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="ss-card notika-shadow">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-list-ul"></i> Historial de Operaciones</h2>
+        <a href="#" id="trades-export" class="btn btn-sm btn-success">
+          <i class="bi bi-download"></i> Descargar CSV
+        </a>
+      </div>
+
+      <div class="row g-2 mb-3 ss-filters">
+        <div class="col-lg-2 col-md-4 col-6">
+          <label class="form-label small text-muted mb-1">Estrategia</label>
+          <select id="f-strategy" class="form-select form-select-sm">
+            <option value="all">Todas</option>
+            <option value="ss_fade">Fade</option>
+            <option value="ss_trend">Trend</option>
+          </select>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+          <label class="form-label small text-muted mb-1">Estado</label>
+          <select id="f-status" class="form-select form-select-sm">
+            <option value="all">Todos</option>
+            <option value="won">Ganadas</option>
+            <option value="lost">Perdidas</option>
+            <option value="open">Abiertas</option>
+          </select>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+          <label class="form-label small text-muted mb-1">Lado</label>
+          <select id="f-direction" class="form-select form-select-sm">
+            <option value="all">Ambos</option>
+            <option value="UP">UP</option>
+            <option value="DOWN">DOWN</option>
+          </select>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+          <label class="form-label small text-muted mb-1">Modo</label>
+          <select id="f-mode" class="form-select form-select-sm">
+            <option value="all">Todos</option>
+            <option value="paper">Paper</option>
+            <option value="real">Real</option>
+          </select>
+        </div>
+        <div class="col-lg-2 col-md-6 col-6">
+          <label class="form-label small text-muted mb-1">Desde</label>
+          <input type="date" id="f-from" class="form-control form-control-sm" />
+        </div>
+        <div class="col-lg-2 col-md-6 col-6">
+          <label class="form-label small text-muted mb-1">Hasta</label>
+          <input type="date" id="f-to" class="form-control form-control-sm" />
+        </div>
+        <div class="col-lg-10 col-md-8">
+          <label class="form-label small text-muted mb-1">Buscar (ventana, nota o #id)</label>
+          <input type="text" id="f-q" class="form-control form-control-sm"
+                 placeholder="btc-updown-5m-… o 42" />
+        </div>
+        <div class="col-lg-2 col-md-4 d-flex align-items-end">
+          <button id="f-clear" class="btn btn-sm btn-outline-secondary w-100">
+            <i class="bi bi-x-circle"></i> Limpiar
+          </button>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle ss-trades">
+          <thead>
+            <tr>
+              <th>#</th><th>Fecha</th><th>Estrategia</th><th>Lado</th>
+              <th>Precio</th><th>Shares</th><th>Costo</th><th>×Mult</th>
+              <th>Estado</th><th>P&amp;L</th><th>Fuente</th><th>Nota</th>
+            </tr>
+          </thead>
+          <tbody id="trades-body">
+            <tr><td colspan="12" class="ss-empty">Cargando…</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span class="text-muted small" id="trades-count">—</span>
+        <nav><ul class="pagination pagination-sm mb-0" id="trades-pager"></ul></nav>
+      </div>
     </div>
-  </section>
+  </div>
+</div>
 
-  <!-- ── Log de actividad ── -->
-  <section class="card">
-    <div class="card-head"><h2>Actividad</h2></div>
-    <ol id="log" class="log"></ol>
-  </section>
-</main>
+{# ── Activity log ── #}
+<div class="row g-3 mt-1 mb-3">
+  <div class="col-12">
+    <div class="ss-card notika-shadow">
+      <div class="ss-card-head"><h2><i class="bi bi-terminal"></i> Actividad</h2></div>
+      <ol id="log" class="ss-log"></ol>
+    </div>
+  </div>
+</div>
 
-<footer class="footer muted">
+<footer class="text-muted small text-center pb-3">
   Auto-refresh 1s · uptime <span id="uptime">0s</span>
 </footer>
+{% endblock %}
 
-<script src="static/dashboard.js?v=9"></script>
-</body>
-</html>
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+<script src="{{ url_for('static', filename='charts.js') }}"></script>
+<script src="{{ url_for('static', filename='trades.js') }}"></script>
+{% endblock %}
