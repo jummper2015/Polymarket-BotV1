@@ -253,6 +253,12 @@ body.ss-body {
 .ss-mode-card h6 { font-size: 13px; margin: .25rem 0; }
 .ss-mode-card p  { font-size: 11px; color: var(--ss-muted); margin: 0; }
 
+/* A strategy whose toggle is off. Dimmed rather than hidden: its parameters
+   stay readable and editable, which is what you want when you're about to
+   turn it on. */
+.ss-strategy-block { border-left: 3px solid var(--ss-border); padding-left: .75rem; }
+.ss-strategy-block.ss-strategy-off { opacity: .55; }
+
 @media (max-width: 576px) {
   .ss-kpi-value { font-size: 18px; }
   .ss-chart-box { height: 200px; }

@@ -224,6 +224,56 @@ class TestState:
         assert "ss_trend_min_strength" in config
 
 
+class TestStateServesTheRegistry:
+    """/settings renders from this payload and nothing else.
+
+    Before A4 the template hard-coded one block per strategy and settings.js
+    hard-coded one line per parameter, which is how `ss_sizing` and the regime
+    filters ended up accepted by POST /config but invisible on screen.
+    """
+
+    def test_lists_every_registered_strategy(self, client):
+        from bot import strategies
+
+        payload = client.get("/state").get_json()["strategies"]
+        assert [s["id"] for s in payload] == list(strategies.ids())
+
+    def test_each_strategy_carries_what_a_card_needs(self, client):
+        for strategy in client.get("/state").get_json()["strategies"]:
+            assert strategy["name"] and strategy["description"]
+            assert strategy["enabled"] in (True, False)
+            assert strategy["enabled_when"], "sin esto la tarjeta no se atenúa"
+            for param in strategy["params"]:
+                assert param["label"] and param["kind"]
+
+    def test_config_covers_every_runtime_field(self, client):
+        """A field the payload omits is a widget rendered empty and then saved
+        empty — the silent way to reset a parameter nobody touched."""
+        from bot.config import RUNTIME_FIELDS
+
+        config = client.get("/state").get_json()["config"]
+        assert set(RUNTIME_FIELDS) <= set(config)
+
+    def test_field_schema_matches_runtime_fields(self, client):
+        from bot.config import RUNTIME_FIELDS
+
+        fields = client.get("/state").get_json()["fields"]
+        assert set(fields) == set(RUNTIME_FIELDS)
+
+    def test_schema_carries_ranges_so_the_input_can_bound_itself(self, client):
+        cap = client.get("/state").get_json()["fields"]["ss_fade_limit_cap"]
+        assert cap["min"] == pytest.approx(0.10)
+        assert cap["max"] == pytest.approx(0.99)
+        assert cap["kind"] == "float"
+
+    def test_sizing_and_regime_fields_are_reachable_from_the_ui(self, client):
+        """The gap A4 closed: configurable by POST, invisible on screen."""
+        fields = client.get("/state").get_json()["fields"]
+        for name in ("ss_sizing", "ss_kelly_fraction", "ss_trading_hours",
+                     "ss_vol_min_pct", "ss_vol_max_pct", "ss_range_max_pct"):
+            assert fields[name]["label"], f"{name} sin label"
+
+
 class TestTrendThresholdConfig:
     def test_accepts_a_valid_threshold(self, client):
         resp = client.post("/config", json={"ss_trend_min_strength": 0.012})

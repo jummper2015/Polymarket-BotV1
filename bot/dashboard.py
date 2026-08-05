@@ -324,6 +324,10 @@ def create_app() -> Flask:
             # The registry, so /settings can render one card per strategy
             # instead of a hand-written block per strategy.
             "strategies": snap.get("strategies", []),
+            # Declaration of every runtime field: type, range, label, hint.
+            # /settings renders from this, so a parameter added to
+            # RUNTIME_FIELDS shows up in the UI without touching the template.
+            "fields": {name: f.to_json() for name, f in RUNTIME_FIELDS.items()},
             # Every runtime-editable field, straight from RUNTIME_FIELDS. This
             # used to be a hand-copied list, which is how ss_sizing and the
             # regime filters ended up configurable by POST but invisible in the

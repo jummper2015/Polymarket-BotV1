@@ -1,29 +1,192 @@
 /* Settings page.
  *
- * Was ~160 lines inline in settings.html, which meant it shared nothing with
- * dashboard.js and re-declared its own helpers. Lives here now.
+ * Nothing here knows the name of a parameter. /state serves `fields` (the
+ * declaration of every RUNTIME_FIELD: kind, range, label, hint) and
+ * `strategies` (the registry), and this file renders inputs from that and
+ * collects them back generically.
  *
- * Loads from /state and saves through POST /config, which validates every field
- * against RUNTIME_FIELDS server-side — this file only has to send sane types.
+ * That is the point of the registry: before it, adding a parameter meant
+ * editing config.py, state.py, dashboard.py, settings.html *and* this file —
+ * and forgetting the last two is how ss_sizing and the regime filters ended up
+ * configurable by POST but invisible on screen for a whole phase.
+ *
+ * POST /config re-validates everything against RUNTIME_FIELDS server-side, so
+ * this file only has to send sane types.
  */
 (function () {
   const $ = (id) => document.getElementById(id);
 
   let selectedMode = "paper";   // paper | real
-  let ssMode = "both";          // fade | trend | both
+  let ssMode = "fade";          // fade | trend | both
+  let schema = {};              // name → field declaration, from /state.fields
 
-  // ── strategy mode selector ──
+  // Which base fields go in which card. Strategy parameters aren't here: they
+  // come from the registry and are rendered into their own cards.
+  const GROUPS = {
+    "sizing-fields": ["ss_sizing", "ss_kelly_fraction"],
+    "martingale-fields": ["ss_martingale_mult_factor", "starting_bankroll"],
+    "regime-fields": [
+      "ss_trading_hours",
+      "ss_vol_min_pct",
+      "ss_vol_max_pct",
+      "ss_range_max_pct",
+    ],
+    "chainlink-fields": [
+      "cl_twap_enabled",
+      "cl_record_ticks",
+      "cl_twap_window",
+      "cl_twap_stale_seconds",
+      "cl_divergence_max",
+    ],
+  };
+
+  const esc = (s) =>
+    String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]),
+    );
+
+  // ── field rendering ──────────────────────────────────────────────────────
+  //
+  // The id is `cfg-<field name>` and the input carries data-cfg-field, which is
+  // what collect() scans for. Nothing else links a widget to a config key.
+  function fieldHtml(field, width) {
+    const id = "cfg-" + field.name;
+    const hint = field.hint
+      ? `<span class="ss-field-hint">${esc(field.hint)}</span>`
+      : "";
+    const common =
+      `id="${id}" data-cfg-field="${field.name}" ` +
+      `data-kind="${field.kind}" data-scale="${field.scale || 1}"`;
+
+    let control;
+    if (field.kind === "bool") {
+      return `
+        <div class="col-md-${width}">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" ${common} />
+            <label class="form-check-label ss-field-label" for="${id}">
+              ${esc(field.label)}
+            </label>
+          </div>
+          ${hint}
+        </div>`;
+    }
+
+    if (field.kind === "choice") {
+      const opts = (field.choices || [])
+        .map(
+          (c, i) =>
+            `<option value="${esc(c)}">` +
+            `${esc((field.choice_labels || field.choices)[i])}</option>`,
+        )
+        .join("");
+      control = `<select class="form-select form-select-sm" ${common}>${opts}</select>`;
+    } else if (field.kind === "hours") {
+      control =
+        `<input type="text" class="form-control form-control-sm" ` +
+        `placeholder="13-21,21-24" ${common} />`;
+    } else {
+      const attrs = [
+        field.step != null ? `step="${field.step}"` : 'step="any"',
+        field.min != null ? `min="${field.min * (field.scale || 1)}"` : "",
+        field.max != null ? `max="${field.max * (field.scale || 1)}"` : "",
+      ].join(" ");
+      control = `<input type="number" ${attrs} class="form-control form-control-sm" ${common} />`;
+    }
+
+    return `
+      <div class="col-md-${width}">
+        <label class="ss-field-label" for="${id}">${esc(field.label)}</label>
+        ${control}
+        ${hint}
+      </div>`;
+  }
+
+  function renderGroup(containerId, names) {
+    const box = $(containerId);
+    if (!box) return;
+    const fields = names.map((n) => schema[n]).filter(Boolean);
+    const width = fields.length >= 4 ? 3 : fields.length === 3 ? 4 : 6;
+    box.innerHTML = fields.map((f) => fieldHtml(f, width)).join("");
+  }
+
+  // ── strategy cards ───────────────────────────────────────────────────────
+  function renderStrategies(list) {
+    const box = $("strategy-cards");
+    if (!box) return;
+
+    box.innerHTML = (list || [])
+      .map((s) => {
+        const width = s.params.length >= 3 ? 4 : 6;
+        const notes = s.notes
+          ? `<div class="alert alert-info py-2 px-3 small mt-2 mb-0">${esc(s.notes)}</div>`
+          : "";
+        const symbols = s.symbols && s.symbols.length
+          ? `<span class="ss-field-hint ms-2">solo ${s.symbols.join(", ").toUpperCase()}</span>`
+          : "";
+        return `
+          <div class="mb-3 ss-strategy-block" data-strategy="${esc(s.id)}">
+            <h6 class="ss-field-label mb-2 d-flex align-items-center">
+              <span style="color:var(--ss-${s.id === "ss_trend" ? "trend" : "fade"})">
+                ${esc(s.name)}
+              </span>
+              <span class="ss-badge ms-2" data-role="enabled-badge">—</span>
+              ${symbols}
+            </h6>
+            <p class="ss-field-hint mb-2">${esc(s.description)}</p>
+            <div class="row g-2">
+              ${s.params.map((p) => fieldHtml(p, width)).join("")}
+            </div>
+            ${notes}
+          </div>`;
+      })
+      .join("");
+  }
+
+  /* A strategy's card greys out the moment its toggle changes, before saving.
+   * The condition comes from the descriptor (`enabled_when`), not from a copy
+   * of the rule written here — a copy would go stale the first time a strategy
+   * changed how it switches on, and the page would lie about what the trader
+   * is doing. */
+  let registry = [];
+  function refreshEnabledState() {
+    registry.forEach((s) => {
+      const block = document.querySelector(`[data-strategy="${s.id}"]`);
+      if (!block) return;
+
+      let on = s.enabled;
+      const when = s.enabled_when;
+      if (when) {
+        const live = readValue(when.field);
+        on = when.values.some((v) => String(v) === String(live));
+      }
+
+      block.classList.toggle("ss-strategy-off", !on);
+      const badge = block.querySelector('[data-role="enabled-badge"]');
+      if (badge) {
+        badge.textContent = on ? "activa" : "apagada";
+        badge.className = "ss-badge ms-2 " + (on ? "ok" : "warn");
+      }
+    });
+  }
+
+  // Current value of a config key, wherever its widget lives. `ss_mode` has no
+  // input of its own — it's the three cards at the top.
+  function readValue(name) {
+    if (name === "ss_mode") return ssMode;
+    const el = $("cfg-" + name);
+    if (!el) return null;
+    if (el.type === "checkbox") return el.checked;
+    return el.value;
+  }
+
+  // ── strategy mode selector ───────────────────────────────────────────────
   function selectSSMode(mode) {
     ssMode = mode;
     document.querySelectorAll(".ss-mode-card").forEach((card) => {
       card.classList.toggle("active", card.dataset.mode === mode);
     });
-    const show = (id, visible) => {
-      const el = $(id);
-      if (el) el.style.display = visible ? "" : "none";
-    };
-    show("fade-config-section", mode === "fade" || mode === "both");
-    show("trend-config-section", mode === "trend" || mode === "both");
+    refreshEnabledState();
   }
 
   document.querySelectorAll(".ss-mode-card").forEach((card) => {
@@ -55,13 +218,21 @@
    * `s`, so a win only clears the cycle while factor > 1/(1-p). Below that the
    * accumulated losses outgrow the payout and "keep going until you win" ends
    * in a bigger hole. The old preview showed only the progression, which made
-   * ×1.5 at a 0.52 cap look survivable — it isn't. */
+   * ×1.5 at a 0.52 cap look survivable — it isn't.
+   *
+   * It reads the *fade* cap and base: fade is the strategy that runs by
+   * default. It used to read trend's, which described a cycle nobody was
+   * running. */
   function updateMartingalePreview() {
     const preview = $("martingale-preview");
     if (!preview) return;
-    const mult = parseFloat($("cfg-martingale").value) || 2.1;
-    const base = parseFloat($("cfg-fade-bet").value) || 5.0;
-    const cap = parseFloat($("cfg-trend-cap").value) || 0.52;
+    const numOr = (name, fallback) => {
+      const v = parseFloat(readValue(name));
+      return isNaN(v) ? fallback : v;
+    };
+    const mult = numOr("ss_martingale_mult_factor", 2.1);
+    const base = numOr("ss_fade_base_shares", 5.0);
+    const cap = numOr("ss_fade_limit_cap", 0.52);
 
     const needed = cap < 1 ? 1 / (1 - cap) : Infinity;
     const rows = [];
@@ -83,6 +254,13 @@
       shares *= mult;
     }
 
+    const sizing = readValue("ss_sizing");
+    const inactive =
+      sizing && sizing !== "martingale"
+        ? `<div class="ss-field-hint mb-1">Sizing actual: <strong>${esc(sizing)}</strong>` +
+          ` — esta progresión no se está usando.</div>`
+        : "";
+
     const verdict =
       mult > needed
         ? `<span class="text-success">×${mult.toFixed(2)} recupera a $${cap.toFixed(2)}` +
@@ -92,27 +270,15 @@
           `Ganar el intento ${firstNegative || 3} ya deja el ciclo en pérdida.</span>`;
 
     preview.innerHTML =
+      inactive +
       `<strong>Ciclo a precio máximo $${cap.toFixed(2)} desde ${base.toFixed(1)} shares:</strong>` +
       `<table class="table table-sm small mb-2 mt-1"><thead><tr>` +
       `<th>#</th><th>Apuesta</th><th>Acumulado</th><th>Neto si gana</th>` +
       `</tr></thead><tbody><tr>${rows.join("</tr><tr>")}</tr></tbody></table>` +
       verdict;
   }
-  ["cfg-martingale", "cfg-fade-bet", "cfg-trend-cap"].forEach((id) => {
-    const el = $(id);
-    if (el) el.addEventListener("input", updateMartingalePreview);
-  });
 
-  const num = (id, value, fallback) => {
-    const el = $(id);
-    if (el) el.value = value != null ? value : fallback;
-  };
-  const check = (id, value) => {
-    const el = $(id);
-    if (el) el.checked = !!value;
-  };
-
-  // ── load ──
+  // ── load ─────────────────────────────────────────────────────────────────
   async function loadState() {
     try {
       const resp = await fetch("/state", { cache: "no-store" });
@@ -121,36 +287,44 @@
 
       const s = await resp.json();
       const c = s.config || {};
+      schema = s.fields || {};
+      registry = s.strategies || [];
+
+      renderStrategies(registry);
+      Object.entries(GROUPS).forEach(([box, names]) => renderGroup(box, names));
+
+      // Fill every rendered widget from the config payload, applying the
+      // field's display scale (ss_trend_min_strength is a fraction in the DB
+      // and a percentage on screen).
+      document.querySelectorAll("[data-cfg-field]").forEach((el) => {
+        const name = el.dataset.cfgField;
+        const value = c[name];
+        if (value === undefined || value === null) return;
+        if (el.type === "checkbox") {
+          el.checked = !!value;
+        } else if (el.dataset.kind === "float" || el.dataset.kind === "int") {
+          const scale = parseFloat(el.dataset.scale) || 1;
+          el.value = +(value * scale).toFixed(6);
+        } else {
+          el.value = String(value);
+        }
+      });
+
+      // Re-bind after render: the inputs these listen to didn't exist before.
+      ["ss_martingale_mult_factor", "ss_fade_base_shares", "ss_fade_limit_cap", "ss_sizing"]
+        .forEach((name) => {
+          const el = $("cfg-" + name);
+          if (el) el.addEventListener("input", updateMartingalePreview);
+        });
+      document.querySelectorAll("[data-cfg-field]").forEach((el) => {
+        el.addEventListener("input", refreshEnabledState);
+      });
 
       if (ssCheck) {
         ssCheck.checked = c.ss_enabled !== false;
         ssLabel.textContent = ssCheck.checked ? "Activado" : "Desactivado";
       }
-      selectSSMode(c.ss_mode || "both");
-
-      num("cfg-fade-bet", c.ss_fade_base_shares, 5.0);
-      num("cfg-fade-cap", c.ss_fade_limit_cap, 0.60);
-      num("cfg-fade-streak", c.ss_fade_streak_min, 4);
-      num("cfg-trend-bet", c.ss_trend_base_shares, 5.0);
-      num("cfg-trend-cap", c.ss_trend_limit_cap, 0.52);
-      // Stored as a fraction, shown as a percentage.
-      num(
-        "cfg-trend-strength",
-        c.ss_trend_min_strength != null
-          ? +(c.ss_trend_min_strength * 100).toFixed(3)
-          : null,
-        0.8,
-      );
-      num("cfg-martingale", c.ss_martingale_mult_factor, 2.1);
-      num("cfg-bankroll", c.starting_bankroll, 1000);
-
-      check("cfg-cl-enabled", c.cl_twap_enabled);
-      check("cfg-cl-record", c.cl_record_ticks);
-      const win = $("cfg-cl-window");
-      if (win) win.value = String(c.cl_twap_window || 30);
-      num("cfg-cl-stale", c.cl_twap_stale_seconds, 15);
-      num("cfg-cl-divergence", c.cl_divergence_max, 0);
-
+      selectSSMode(c.ss_mode || "fade");
       setModeUI(c.mode || "paper");
       updateMartingalePreview();
 
@@ -192,7 +366,7 @@
            "Selecciona Real arriba y guarda");
   }
 
-  // ── save ──
+  // ── save ─────────────────────────────────────────────────────────────────
   function showMsg(text, cls) {
     const el = $("cfg-save-msg");
     if (!el) return;
@@ -201,37 +375,42 @@
     setTimeout(() => { el.textContent = ""; el.className = "small mt-2"; }, 5000);
   }
 
-  $("btn-apply").addEventListener("click", async () => {
+  // Every widget on the page, whatever card it lives in, plus the three things
+  // that aren't RuntimeFields with an input: the master switch, the mode cards
+  // and paper/real.
+  function collect() {
     const body = {
       ss_enabled: ssCheck ? ssCheck.checked : true,
       ss_mode: ssMode,
-      ss_fade_base_shares: parseFloat($("cfg-fade-bet").value),
-      ss_fade_limit_cap: parseFloat($("cfg-fade-cap").value),
-      ss_fade_streak_min: parseInt($("cfg-fade-streak").value, 10),
-      ss_trend_base_shares: parseFloat($("cfg-trend-bet").value),
-      ss_trend_limit_cap: parseFloat($("cfg-trend-cap").value),
-      // Entered as a percentage, stored as a fraction.
-      ss_trend_min_strength: parseFloat($("cfg-trend-strength").value) / 100,
-      ss_martingale_mult_factor: parseFloat($("cfg-martingale").value),
-      starting_bankroll: parseFloat($("cfg-bankroll").value),
       mode: selectedMode,
-      cl_twap_enabled: $("cfg-cl-enabled").checked,
-      cl_twap_window: $("cfg-cl-window").value,
-      cl_twap_stale_seconds: parseFloat($("cfg-cl-stale").value),
-      cl_divergence_max: parseFloat($("cfg-cl-divergence").value),
-      cl_record_ticks: $("cfg-cl-record").checked,
     };
-    // An empty input parses to NaN, which would serialise as null and be
-    // rejected. Drop those instead of sending them.
-    Object.keys(body).forEach((k) => {
-      if (typeof body[k] === "number" && isNaN(body[k])) delete body[k];
+
+    document.querySelectorAll("[data-cfg-field]").forEach((el) => {
+      const name = el.dataset.cfgField;
+      if (el.type === "checkbox") {
+        body[name] = el.checked;
+        return;
+      }
+      if (el.dataset.kind === "float" || el.dataset.kind === "int") {
+        const scale = parseFloat(el.dataset.scale) || 1;
+        const raw = parseFloat(el.value);
+        // An empty input parses to NaN, which would serialise as null and be
+        // rejected by POST /config. Leave it out instead.
+        if (!isNaN(raw)) body[name] = raw / scale;
+        return;
+      }
+      body[name] = el.value;
     });
 
+    return body;
+  }
+
+  $("btn-apply").addEventListener("click", async () => {
     try {
       const resp = await fetch("/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(collect()),
         cache: "no-store",
       });
       if (resp.status === 401) { window.location.href = "/login"; return; }

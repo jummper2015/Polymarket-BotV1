@@ -35,6 +35,7 @@ DESCRIPTOR = StrategyDescriptor(
     ),
     evaluate=_evaluate,
     is_enabled=lambda state: getattr(state, "ss_mode", "fade") in ("trend", "both"),
+    enabled_when={"field": "ss_mode", "values": ["trend", "both"]},
     priority=50,
     params=(
         RuntimeField(

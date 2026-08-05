@@ -135,6 +135,25 @@ class TestEnablement:
         assert strategies.enabled_for(state, "btc") == [btc_only]
         assert strategies.enabled_for(state, "eth") == []
 
+    @pytest.mark.parametrize("descriptor", strategies.all_descriptors(), ids=lambda d: d.id)
+    def test_enabled_when_agrees_with_is_enabled(self, descriptor):
+        """The declarative mirror the settings page reads must not drift.
+
+        `is_enabled` is the runtime truth; `enabled_when` is what lets the UI
+        grey out a card before saving. If they disagree, /settings shows one
+        thing and the trader does another — the worst kind of bug to notice.
+        """
+        spec = descriptor.enabled_when
+        assert spec, f"{descriptor.id} sin enabled_when — /settings no sabría pintarlo"
+
+        field = RUNTIME_FIELDS[spec["field"]]
+        candidates = field.choices or (True, False)
+        for value in candidates:
+            state = SimpleNamespace(**{spec["field"]: value})
+            assert descriptor.enabled_for(state) == (value in spec["values"]), (
+                f"{descriptor.id}: {spec['field']}={value!r} discrepa"
+            )
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Conflict resolution — the tie-break that Fase 8 inverted

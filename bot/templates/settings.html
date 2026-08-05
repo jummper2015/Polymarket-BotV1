@@ -39,70 +39,50 @@
         </div>
       </div>
 
-      <div id="fade-config-section" class="mb-3">
-        <h6 class="ss-field-label mb-2" style="color:var(--ss-fade)">
-          <i class="bi bi-arrow-repeat"></i> Forma 1 — Fade
-        </h6>
-        <div class="row g-2">
-          <div class="col-md-4">
-            <label class="ss-field-label" for="cfg-fade-bet">Shares base</label>
-            <input type="number" step="0.5" min="1" class="form-control form-control-sm" id="cfg-fade-bet" />
-          </div>
-          <div class="col-md-4">
-            <label class="ss-field-label" for="cfg-fade-cap">Precio máximo</label>
-            <input type="number" step="0.01" min="0.1" max="0.99" class="form-control form-control-sm" id="cfg-fade-cap" />
-            <span class="ss-field-hint">No compra por encima de este precio</span>
-          </div>
-          <div class="col-md-4">
-            <label class="ss-field-label" for="cfg-fade-streak">Racha mínima</label>
-            <input type="number" step="1" min="2" max="20" class="form-control form-control-sm" id="cfg-fade-streak" />
-            <span class="ss-field-hint">Ventanas seguidas antes de entrar</span>
-          </div>
-        </div>
-      </div>
+      {# One card per registered strategy, rendered from /state.strategies.
+         There used to be a hand-written block per form here, which is why a
+         new parameter meant editing this file too. #}
+      <div id="strategy-cards"></div>
+    </div>
 
-      <div id="trend-config-section">
-        <h6 class="ss-field-label mb-2" style="color:var(--ss-trend)">
-          <i class="bi bi-graph-up-arrow"></i> Forma 2 — Trend
-        </h6>
-        <div class="row g-2">
-          <div class="col-md-4">
-            <label class="ss-field-label" for="cfg-trend-bet">Shares base</label>
-            <input type="number" step="0.5" min="1" class="form-control form-control-sm" id="cfg-trend-bet" />
-          </div>
-          <div class="col-md-4">
-            <label class="ss-field-label" for="cfg-trend-cap">Precio máximo</label>
-            <input type="number" step="0.01" min="0.1" max="0.99" class="form-control form-control-sm" id="cfg-trend-cap" />
-          </div>
-          <div class="col-md-4">
-            <label class="ss-field-label" for="cfg-trend-strength">Tendencia mínima (%)</label>
-            <input type="number" step="0.1" min="0" max="10" class="form-control form-control-sm" id="cfg-trend-strength" />
-            <span class="ss-field-hint">Movimiento de la vela 4h cerrada para operar su lado</span>
-          </div>
-        </div>
-        <div class="alert alert-info py-2 px-3 small mt-2 mb-0">
-          El lado se fija con la vela de 4h <strong>ya cerrada</strong> y se opera
-          durante las 4h siguientes. Si el bloque termina con pérdidas sin
-          recuperar, el ciclo <strong>se prorroga hasta ganar</strong> antes de
-          volver a mirar la tendencia.
-        </div>
+    {# ── Sizing ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-rulers"></i> Sizing</h2>
+        <span class="text-muted small">cómo crece la apuesta</span>
       </div>
+      <div class="alert alert-info py-2 px-3 small">
+        Con el edge medido (+3,74% por operación, 53,8% de acierto) Kelly pide
+        el <strong>4% del bankroll</strong>. La martingala apuesta ~100× eso, así
+        que <strong>Fijo</strong> es el valor por defecto. Cualquier modo pasa por
+        el mismo techo del 10% del bankroll por ventana.
+      </div>
+      <div class="row g-2" id="sizing-fields"></div>
     </div>
 
     {# ── Martingale ── #}
     <div class="ss-card notika-shadow mb-3">
-      <div class="ss-card-head"><h2><i class="bi bi-dice-3"></i> Martingale</h2></div>
-      <div class="row g-2 mb-2">
-        <div class="col-md-6">
-          <label class="ss-field-label" for="cfg-martingale">Multiplicador por pérdida</label>
-          <input type="number" step="0.1" min="1.01" max="10" class="form-control form-control-sm" id="cfg-martingale" />
-        </div>
-        <div class="col-md-6">
-          <label class="ss-field-label" for="cfg-bankroll">Bankroll inicial</label>
-          <input type="number" step="10" min="1" class="form-control form-control-sm" id="cfg-bankroll" />
-        </div>
+      <div class="ss-card-head">
+        <h2><i class="bi bi-dice-3"></i> Martingale</h2>
+        <span class="text-muted small">solo con sizing = Martingala</span>
       </div>
+      <div class="row g-2 mb-2" id="martingale-fields"></div>
       <div class="alert alert-warning py-2 px-3 small mb-0" id="martingale-preview"></div>
+    </div>
+
+    {# ── Regime filters ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-funnel"></i> Filtros de régimen</h2>
+        <span class="text-muted small">cuándo NO operar</span>
+      </div>
+      <div class="alert alert-info py-2 px-3 small">
+        Todos <strong>apagados por defecto</strong>: se probaron ~20 filtros
+        contra 35 días, así que el mejor luce bien por construcción. El
+        dashboard cuenta los descartes por motivo, que es lo que permite
+        comparar «con filtro» contra «sin filtro» sobre datos nuevos.
+      </div>
+      <div class="row g-2" id="regime-fields"></div>
     </div>
 
     {# ── Chainlink. POST /config already accepted these; there was just no UI. ── #}
@@ -118,39 +98,7 @@
         como filtro. Ver <code>docs/CHAINLINK_TWAP.md</code> §3.
       </div>
 
-      <div class="row g-2">
-        <div class="col-md-6">
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" id="cfg-cl-enabled" />
-            <label class="form-check-label ss-field-label" for="cfg-cl-enabled">Activar feed</label>
-          </div>
-          <span class="ss-field-hint">Requiere reiniciar el bot</span>
-        </div>
-        <div class="col-md-6">
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" id="cfg-cl-record" />
-            <label class="form-check-label ss-field-label" for="cfg-cl-record">Grabar tape</label>
-          </div>
-          <span class="ss-field-hint">Chainlink no sirve histórico: lo que no se grabe se pierde</span>
-        </div>
-        <div class="col-md-4">
-          <label class="ss-field-label" for="cfg-cl-window">Ventana TWAP</label>
-          <select id="cfg-cl-window" class="form-select form-select-sm">
-            <option value="30">30 segundos</option>
-            <option value="60">60 segundos</option>
-          </select>
-        </div>
-        <div class="col-md-4">
-          <label class="ss-field-label" for="cfg-cl-stale">Frescura máx. (s)</label>
-          <input type="number" step="1" min="1" max="120" class="form-control form-control-sm" id="cfg-cl-stale" />
-          <span class="ss-field-hint">Descarta ticks más viejos</span>
-        </div>
-        <div class="col-md-4">
-          <label class="ss-field-label" for="cfg-cl-divergence">Veto por divergencia</label>
-          <input type="number" step="0.001" min="0" max="0.05" class="form-control form-control-sm" id="cfg-cl-divergence" />
-          <span class="ss-field-hint">0 = desactivado. Calibrar antes de usar</span>
-        </div>
-      </div>
+      <div class="row g-2" id="chainlink-fields"></div>
     </div>
 
   </div>

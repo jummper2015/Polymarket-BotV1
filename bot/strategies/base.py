@@ -44,6 +44,13 @@ class StrategyDescriptor:
     evaluate: Callable[[StrategyContext], list]
     is_enabled: Callable[[Any], bool]        # takes BotState
     params: tuple[RuntimeField, ...] = ()
+    # Declarative mirror of `is_enabled`, for the settings page: it has to grey
+    # out a card the moment the user changes the toggle, before saving, and it
+    # can't evaluate a Python lambda. Shape: {"field": name, "values": [...]}.
+    #
+    # Two sources of truth for one fact is a smell, so `test_strategies.py`
+    # asserts they agree for every declared value of the field.
+    enabled_when: dict | None = None
     # Which assets this strategy can trade. Empty = every supported symbol.
     # `corridor` will need this: it requires a 15-minute market to exist too.
     symbols: tuple[str, ...] = ()
@@ -73,5 +80,6 @@ class StrategyDescriptor:
             "symbols": list(self.symbols),
             "priority": self.priority,
             "enabled": self.enabled_for(state) if state is not None else None,
+            "enabled_when": self.enabled_when,
             "params": [p.to_json() for p in self.params],
         }

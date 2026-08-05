@@ -36,6 +36,7 @@ DESCRIPTOR = StrategyDescriptor(
     # bot_config, documented in .env.example and covered by tests. Fase B
     # strategies bring their own `ss_<id>_enabled` boolean instead.
     is_enabled=lambda state: getattr(state, "ss_mode", "fade") in ("fade", "both"),
+    enabled_when={"field": "ss_mode", "values": ["fade", "both"]},
     priority=100,
     params=(
         RuntimeField(
