@@ -17,6 +17,12 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Deque, Dict, List, Optional, Tuple
 
+# The registry knows which strategies exist and what they expose; this module
+# just mirrors that into the dashboard payload. Import is safe in either
+# direction — bot.strategies only depends on bot.runtime_field.
+from .strategies import ids as strategy_ids
+from .strategies import to_json as strategy_registry_json
+
 
 @dataclass
 class Trade:
@@ -419,10 +425,8 @@ class BotState:
             committed = sum(t.cost for t in self.trades if t.status == "open")
             now = time.time()
 
-            # Per-strategy stats
-            fade_trades = [t for t in self.trades if t.strategy == "ss_fade"]
-            trend_trades = [t for t in self.trades if t.strategy == "ss_trend"]
-
+            # Per-strategy stats, one bucket per registered strategy. Derived
+            # from the registry so a new descriptor shows up here on its own.
             def _strat_stats(tlist):
                 w = sum(1 for t in tlist if t.status == "won")
                 l = sum(1 for t in tlist if t.status == "lost")
@@ -528,9 +532,10 @@ class BotState:
                     "uptime_seconds": now - self.started_at,
                 },
                 "strategy_stats": {
-                    "ss_fade": _strat_stats(fade_trades),
-                    "ss_trend": _strat_stats(trend_trades),
+                    sid: _strat_stats([t for t in self.trades if t.strategy == sid])
+                    for sid in strategy_ids()
                 },
+                "strategies": strategy_registry_json(self),
                 "trades": [
                     {
                         "id": t.id,

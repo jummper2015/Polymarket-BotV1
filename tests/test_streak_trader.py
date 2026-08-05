@@ -222,21 +222,25 @@ class TestContradictorySignals:
 
     @staticmethod
     def _resolve(signals):
-        # Mirrors the tie-break in StreakSnapperTrader._run_one_window.
-        if len({s.direction for s in signals}) > 1:
-            return [s for s in signals if s.strategy == "ss_trend"]
-        return signals
+        # The real function the trader calls. This used to be a hand-written
+        # mirror of the rule, which meant the test kept passing — asserting that
+        # Trend won — after the trader had been changed to keep Fade. A test
+        # that reimplements the thing it tests can only ever verify itself.
+        from bot import strategies
 
-    def test_opposite_sides_keep_only_trend(self):
-        """Trend's side is locked until its cycle wins, so it takes precedence.
+        kept, _dropped = strategies.resolve_conflicts(signals)
+        return kept
 
-        Skipping the window instead would stall a losing cycle for as long as
-        fade kept disagreeing — and in a trending market it disagrees often.
+    def test_opposite_sides_keep_only_fade(self):
+        """Fade takes precedence: +3.74%/op against Trend's −4.22% (Fase 8).
+
+        The old rule kept Trend, on the argument that a locked cycle shouldn't
+        stall. It cost 98 of 1.152 Fade entries in favour of the worse signal.
         """
         signals = [_sig("ss_fade", "DOWN"), _sig("ss_trend", "UP")]
         kept = self._resolve(signals)
-        assert [s.strategy for s in kept] == ["ss_trend"]
-        assert kept[0].direction == "UP"
+        assert [s.strategy for s in kept] == ["ss_fade"]
+        assert kept[0].direction == "DOWN"
 
     def test_same_side_keeps_both(self):
         signals = [_sig("ss_fade", "UP"), _sig("ss_trend", "UP")]

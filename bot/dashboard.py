@@ -20,6 +20,7 @@ from sqlalchemy import func
 
 from . import logger
 from .auth import SESSION_KEY, auth_enabled, check_password, init_auth
+from . import strategies
 from .config import PERSISTABLE_FIELDS, RUNTIME_FIELDS, load_config
 from .db import TradeModel, clear_config, db, get_all_config, set_many_config
 from .state import STATE, active_states
@@ -181,11 +182,11 @@ def _aggregate_db_stats(
             if acc["total_invested"] else 0.0,
         }
 
-    # The known strategies always appear, even with no trades, so the dashboard
+    # Registered strategies always appear, even with no trades, so the dashboard
     # renders an empty card instead of dropping the strategy off the page. Any
-    # other name found in the table is included too — that's what makes adding a
-    # strategy a one-place change rather than an edit here.
-    known = ["ss_fade", "ss_trend"]
+    # other name found in the table is included too — a strategy that has been
+    # retired still has history worth showing.
+    known = list(strategies.ids())
     for name in sorted(per_strategy):
         if name not in known:
             known.append(name)
@@ -320,31 +321,17 @@ def create_app() -> Flask:
             "symbols": list(states),
             "symbol_stats": all_symbol_stats or db_symbol_stats,
             "skips": snap.get("skips", {}),
+            # The registry, so /settings can render one card per strategy
+            # instead of a hand-written block per strategy.
+            "strategies": snap.get("strategies", []),
+            # Every runtime-editable field, straight from RUNTIME_FIELDS. This
+            # used to be a hand-copied list, which is how ss_sizing and the
+            # regime filters ended up configurable by POST but invisible in the
+            # UI. `mode` is not a RuntimeField on purpose (never persisted) and
+            # is added separately.
             "config": {
                 "mode": snap["mode"],
-                "starting_bankroll": snap["starting_bankroll"],
-                "ss_enabled": snap["ss_enabled"],
-                "ss_mode": snap["ss_mode"],
-                "ss_fade_base_shares": snap["ss_fade_base_shares"],
-                "ss_fade_limit_cap": snap["ss_fade_limit_cap"],
-                "ss_fade_streak_min": snap["ss_fade_streak_min"],
-                "ss_trend_base_shares": snap["ss_trend_base_shares"],
-                "ss_trend_limit_cap": snap["ss_trend_limit_cap"],
-                "ss_trend_min_strength": snap["ss_trend_min_strength"],
-                "ss_sizing": snap["ss_sizing"],
-                "ss_kelly_fraction": snap["ss_kelly_fraction"],
-                "ss_martingale_mult_factor": snap["ss_martingale_mult_factor"],
-                "ss_trading_hours": snap["ss_trading_hours"],
-                "ss_vol_min_pct": snap["ss_vol_min_pct"],
-                "ss_vol_max_pct": snap["ss_vol_max_pct"],
-                "ss_range_max_pct": snap["ss_range_max_pct"],
-                # POST /config has always accepted these; they just had no UI,
-                # so /settings couldn't show what was actually configured.
-                "cl_twap_enabled": snap["cl_twap_enabled"],
-                "cl_twap_window": snap["cl_twap_window"],
-                "cl_twap_stale_seconds": snap["cl_twap_stale_seconds"],
-                "cl_divergence_max": snap["cl_divergence_max"],
-                "cl_record_ticks": snap["cl_record_ticks"],
+                **{name: snap[name] for name in RUNTIME_FIELDS if name in snap},
             },
             "martingale": {
                 "fade": {

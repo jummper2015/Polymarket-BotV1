@@ -27,6 +27,7 @@ from . import logger
 from .binance_api import get_5min_candles, get_window_direction
 from .config import Config
 from . import regime
+from . import strategies
 from .db import TradeModel, db as _db, db_context
 from .db import MartingaleStateModel
 from .market import load_market_for_current_window
@@ -200,39 +201,46 @@ class StreakSnapperTrader(threading.Thread):
                 return
 
             # ── evaluate signals ──────────────────────────────────────────────
-            mode = self.state.ss_mode
+            # Which strategies run comes from the registry, not from a chain of
+            # `if mode in (...)`: a Fase B strategy is a descriptor away from
+            # trading, and it can't be forgotten here.
+            ctx = strategies.StrategyContext(
+                state=self.state,
+                symbol=self.symbol,
+                tokens=tokens,
+                streak=self.strategy,
+            )
 
             signals: list[StreakSignal] = []
+            for descriptor in strategies.enabled_for(self.state, self.symbol):
+                try:
+                    signals.extend(descriptor.evaluate(ctx))
+                except Exception as exc:
+                    # One broken strategy must not take the window down with it.
+                    logger.error(
+                        f"[SS] {descriptor.id} falló al evaluar: {exc}", icon="💥"
+                    )
 
-            if mode in ("fade", "both"):
-                sig = self.strategy.get_fade_signal()
-                if sig:
-                    signals.append(sig)
-
-            if mode in ("trend", "both"):
-                sig = self.strategy.get_trend_signal()
-                if sig:
-                    signals.append(sig)
-
-            # Fade and Trend can point at opposite sides of the same window.
+            # Two strategies can point at opposite sides of the same window.
             # Buying both costs exactly what the pair pays out, so it's a
             # guaranteed wash that also feeds each strategy one fake win and one
-            # fake loss.
+            # fake loss. `resolve_conflicts` keeps the highest-priority side.
             #
-            # Fade wins the tie-break. This used to be the other way round, on
-            # the argument that a locked trend cycle shouldn't stall — but the
-            # measurement says the cycle was the losing side of the trade:
-            # ss_fade returns +3.74% per entry and ss_trend −4.22% at the
-            # pre-open price (docs/RUTA.md Fase 8). Keeping Trend here discarded
+            # Fade outranks Trend (priority 100 vs 50). This used to be the
+            # other way round, on the argument that a locked trend cycle
+            # shouldn't stall — but the measurement says the cycle was the
+            # losing side: ss_fade returns +3.74% per entry and ss_trend −4.22%
+            # at the pre-open price (docs/RUTA.md Fase 8). The old rule dropped
             # 98 of 1.152 Fade entries in favour of the worse signal.
-            if len({s.direction for s in signals}) > 1:
-                detail = "  ".join(f"{s.strategy}→{s.direction}" for s in signals)
+            signals, dropped = strategies.resolve_conflicts(signals)
+            if dropped:
+                kept_detail = " ".join(f"{s.strategy}→{s.direction}" for s in signals)
+                lost_detail = " ".join(f"{s.strategy}→{s.direction}" for s in dropped)
                 logger.warn(
-                    f"[SS] señales contradictorias ({detail}) — prevalece "
-                    f"Fade, se descarta Trend en {tokens.slug}",
+                    f"[SS] señales contradictorias ({kept_detail}  vs  "
+                    f"{lost_detail}) — se descarta {lost_detail} en {tokens.slug}",
                     icon="⚖",
                 )
-                signals = [s for s in signals if s.strategy == "ss_fade"]
 
             if not signals:
                 self.state.set_status("watching", "Sin señal — observando")

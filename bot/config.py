@@ -8,6 +8,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from . import strategies
+# Re-exported: `RuntimeField` lives in its own module so `bot/strategies/` can
+# declare parameters without importing this one, which now imports *them*.
+from .runtime_field import RuntimeField
+
 
 def _env_float(key: str, default: float) -> float:
     raw = os.getenv(key)
@@ -74,101 +79,95 @@ def kelly_fraction(win_prob: float, price: float) -> float:
     return max(0.0, (win_prob * (1.0 + b) - 1.0) / b)
 
 
-@dataclass(frozen=True)
-class RuntimeField:
-    """A parameter that can be changed at runtime from /settings.
-
-    Single source of truth for parsing and range-checking, shared by the POST
-    /config handler (JSON values) and the persisted-override loader (strings
-    read back from `bot_config`).
-    """
-
-    name: str
-    kind: str                              # "float" | "int" | "bool" | "choice" | "hours"
-    minimum: float | None = None
-    maximum: float | None = None
-    choices: tuple[str, ...] = ()
-    persist: bool = True                   # survives a restart via bot_config
-
-    def coerce(self, value: object) -> tuple[bool, object]:
-        """Parse and validate. Returns (ok, parsed_value)."""
-        try:
-            if self.kind == "bool":
-                if isinstance(value, str):
-                    lowered = value.strip().lower()
-                    if lowered not in ("1", "true", "yes", "on", "0", "false", "no", "off"):
-                        return False, None
-                    return True, lowered in ("1", "true", "yes", "on")
-                return True, bool(value)
-
-            if self.kind == "choice":
-                parsed = str(value).strip().lower()
-                return (parsed in self.choices), parsed
-
-            if self.kind == "hours":
-                # Imported here: bot.regime imports nothing from this module, but
-                # keeping the dependency local documents that this is the only
-                # place config needs to know what an hours spec looks like.
-                from .regime import is_valid_hours_spec
-
-                parsed = str(value).strip()
-                return is_valid_hours_spec(parsed), parsed
-
-            parsed = int(value) if self.kind == "int" else float(value)
-        except (TypeError, ValueError):
-            return False, None
-
-        if self.minimum is not None and parsed < self.minimum:
-            return False, None
-        if self.maximum is not None and parsed > self.maximum:
-            return False, None
-        return True, parsed
-
-    def serialize(self, value: object) -> str:
-        if self.kind == "bool":
-            return "true" if value else "false"
-        return str(value)
-
-
+# Fields that belong to the bot itself rather than to any one strategy. The
+# per-strategy ones come from the registry, appended below.
+#
 # `mode` (paper/real) is deliberately absent: persisting it would let a setting
 # made weeks ago start the bot trading with real money after a restart.
+BASE_FIELDS: tuple[RuntimeField, ...] = (
+    RuntimeField("ss_enabled", "bool", label="Bot activo"),
+    RuntimeField(
+        "ss_mode", "choice", choices=("fade", "trend", "both"),
+        choice_labels=("Solo Fade", "Solo Trend", "Ambas"),
+        label="Formas activas",
+        hint="Fade por defecto: Trend pierde 4,22% por operación",
+    ),
+    RuntimeField(
+        "ss_martingale_mult_factor", "float", minimum=1.01, maximum=10.0,
+        label="Factor martingala", step=0.05,
+        hint="Solo con sizing=martingale. Debe superar 1/(1−cap) para recuperar",
+    ),
+    # How the stake grows. `flat` is the default because the measured edge
+    # (+3.74%/trade at 53.8% accuracy, docs/RUTA.md Fase 8) justifies about
+    # 4% of bankroll per trade, and a martingale bets ~100× that.
+    RuntimeField(
+        "ss_sizing", "choice", choices=("flat", "kelly", "martingale"),
+        choice_labels=("Fijo", "Kelly", "Martingala"),
+        label="Modo de sizing",
+        hint="Fijo por defecto; la martingala apuesta ~100× lo que el edge justifica",
+    ),
+    RuntimeField(
+        "ss_kelly_fraction", "float", minimum=0.05, maximum=1.0,
+        label="Fracción de Kelly", step=0.05,
+        hint="0,25 = cuarto de Kelly. Solo con sizing=kelly",
+    ),
+    # ── Regime filters (bot/regime.py) ────────────────────────────────────────
+    # All default to off. The measured differences by session and volatility
+    # band are suggestive, not significant — ~20 filters were tested, so the
+    # best of them looks good by construction. Off by default means the
+    # dashboard can compare "with" against "without" on live data.
+    RuntimeField(
+        "ss_trading_hours", "hours",
+        label="Franjas horarias UTC",
+        hint='Vacío = todas. Formato "13-21,21-24". Medido: US 13-21h +9,2%',
+    ),
+    RuntimeField(
+        "ss_vol_min_pct", "float", minimum=0.0, maximum=100.0,
+        label="Volatilidad mínima (pct)", step=5,
+        hint="Percentil de ATR de 1h sobre 2 días. 0 = sin suelo",
+    ),
+    RuntimeField(
+        "ss_vol_max_pct", "float", minimum=0.0, maximum=100.0,
+        label="Volatilidad máxima (pct)", step=5,
+        hint="100 = sin techo. La banda 25-75 midió +6,4%",
+    ),
+    RuntimeField(
+        "ss_range_max_pct", "float", minimum=0.0, maximum=100.0,
+        label="Rango 2h máximo (pct)", step=5,
+        hint="100 = sin filtro. Rango estrecho midió +6,1%",
+    ),
+    RuntimeField(
+        "starting_bankroll", "float", minimum=1.0, maximum=10_000_000,
+        label="Bankroll inicial", step=50,
+    ),
+    # ── Chainlink TWAP (docs/CHAINLINK_TWAP.md §7.6) ──────────────────────────
+    # All default to off: the feed launches 4-ago-2026 and the divergence
+    # thresholds can't be calibrated until weeks of tape exist.
+    RuntimeField("cl_twap_enabled", "bool", label="Feed Chainlink TWAP"),
+    RuntimeField("cl_twap_window", "choice", choices=("30", "60"), label="Ventana TWAP (s)"),
+    RuntimeField(
+        "cl_twap_stale_seconds", "float", minimum=1.0, maximum=120.0,
+        label="Tick obsoleto (s)", step=1,
+    ),
+    RuntimeField(
+        "cl_divergence_max", "float", minimum=0.0, maximum=0.05,
+        label="Divergencia máxima", step=0.001,
+    ),
+    RuntimeField("cl_record_ticks", "bool", label="Grabar ticks"),
+)
+
+# The registry contributes the per-strategy half. Declaring a parameter in a
+# descriptor is therefore enough to get parsing, range-checking, POST /config
+# and persistence — no edit here.
 RUNTIME_FIELDS: dict[str, RuntimeField] = {
-    f.name: f
-    for f in (
-        RuntimeField("ss_enabled", "bool"),
-        RuntimeField("ss_mode", "choice", choices=("fade", "trend", "both")),
-        RuntimeField("ss_fade_base_shares", "float", minimum=1, maximum=100_000),
-        RuntimeField("ss_fade_limit_cap", "float", minimum=0.10, maximum=0.99),
-        RuntimeField("ss_fade_streak_min", "int", minimum=2, maximum=20),
-        RuntimeField("ss_trend_base_shares", "float", minimum=1, maximum=100_000),
-        RuntimeField("ss_trend_limit_cap", "float", minimum=0.10, maximum=0.99),
-        RuntimeField("ss_trend_min_strength", "float", minimum=0.0, maximum=0.10),
-        RuntimeField("ss_martingale_mult_factor", "float", minimum=1.01, maximum=10.0),
-        # How the stake grows. `flat` is the default because the measured edge
-        # (+3.74%/trade at 53.8% accuracy, docs/RUTA.md Fase 8) justifies about
-        # 4% of bankroll per trade, and a martingale bets ~100× that.
-        RuntimeField("ss_sizing", "choice", choices=("flat", "kelly", "martingale")),
-        RuntimeField("ss_kelly_fraction", "float", minimum=0.05, maximum=1.0),
-        # ── Regime filters (bot/regime.py) ────────────────────────────────────
-        # All default to off. The measured differences by session and volatility
-        # band are suggestive, not significant — ~20 filters were tested, so the
-        # best of them looks good by construction. Off by default means the
-        # dashboard can compare "with" against "without" on live data.
-        RuntimeField("ss_trading_hours", "hours"),
-        RuntimeField("ss_vol_min_pct", "float", minimum=0.0, maximum=100.0),
-        RuntimeField("ss_vol_max_pct", "float", minimum=0.0, maximum=100.0),
-        RuntimeField("ss_range_max_pct", "float", minimum=0.0, maximum=100.0),
-        RuntimeField("starting_bankroll", "float", minimum=1.0, maximum=10_000_000),
-        # ── Chainlink TWAP (docs/CHAINLINK_TWAP.md §7.6) ──────────────────────
-        # All default to off: the feed launches 4-ago-2026 and the divergence
-        # thresholds can't be calibrated until weeks of tape exist.
-        RuntimeField("cl_twap_enabled", "bool"),
-        RuntimeField("cl_twap_window", "choice", choices=("30", "60")),
-        RuntimeField("cl_twap_stale_seconds", "float", minimum=1.0, maximum=120.0),
-        RuntimeField("cl_divergence_max", "float", minimum=0.0, maximum=0.05),
-        RuntimeField("cl_record_ticks", "bool"),
-    )
+    f.name: f for f in (*BASE_FIELDS, *strategies.params())
 }
+
+if len(RUNTIME_FIELDS) != len(BASE_FIELDS) + len(strategies.params()):
+    raise RuntimeError(
+        "dos campos runtime comparten nombre — uno estaría pisando al otro"
+    )
+
 
 PERSISTABLE_FIELDS = {k: f for k, f in RUNTIME_FIELDS.items() if f.persist}
 
