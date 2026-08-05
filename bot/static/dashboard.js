@@ -623,6 +623,8 @@
     SKIP_RANGE: "Rango de 2h demasiado ancho",
     // Este no es un filtro de régimen: viene encendido. Ver ss_max_entry_age.
     SKIP_LATE: "Ventana demasiado avanzada",
+    // Solo en modo real: la orden no llegó a enviarse.
+    SKIP_ORDER_FAILED: "Orden rechazada por el CLOB",
   };
 
   function renderSkips(s) {

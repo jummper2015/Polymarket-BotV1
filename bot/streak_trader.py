@@ -395,6 +395,20 @@ class StreakSnapperTrader(threading.Thread):
                 logger.err(f"[SS {strategy_label}] order failed: {exc}")
                 return
 
+            # `_place_limit_buy` swallows its own exceptions and returns None,
+            # so without this a rejected order fell through to the persist
+            # block and was written as an open real position — note="paper",
+            # counted in the P&L, and advancing the martingale on a trade that
+            # never existed. Recording a position we don't hold is worse than
+            # missing a window.
+            if not order_id:
+                logger.err(
+                    f"[SS {strategy_label}] la orden no se pudo enviar — "
+                    f"ventana {tokens.slug} descartada, no se registra posición"
+                )
+                self.state.record_skip("SKIP_ORDER_FAILED")
+                return
+
         # ── persist trade to DB ───────────────────────────────────────────────
         trade_id: int = 0
         try:
@@ -414,6 +428,9 @@ class StreakSnapperTrader(threading.Thread):
                     multiplier=sig.multiplier,
                     loss_streak=sig.loss_streak,
                     mode=self.state.mode,
+                    # A real trade always has an order id by this point (the
+                    # guard above returns otherwise), so "paper" can only mean
+                    # paper. It used to also mean "real order that failed".
                     note=f"order_id={order_id}" if order_id else "paper",
                 )
                 _db.session.add(trade)
