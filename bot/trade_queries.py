@@ -56,6 +56,7 @@ def build_query(filters: dict):
 
     for field, column in (
         ("strategy", TradeModel.strategy),
+        ("symbol", TradeModel.symbol),
         ("status", TradeModel.status),
         ("mode", TradeModel.mode),
         ("direction", TradeModel.direction),
@@ -151,19 +152,25 @@ def _drawdown(points: list[dict]) -> tuple[list[dict], float, float]:
 
 
 def metric_series(starting_bankroll: float, limit: int = 5_000,
-                  rolling_window: int = 50) -> dict:
+                  rolling_window: int = 50, symbol: str | None = None) -> dict:
     """Equity, drawdown and win-rate series for the charts.
 
     Built from resolved trades in resolution order. Open trades are excluded:
     they have no P&L yet, so including them would flatten the curve with points
     that carry no information.
 
-    No new table needed — TradeModel already stores pnl, cost, strategy and
-    resolved_at.
+    `symbol` restricts the curve to one market. Without it the equity line mixes
+    every market into one series, which is the portfolio view — useful, but not
+    what you read to judge whether a strategy works on a given asset.
+
+    No new table needed — TradeModel already stores pnl, cost, strategy, symbol
+    and resolved_at.
     """
+    query = TradeModel.query.filter(TradeModel.status.in_(("won", "lost")))
+    if symbol:
+        query = query.filter(TradeModel.symbol == symbol)
     rows = (
-        TradeModel.query
-        .filter(TradeModel.status.in_(("won", "lost")))
+        query
         .order_by(TradeModel.resolved_at.asc(), TradeModel.id.asc())
         .limit(limit)
         .all()

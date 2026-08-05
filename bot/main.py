@@ -15,10 +15,10 @@ from . import logger
 from .auth import auth_enabled, verify_startup_config
 from .chainlink_feed import ChainlinkTwapFeed
 from .chainlink_recorder import ChainlinkRecorder
-from .config import Config, coerce_overrides, load_config
+from .config import Config, coerce_overrides, load_config, min_recovering_factor
 from .dashboard import create_app, start_price_fetcher
 from .db import get_all_config, init_db
-from .state import STATE
+from .state import STATE, active_states, state_for
 from .streak_trader import StreakSnapperTrader
 
 
@@ -107,11 +107,46 @@ def _apply_persisted_overrides() -> None:
         )
 
     if overrides:
-        STATE.configure(**overrides)
+        for state in active_states().values():
+            state.configure(**overrides)
         detail = "  ".join(f"{k}={v}" for k, v in sorted(overrides.items()))
         logger.ok(
             f"configuración guardada aplicada sobre .env — {detail}",
             icon="⚙",
+        )
+
+
+def _warn_if_martingale_cannot_recover() -> None:
+    """Warn when the configured factor can't clear a losing cycle at the cap.
+
+    A martingale only keeps recovering while `f > 1/(1-p)`. Below that, "keep
+    doubling until you win" is arithmetically a slower way to lose: the losses
+    behind the cycle outgrow what the next win pays back. The factor is shared
+    by both strategies, so the tighter of the two caps sets the bar. Checked
+    against the *effective* values, after saved overrides are applied.
+
+    Silent unless the martingale is the sizing actually in use — the factor
+    still exists in the config under `flat` and `kelly`, it just isn't read.
+    """
+    if STATE.ss_sizing != "martingale":
+        return
+
+    factor = STATE.ss_martingale_mult_factor
+    strategies = []
+    if STATE.ss_mode in ("fade", "both"):
+        strategies.append(("Fade", STATE.ss_fade_limit_cap))
+    if STATE.ss_mode in ("trend", "both"):
+        strategies.append(("Trend", STATE.ss_trend_limit_cap))
+
+    for label, cap in strategies:
+        needed = min_recovering_factor(cap)
+        if factor > needed:
+            continue
+        logger.warn(
+            f"[SS {label}] el multiplicador ×{factor:.2f} NO recupera al precio "
+            f"máximo {cap:.2f}: hace falta más de ×{needed:.2f}. Con este ajuste, "
+            f"seguir el ciclo hasta ganar aumenta la pérdida en vez de cerrarla.",
+            icon="⚠",
         )
 
 
@@ -137,25 +172,35 @@ def main() -> None:
         logger.err(f"arranque abortado: {auth_error}")
         raise SystemExit(1)
 
-    # Configure state from config
-    STATE.configure(
-        mode=cfg.mode,
-        has_credentials=cfg.has_credentials,
-        starting_bankroll=cfg.starting_bankroll,
-        ss_enabled=cfg.ss_enabled,
-        ss_mode=cfg.ss_mode,
-        ss_fade_base_shares=cfg.ss_fade_base_shares,
-        ss_fade_limit_cap=cfg.ss_fade_limit_cap,
-        ss_fade_streak_min=cfg.ss_fade_streak_min,
-        ss_trend_base_shares=cfg.ss_trend_base_shares,
-        ss_trend_limit_cap=cfg.ss_trend_limit_cap,
-        ss_martingale_mult_factor=cfg.ss_martingale_mult_factor,
-        cl_twap_enabled=cfg.cl_twap_enabled,
-        cl_twap_window=cfg.cl_twap_window,
-        cl_twap_stale_seconds=cfg.cl_twap_stale_seconds,
-        cl_divergence_max=cfg.cl_divergence_max,
-        cl_record_ticks=cfg.cl_record_ticks,
-    )
+    # Configure state from config. Every market gets the same settings — they
+    # are strategy parameters, not per-asset ones — but each keeps its own
+    # prices, trades and martingale cycle.
+    for symbol in cfg.ss_symbols:
+        state_for(symbol).configure(
+            mode=cfg.mode,
+            has_credentials=cfg.has_credentials,
+            starting_bankroll=cfg.starting_bankroll,
+            ss_enabled=cfg.ss_enabled,
+            ss_mode=cfg.ss_mode,
+            ss_fade_base_shares=cfg.ss_fade_base_shares,
+            ss_fade_limit_cap=cfg.ss_fade_limit_cap,
+            ss_fade_streak_min=cfg.ss_fade_streak_min,
+            ss_trend_base_shares=cfg.ss_trend_base_shares,
+            ss_trend_limit_cap=cfg.ss_trend_limit_cap,
+            ss_trend_min_strength=cfg.ss_trend_min_strength,
+            ss_sizing=cfg.ss_sizing,
+            ss_kelly_fraction=cfg.ss_kelly_fraction,
+            ss_martingale_mult_factor=cfg.ss_martingale_mult_factor,
+            ss_trading_hours=cfg.ss_trading_hours,
+            ss_vol_min_pct=cfg.ss_vol_min_pct,
+            ss_vol_max_pct=cfg.ss_vol_max_pct,
+            ss_range_max_pct=cfg.ss_range_max_pct,
+            cl_twap_enabled=cfg.cl_twap_enabled,
+            cl_twap_window=cfg.cl_twap_window,
+            cl_twap_stale_seconds=cfg.cl_twap_stale_seconds,
+            cl_divergence_max=cfg.cl_divergence_max,
+            cl_record_ticks=cfg.cl_record_ticks,
+        )
 
     if cfg.is_real and not cfg.has_credentials:
         logger.warn(
@@ -172,21 +217,35 @@ def main() -> None:
     else:
         _apply_persisted_overrides()
 
+    _warn_if_martingale_cannot_recover()
+
     # Start BTC price fetcher (CoinGecko, for dashboard display)
     start_price_fetcher()
 
     # Start Chainlink TWAP feed (no-op unless CL_TWAP_ENABLED)
     cl_feed = _start_chainlink_feed(cfg)
 
-    # Start Streak Snapper trader
-    trader = StreakSnapperTrader(cfg)
-    trader.start()
+    # One trader thread per market. They share nothing but the config: each has
+    # its own BotState, its own martingale row and its own DB queries.
+    traders = [StreakSnapperTrader(cfg, symbol) for symbol in cfg.ss_symbols]
+    for trader in traders:
+        trader.start()
     # Report the EFFECTIVE settings, which may include saved overrides.
+    # Report the sizing that's actually in use — announcing "martingale=×2.1"
+    # under flat sizing described a setting the bot wasn't reading.
+    if STATE.ss_sizing == "martingale":
+        sizing_detail = f"martingale ×{STATE.ss_martingale_mult_factor}"
+    elif STATE.ss_sizing == "kelly":
+        sizing_detail = f"kelly ×{STATE.ss_kelly_fraction:.2f}"
+    else:
+        sizing_detail = "flat"
+
     logger.ok(
-        f"Streak Snapper started — mode={STATE.ss_mode} "
+        f"Streak Snapper started — markets={','.join(cfg.ss_symbols).upper()} "
+        f"mode={STATE.ss_mode} "
         f"fade_shares={STATE.ss_fade_base_shares} fade_cap={STATE.ss_fade_limit_cap} "
         f"trend_shares={STATE.ss_trend_base_shares} trend_cap={STATE.ss_trend_limit_cap} "
-        f"martingale=×{STATE.ss_martingale_mult_factor}",
+        f"sizing={sizing_detail}",
         icon="🚀",
     )
 
@@ -205,7 +264,8 @@ def main() -> None:
             f"Otro proceso ya lo está usando — deténlo, o arranca este bot con "
             f"PORT=<otro puerto> python run.py"
         )
-        trader.stop()
+        for trader in traders:
+            trader.stop()
         if cl_feed is not None:
             cl_feed.stop()
         raise SystemExit(1)

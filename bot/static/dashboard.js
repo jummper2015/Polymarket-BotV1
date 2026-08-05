@@ -242,6 +242,47 @@
         const betEl = $(key + "-next-bet");
         if (betEl) betEl.textContent = ((config[baseField] || 5) * mult).toFixed(2) + " sh";
       });
+
+    renderTrendCycle(mart.trend || {}, config);
+  }
+
+  // The trend side is locked for the 4h block a closed candle licensed, and
+  // stays locked past it while the martingale is still recovering — so the
+  // block countdown and the lock are two different things and both are shown.
+  function renderTrendCycle(trend, config) {
+    const FOUR_HOURS = 4 * 3600;
+
+    const sideEl = $("trend-cycle-side");
+    if (sideEl) {
+      sideEl.textContent = trend.cycle_side || "sin ciclo";
+      sideEl.className =
+        "ss-mart-val" + (trend.cycle_side ? " locked" : " muted");
+    }
+
+    const ttlEl = $("trend-cycle-ttl");
+    if (ttlEl) {
+      if (!trend.cycle_side || trend.cycle_anchor_ts == null) {
+        ttlEl.textContent = "—";
+      } else {
+        const left = trend.cycle_anchor_ts + 2 * FOUR_HOURS - Date.now() / 1000;
+        ttlEl.textContent =
+          left > 0 ? fmtDuration(left) : "agotado, ciclo prorrogado";
+      }
+    }
+
+    const strengthEl = $("trend-strength");
+    if (strengthEl) {
+      const s = trend.last_strength;
+      if (s == null) {
+        strengthEl.textContent = "—";
+      } else {
+        const min = config.ss_trend_min_strength;
+        const clears = min == null || Math.abs(s) >= min;
+        strengthEl.textContent =
+          (s * 100).toFixed(3) + "%" + (clears ? "" : " (sin tendencia)");
+        strengthEl.className = "ss-mart-val" + (clears ? "" : " muted");
+      }
+    }
   }
 
   function renderStatus(s) {

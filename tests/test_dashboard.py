@@ -212,6 +212,46 @@ class TestState:
         for field in ("cl_twap_enabled", "cl_twap_window", "cl_record_ticks"):
             assert field in config
 
+    def test_exposes_the_trend_cycle(self, client):
+        # The dashboard shows which side is locked and until when; without
+        # these the martingale card can't tell a cycle from a fresh signal.
+        trend = client.get("/state").get_json()["martingale"]["trend"]
+        for field in ("cycle_side", "cycle_anchor_ts", "last_strength"):
+            assert field in trend
+
+    def test_exposes_the_trend_threshold(self, client):
+        config = client.get("/state").get_json()["config"]
+        assert "ss_trend_min_strength" in config
+
+
+class TestTrendThresholdConfig:
+    def test_accepts_a_valid_threshold(self, client):
+        resp = client.post("/config", json={"ss_trend_min_strength": 0.012})
+        assert resp.status_code == 200
+        config = client.get("/state").get_json()["config"]
+        assert config["ss_trend_min_strength"] == pytest.approx(0.012)
+
+    # Out-of-range values are dropped, not rejected — the pre-existing contract
+    # of _build_config_updates for every field. What matters here is that the
+    # bad value never reaches STATE.
+    def test_ignores_a_threshold_above_the_range(self, client):
+        # 0.10 is 10% in four hours; past that nothing would ever trade.
+        before = client.get("/state").get_json()["config"]["ss_trend_min_strength"]
+        resp = client.post("/config", json={"ss_trend_min_strength": 0.5})
+
+        assert "ss_trend_min_strength" not in resp.get_json()["updated"]
+        after = client.get("/state").get_json()["config"]["ss_trend_min_strength"]
+        assert after == before
+
+    def test_ignores_a_negative_threshold(self, client):
+        before = client.get("/state").get_json()["config"]["ss_trend_min_strength"]
+        resp = client.post("/config", json={"ss_trend_min_strength": -0.01})
+
+        assert "ss_trend_min_strength" not in resp.get_json()["updated"]
+        assert (
+            client.get("/state").get_json()["config"]["ss_trend_min_strength"] == before
+        )
+
 
 class TestBalance:
     def test_open_trades_are_committed_not_available(self, app, client):

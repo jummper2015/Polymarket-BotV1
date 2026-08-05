@@ -48,9 +48,12 @@ class BotState:
     MAX_LOG_LINES    = 500
     MAX_PRICE_HISTORY = 600
 
-    def __init__(self) -> None:
+    def __init__(self, symbol: str = "btc") -> None:
         self._lock = threading.RLock()
         self.started_at: float = time.time()
+        # Which asset this state belongs to. Every trader thread owns exactly
+        # one, so nothing here is shared across markets.
+        self.symbol: str = symbol
 
         # --- runtime-mutable config ---
         self.mode: str = "paper"
@@ -59,25 +62,49 @@ class BotState:
 
         # ── Streak Snapper config ─────────────────────────────────────────────
         self.ss_enabled: bool  = True
-        self.ss_mode: str      = "both"   # "fade" | "trend" | "both"
+        self.ss_mode: str      = "fade"   # "fade" | "trend" | "both"
 
         # Forma 1 — Fade (anti-racha)
         self.ss_fade_base_shares: float   = 5.0
-        self.ss_fade_limit_cap: float     = 0.60
+        self.ss_fade_limit_cap: float     = 0.52
         self.ss_fade_streak_min: int      = 4
 
         # Forma 2 — Trend (seguir tendencia 4h)
         self.ss_trend_base_shares: float  = 5.0
         self.ss_trend_limit_cap: float    = 0.52
+        self.ss_trend_min_strength: float = 0.008
 
-        # Martingale global
-        self.ss_martingale_mult_factor: float = 1.5
+        # Sizing. "flat" keeps the stake constant; "kelly" scales it to the
+        # measured edge; "martingale" is the old behaviour, kept for comparison.
+        self.ss_sizing: str = "flat"
+        self.ss_kelly_fraction: float = 0.25
+        self.ss_martingale_mult_factor: float = 2.1
+
+        # Regime filters (bot/regime.py). Sentinels mean "no restriction".
+        self.ss_trading_hours: str = ""
+        self.ss_vol_min_pct: float = 0.0
+        self.ss_vol_max_pct: float = 100.0
+        self.ss_range_max_pct: float = 100.0
+
+        # Windows skipped by a filter, counted by reason. This is the whole
+        # point of shipping the filters off by default: it lets the dashboard
+        # show what a filter *would* have skipped before anyone turns it on.
+        self.skips: Dict[str, int] = {}
 
         # Runtime martingale state (synced with DB)
         self.ss_fade_martingale_mult: float  = 1.0
         self.ss_fade_loss_streak: int        = 0
         self.ss_trend_martingale_mult: float = 1.0
         self.ss_trend_loss_streak: int       = 0
+
+        # Trend cycle: the side locked in and the 4h candle that chose it.
+        # Mirrors martingale_state in the DB so the dashboard can read it
+        # without a query on every poll.
+        self.ss_trend_cycle_side: Optional[str] = None
+        self.ss_trend_cycle_anchor_ts: Optional[int] = None
+        # Last measured move of the closed 4h candle, for the dashboard to show
+        # how far a flat market is from clearing the threshold.
+        self.ss_trend_last_strength: Optional[float] = None
 
         # --- bot status ---
         self.bot_status: str = "idle"
@@ -136,8 +163,10 @@ class BotState:
             "mode", "has_credentials", "starting_bankroll",
             "ss_enabled", "ss_mode",
             "ss_fade_base_shares", "ss_fade_limit_cap", "ss_fade_streak_min",
-            "ss_trend_base_shares", "ss_trend_limit_cap",
-            "ss_martingale_mult_factor",
+            "ss_trend_base_shares", "ss_trend_limit_cap", "ss_trend_min_strength",
+            "ss_sizing", "ss_kelly_fraction", "ss_martingale_mult_factor",
+            "ss_trading_hours", "ss_vol_min_pct", "ss_vol_max_pct",
+            "ss_range_max_pct",
             "cl_enabled",
             "cl_twap_enabled", "cl_twap_window", "cl_twap_stale_seconds",
             "cl_divergence_max", "cl_record_ticks",
@@ -152,8 +181,10 @@ class BotState:
             "mode", "starting_bankroll",
             "ss_enabled", "ss_mode",
             "ss_fade_base_shares", "ss_fade_limit_cap", "ss_fade_streak_min",
-            "ss_trend_base_shares", "ss_trend_limit_cap",
-            "ss_martingale_mult_factor",
+            "ss_trend_base_shares", "ss_trend_limit_cap", "ss_trend_min_strength",
+            "ss_sizing", "ss_kelly_fraction", "ss_martingale_mult_factor",
+            "ss_trading_hours", "ss_vol_min_pct", "ss_vol_max_pct",
+            "ss_range_max_pct",
             "cl_twap_enabled", "cl_twap_window", "cl_twap_stale_seconds",
             "cl_divergence_max", "cl_record_ticks",
         }
@@ -327,6 +358,25 @@ class BotState:
                 count += 1
             return count
 
+    def record_skip(self, reason: str) -> None:
+        """Count a window the regime filters refused."""
+        with self._lock:
+            self.skips[reason] = self.skips.get(reason, 0) + 1
+
+    def current_bankroll(self) -> float:
+        """Starting bankroll plus everything resolved so far.
+
+        Kelly sizes off the bankroll you have, not the one you started with, so
+        a losing run shrinks the stake by itself — the property a martingale
+        deliberately inverts. Open positions are not deducted: their cost is
+        already sunk and their outcome is still unknown.
+        """
+        with self._lock:
+            resolved = sum(
+                (t.pnl or 0.0) for t in self.trades if t.status in ("won", "lost")
+            )
+            return max(0.0, self.starting_bankroll + resolved)
+
     def log_event(self, level: str, message: str) -> None:
         entry = {"t": time.time(), "level": level, "message": message}
         with self._lock:
@@ -398,6 +448,7 @@ class BotState:
                     }
 
             return {
+                "symbol": self.symbol,
                 "mode": self.mode,
                 "has_credentials": self.has_credentials,
                 # SS config
@@ -408,12 +459,24 @@ class BotState:
                 "ss_fade_streak_min": self.ss_fade_streak_min,
                 "ss_trend_base_shares": self.ss_trend_base_shares,
                 "ss_trend_limit_cap": self.ss_trend_limit_cap,
+                "ss_trend_min_strength": self.ss_trend_min_strength,
+                "ss_sizing": self.ss_sizing,
+                "ss_kelly_fraction": self.ss_kelly_fraction,
                 "ss_martingale_mult_factor": self.ss_martingale_mult_factor,
+                "ss_trading_hours": self.ss_trading_hours,
+                "ss_vol_min_pct": self.ss_vol_min_pct,
+                "ss_vol_max_pct": self.ss_vol_max_pct,
+                "ss_range_max_pct": self.ss_range_max_pct,
+                "skips": dict(self.skips),
                 # Runtime martingale
                 "ss_fade_martingale_mult": self.ss_fade_martingale_mult,
                 "ss_fade_loss_streak": self.ss_fade_loss_streak,
                 "ss_trend_martingale_mult": self.ss_trend_martingale_mult,
                 "ss_trend_loss_streak": self.ss_trend_loss_streak,
+                # Trend cycle
+                "ss_trend_cycle_side": self.ss_trend_cycle_side,
+                "ss_trend_cycle_anchor_ts": self.ss_trend_cycle_anchor_ts,
+                "ss_trend_last_strength": self.ss_trend_last_strength,
                 # General
                 "starting_bankroll": self.starting_bankroll,
                 "bot_status": self.bot_status,
@@ -493,7 +556,27 @@ class BotState:
             }
 
 
-# ── Global state (single market: BTC) ────────────────────────────────────────
+# ── Per-market state ─────────────────────────────────────────────────────────
+# One BotState per asset, created on demand by `state_for()`. BTC exists from
+# import so `STATE` — which the dashboard and the tests still reference — is
+# never None.
 
-STATE = BotState()
-STATES = {"btc": STATE}   # Kept as dict for backward-compat with dashboard
+STATES: Dict[str, "BotState"] = {"btc": BotState("btc")}
+STATE = STATES["btc"]
+
+
+def state_for(symbol: str) -> BotState:
+    """The BotState for `symbol`, created on first use.
+
+    Not locked: traders are started one at a time from `main()` before any of
+    them runs, so there is no window where two threads create the same entry.
+    """
+    key = (symbol or "btc").strip().lower()
+    if key not in STATES:
+        STATES[key] = BotState(key)
+    return STATES[key]
+
+
+def active_states() -> Dict[str, "BotState"]:
+    """Every market with a state, in insertion order (BTC first)."""
+    return dict(STATES)

@@ -15,11 +15,35 @@ from . import logger
 
 BINANCE_BASE = "https://api.binance.com/api/v3"
 
+# Polymarket slugs use the short name ("btc-updown-5m-…"); Binance wants the
+# pair. One map so the two vocabularies only meet in one place.
+#
+# Only these three are supported. XRP and DOGE have 5-min markets too, but their
+# books quote 3-6 cents wide against 1 cent for these, and the whole measured
+# edge is under 2 cents — the spread would eat it before the signal spoke.
+SYMBOL_PAIRS = {
+    "btc": "BTCUSDT",
+    "eth": "ETHUSDT",
+    "sol": "SOLUSDT",
+}
 
-def _get_klines(interval: str, limit: int, end_time_ms: int | None = None) -> Optional[List[dict]]:
+SUPPORTED_SYMBOLS = tuple(SYMBOL_PAIRS)
+
+
+def pair_for(symbol: str) -> str:
+    """Binance pair for a Polymarket symbol. Unknown symbols fall back to BTC."""
+    return SYMBOL_PAIRS.get((symbol or "").strip().lower(), "BTCUSDT")
+
+
+def _get_klines(
+    interval: str,
+    limit: int,
+    end_time_ms: int | None = None,
+    symbol: str = "BTCUSDT",
+) -> Optional[List[dict]]:
     """Fetch klines from Binance. Returns list of [open_time, open, high, low, close, ...]."""
     params: dict = {
-        "symbol": "BTCUSDT",
+        "symbol": symbol,
         "interval": interval,
         "limit": limit,
     }
@@ -41,14 +65,15 @@ def _get_klines(interval: str, limit: int, end_time_ms: int | None = None) -> Op
     return None
 
 
-def get_5min_windows(n: int = 16) -> Optional[List[dict]]:
-    """Return the last `n` completed 5-min windows with BTC direction.
+def get_5min_windows(n: int = 16, symbol: str = "btc") -> Optional[List[dict]]:
+    """Return the last `n` completed 5-min windows with direction.
 
     Each window dict:
       {ts: unix_start, open: float, close: float, direction: "UP"|"DOWN"}
     Ordered oldest → newest.
     """
-    raw = _get_klines("5m", limit=n + 1)  # +1 to get the current (possibly incomplete) candle
+    # +1 to get the current (possibly incomplete) candle
+    raw = _get_klines("5m", limit=n + 1, symbol=pair_for(symbol))
     if raw is None:
         return None
 
@@ -101,7 +126,9 @@ def get_5min_windows(n: int = 16) -> Optional[List[dict]]:
 NEAR_FLAT_THRESHOLD = 5e-5   # relative: 0.005%
 
 
-def get_window_direction(window_ts: int, lookback: int = 24) -> Optional[str]:
+def get_window_direction(
+    window_ts: int, lookback: int = 24, symbol: str = "btc"
+) -> Optional[str]:
     """Direction of the completed 5-min candle starting at `window_ts`.
 
     Used to settle a trade the moment its window closes — Gamma takes about
@@ -111,7 +138,7 @@ def get_window_direction(window_ts: int, lookback: int = 24) -> Optional[str]:
     Returns None (defer to Gamma, the official source) when the candle isn't
     closed yet, isn't in the fetched range, or moved too little to call.
     """
-    raw = _get_klines("5m", limit=lookback)
+    raw = _get_klines("5m", limit=lookback, symbol=pair_for(symbol))
     if raw is None:
         return None
 
@@ -141,48 +168,77 @@ def get_window_direction(window_ts: int, lookback: int = 24) -> Optional[str]:
     return None
 
 
-def get_4h_trend() -> Optional[dict]:
-    """Get the current 4h candle to determine trend direction.
+FOUR_HOURS = 4 * 3600
+
+
+def get_last_closed_4h_candle(symbol: str = "btc") -> Optional[dict]:
+    """The most recently *closed* 4h candle, and the block it licenses.
+
+    The trend cycle reads this one, not the candle in progress: at the moment a
+    4h candle opens its close equals its open, so there is no trend to detect
+    yet.  Measuring the candle that just finished and trading its direction over
+    the next four hours is the only version of "4h trend" that a backtest can
+    reproduce without seeing the future.
 
     Returns:
-      {ts: unix_start, open: float, close: float, direction: "UP"|"DOWN"}
-    or None on failure.
+      {ts, open, close, direction, strength, block_start, block_end}
+    where `strength` is the signed relative move (close-open)/open, and
+    [block_start, block_end) is the 4h span this candle's direction applies to.
     """
-    raw = _get_klines("4h", limit=1)
-    if raw is None or len(raw) == 0:
+    raw = _get_klines("4h", limit=2, symbol=pair_for(symbol))
+    if raw is None or len(raw) < 2:
         return None
 
-    k = raw[0]
+    # raw[-1] is the candle still forming; raw[-2] is the last closed one.
+    k = raw[-2]
     ts = int(k[0]) // 1000
     open_px = float(k[1])
     close_px = float(k[4])
+    if open_px <= 0:
+        return None
 
     return {
         "ts": ts,
         "open": open_px,
         "close": close_px,
         "direction": "UP" if close_px >= open_px else "DOWN",
+        "strength": (close_px - open_px) / open_px,
+        "block_start": ts + FOUR_HOURS,
+        "block_end": ts + 2 * FOUR_HOURS,
     }
 
 
-def get_4h_trend_cached(last_ts: int | None = None) -> Optional[dict]:
-    """Get 4h trend, only re-fetching if the candle timestamp changed."""
-    trend = get_4h_trend()
-    if trend is None:
+def get_5min_candles(n: int = 600, symbol: str = "btc") -> Optional[List[dict]]:
+    """Last `n` closed 5-min candles with full OHLC, oldest → newest.
+
+    `get_5min_windows` only carries open/close/direction, which is all the
+    streak needs. The regime filters need highs and lows to measure a range, and
+    enough history to place the current reading in a percentile of its own past.
+    """
+    raw = _get_klines("5m", limit=min(n, 1000) + 1, symbol=pair_for(symbol))
+    if raw is None:
         return None
 
-    if last_ts is not None and trend["ts"] == last_ts:
-        trend["_cached"] = True
-    return trend
+    candles: List[dict] = []
+    for k in raw[:-1]:      # drop the candle still forming
+        candles.append({
+            "ts": int(k[0]) // 1000,
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5]),
+        })
+    return candles or None
 
 
-def get_btc_spot_price() -> Optional[float]:
-    """Get current BTC spot price from Binance ticker (for display only)."""
+def get_btc_spot_price(symbol: str = "btc") -> Optional[float]:
+    """Get current spot price from Binance ticker (for display only)."""
     for attempt in range(2):
         try:
             r = requests.get(
                 f"{BINANCE_BASE}/ticker/price",
-                params={"symbol": "BTCUSDT"},
+                params={"symbol": pair_for(symbol)},
                 timeout=5,
             )
             if r.status_code == 200:

@@ -48,28 +48,57 @@
   $("btn-paper").addEventListener("click", () => setModeUI("paper"));
   $("btn-real").addEventListener("click", () => setModeUI("real"));
 
-  /* Martingale preview. ×1.5 compounds fast — six losses is 11× the base bet —
-   * so the progression is spelled out rather than left to the imagination. */
+  /* Martingale preview.
+   *
+   * The number that matters isn't the size of the next bet, it's what you're
+   * left with if that bet WINS. Buying `s` shares at `p` costs `s·p` and pays
+   * `s`, so a win only clears the cycle while factor > 1/(1-p). Below that the
+   * accumulated losses outgrow the payout and "keep going until you win" ends
+   * in a bigger hole. The old preview showed only the progression, which made
+   * ×1.5 at a 0.52 cap look survivable — it isn't. */
   function updateMartingalePreview() {
     const preview = $("martingale-preview");
     if (!preview) return;
-    const mult = parseFloat($("cfg-martingale").value) || 1.5;
+    const mult = parseFloat($("cfg-martingale").value) || 2.1;
     const base = parseFloat($("cfg-fade-bet").value) || 5.0;
+    const cap = parseFloat($("cfg-trend-cap").value) || 0.52;
 
-    const steps = [];
-    let bet = base;
-    let total = 0;
+    const needed = cap < 1 ? 1 / (1 - cap) : Infinity;
+    const rows = [];
+    let shares = base;
+    let spent = 0;
+    let firstNegative = 0;
+
     for (let i = 1; i <= 6; i++) {
-      steps.push(`$${bet.toFixed(2)}`);
-      total += bet;
-      bet *= mult;
+      const cost = shares * cap;
+      const net = shares - cost - spent;   // payout − this cost − everything lost so far
+      if (net < 0 && !firstNegative) firstNegative = i;
+      rows.push(
+        `<td>${i}</td><td>${shares.toFixed(1)} sh</td>` +
+        `<td>$${(spent + cost).toFixed(2)}</td>` +
+        `<td class="${net < 0 ? "text-danger" : "text-success"}">` +
+        `${net >= 0 ? "+" : ""}$${net.toFixed(2)}</td>`
+      );
+      spent += cost;
+      shares *= mult;
     }
+
+    const verdict =
+      mult > needed
+        ? `<span class="text-success">×${mult.toFixed(2)} recupera a $${cap.toFixed(2)}` +
+          ` (hace falta más de ×${needed.toFixed(2)}).</span>`
+        : `<span class="text-danger"><strong>×${mult.toFixed(2)} NO recupera a ` +
+          `$${cap.toFixed(2)}</strong>: hace falta más de ×${needed.toFixed(2)}. ` +
+          `Ganar el intento ${firstNegative || 3} ya deja el ciclo en pérdida.</span>`;
+
     preview.innerHTML =
-      `<strong>Progresión ×${mult.toFixed(2)} desde $${base.toFixed(2)}:</strong><br/>` +
-      steps.join(" → ") +
-      `<br/><span class="text-muted">6 pérdidas seguidas exponen $${total.toFixed(2)}</span>`;
+      `<strong>Ciclo a precio máximo $${cap.toFixed(2)} desde ${base.toFixed(1)} shares:</strong>` +
+      `<table class="table table-sm small mb-2 mt-1"><thead><tr>` +
+      `<th>#</th><th>Apuesta</th><th>Acumulado</th><th>Neto si gana</th>` +
+      `</tr></thead><tbody><tr>${rows.join("</tr><tr>")}</tr></tbody></table>` +
+      verdict;
   }
-  ["cfg-martingale", "cfg-fade-bet"].forEach((id) => {
+  ["cfg-martingale", "cfg-fade-bet", "cfg-trend-cap"].forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener("input", updateMartingalePreview);
   });
@@ -104,7 +133,15 @@
       num("cfg-fade-streak", c.ss_fade_streak_min, 4);
       num("cfg-trend-bet", c.ss_trend_base_shares, 5.0);
       num("cfg-trend-cap", c.ss_trend_limit_cap, 0.52);
-      num("cfg-martingale", c.ss_martingale_mult_factor, 1.5);
+      // Stored as a fraction, shown as a percentage.
+      num(
+        "cfg-trend-strength",
+        c.ss_trend_min_strength != null
+          ? +(c.ss_trend_min_strength * 100).toFixed(3)
+          : null,
+        0.8,
+      );
+      num("cfg-martingale", c.ss_martingale_mult_factor, 2.1);
       num("cfg-bankroll", c.starting_bankroll, 1000);
 
       check("cfg-cl-enabled", c.cl_twap_enabled);
@@ -173,6 +210,8 @@
       ss_fade_streak_min: parseInt($("cfg-fade-streak").value, 10),
       ss_trend_base_shares: parseFloat($("cfg-trend-bet").value),
       ss_trend_limit_cap: parseFloat($("cfg-trend-cap").value),
+      // Entered as a percentage, stored as a fraction.
+      ss_trend_min_strength: parseFloat($("cfg-trend-strength").value) / 100,
       ss_martingale_mult_factor: parseFloat($("cfg-martingale").value),
       starting_bankroll: parseFloat($("cfg-bankroll").value),
       mode: selectedMode,

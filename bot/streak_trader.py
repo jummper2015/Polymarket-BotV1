@@ -24,13 +24,14 @@ from typing import Optional
 import requests
 
 from . import logger
-from .binance_api import get_window_direction
+from .binance_api import get_5min_candles, get_window_direction
 from .config import Config
+from . import regime
 from .db import TradeModel, db as _db, db_context
 from .db import MartingaleStateModel
 from .market import load_market_for_current_window
 from .price_feed import PriceFeed
-from .state import STATE, Trade
+from .state import Trade, state_for
 from .strategy_streak import StreakSnapperStrategy, StreakSignal
 
 
@@ -69,10 +70,11 @@ def _floor_to_tick(price: float) -> float:
 class StreakSnapperTrader(threading.Thread):
     """Thread that drives the Streak Snapper 5-min window cycle."""
 
-    def __init__(self, cfg: Config) -> None:
-        super().__init__(name="ss-trader", daemon=True)
-        self.cfg   = cfg
-        self.state = STATE
+    def __init__(self, cfg: Config, symbol: str = "btc") -> None:
+        super().__init__(name=f"ss-trader-{symbol}", daemon=True)
+        self.cfg    = cfg
+        self.symbol = symbol
+        self.state  = state_for(symbol)
         self._stop = threading.Event()
 
         # CLOB V2 client (real mode only)
@@ -93,7 +95,7 @@ class StreakSnapperTrader(threading.Thread):
 
     def run(self) -> None:
         logger.set_context(self.state)
-        logger.info("[SS] Streak Snapper Trader iniciado", icon="🚀")
+        logger.info(f"[SS {self.symbol.upper()}] Streak Snapper Trader iniciado", icon="🚀")
 
         # Load past trades from DB into memory (survives restarts → correct PNL)
         self._load_state_from_db()
@@ -114,7 +116,8 @@ class StreakSnapperTrader(threading.Thread):
                 # Newest N, then back to chronological order — the in-memory
                 # cache only feeds the dashboard, so it doesn't need full history.
                 trades = (
-                    TradeModel.query.order_by(TradeModel.id.desc())
+                    TradeModel.query.filter_by(symbol=self.symbol)
+                    .order_by(TradeModel.id.desc())
                     .limit(MEM_TRADE_CACHE_SIZE)
                     .all()
                 )
@@ -156,7 +159,7 @@ class StreakSnapperTrader(threading.Thread):
         self.state.set_status("loading", "Cargando mercado")
         tokens = load_market_for_current_window(
             self.cfg.gamma_host,
-            symbol="btc",
+            symbol=self.symbol,
             retry_seconds=self.cfg.market_load_retry_seconds,
             on_slug_change=lambda slug, ts: self.state.set_window(slug, ts),
         )
@@ -181,6 +184,21 @@ class StreakSnapperTrader(threading.Thread):
         time.sleep(2.0)  # brief warmup for first prices
 
         try:
+            # ── regime gate ───────────────────────────────────────────────────
+            # Checked before the signals so a filtered window costs one Binance
+            # call instead of the whole signal path, and so the skip reason is
+            # recorded even when a signal would have fired.
+            verdict = self._check_regime()
+            if not verdict.allowed:
+                self.state.record_skip(verdict.reason)
+                self.state.set_status("watching", verdict.detail)
+                logger.info(f"[SS] {verdict.reason}: {verdict.detail}", icon="⏭")
+                ttl = tokens.window_ts + WINDOW_SECONDS - time.time()
+                if ttl > 0:
+                    self._stop.wait(ttl + RESOLVE_GRACE_SECONDS)
+                self._last_window_slug = tokens.slug
+                return
+
             # ── evaluate signals ──────────────────────────────────────────────
             mode = self.state.ss_mode
 
@@ -198,21 +216,25 @@ class StreakSnapperTrader(threading.Thread):
 
             # Fade and Trend can point at opposite sides of the same window.
             # Buying both costs exactly what the pair pays out, so it's a
-            # guaranteed wash that also feeds each martingale one fake win and
-            # one fake loss. Sit the window out instead.
-            conflicting = len({s.direction for s in signals}) > 1
-            if conflicting:
+            # guaranteed wash that also feeds each strategy one fake win and one
+            # fake loss.
+            #
+            # Fade wins the tie-break. This used to be the other way round, on
+            # the argument that a locked trend cycle shouldn't stall — but the
+            # measurement says the cycle was the losing side of the trade:
+            # ss_fade returns +3.74% per entry and ss_trend −4.22% at the
+            # pre-open price (docs/RUTA.md Fase 8). Keeping Trend here discarded
+            # 98 of 1.152 Fade entries in favour of the worse signal.
+            if len({s.direction for s in signals}) > 1:
                 detail = "  ".join(f"{s.strategy}→{s.direction}" for s in signals)
                 logger.warn(
-                    f"[SS] señales contradictorias ({detail}) — "
-                    f"se omite la ventana {tokens.slug}",
+                    f"[SS] señales contradictorias ({detail}) — prevalece "
+                    f"Fade, se descarta Trend en {tokens.slug}",
                     icon="⚖",
                 )
-                signals = []
+                signals = [s for s in signals if s.strategy == "ss_fade"]
 
-            if conflicting:
-                self.state.set_status("watching", "Señales contradictorias — sin operar")
-            elif not signals:
+            if not signals:
                 self.state.set_status("watching", "Sin señal — observando")
                 logger.transient(
                     f"[SS] {tokens.slug}  sin señal  "
@@ -241,6 +263,39 @@ class StreakSnapperTrader(threading.Thread):
             self._resolve_pending_trades(
                 wait_for_slug=tokens.slug, max_wait=RESOLVE_MAX_WAIT
             )
+
+    # ── regime gate ───────────────────────────────────────────────────────────
+
+    def _check_regime(self) -> regime.RegimeVerdict:
+        """Ask the regime filters whether this window should be traded at all.
+
+        Candles are only fetched when a percentile-based filter is actually
+        configured — with everything at its default the gate costs nothing, and
+        an hours-only setup doesn't need price history either.
+        """
+        state = self.state
+        hours = getattr(state, "ss_trading_hours", "") or ""
+        vol_min = getattr(state, "ss_vol_min_pct", 0.0)
+        vol_max = getattr(state, "ss_vol_max_pct", 100.0)
+        range_max = getattr(state, "ss_range_max_pct", 100.0)
+
+        needs_candles = vol_min > 0.0 or vol_max < 100.0 or range_max < 100.0
+        candles: list = []
+        if needs_candles:
+            candles = get_5min_candles(regime.PERCENTILE_LOOKBACK + 50, self.symbol) or []
+            if not candles:
+                # No history means no basis to refuse. Blocking here would turn
+                # a Binance hiccup into a silent trading halt.
+                logger.warn("[SS] sin velas para el filtro de régimen — no se filtra")
+                return regime.hours_filter(hours)
+
+        return regime.evaluate(
+            candles,
+            hours_spec=hours,
+            vol_min_pct=vol_min,
+            vol_max_pct=vol_max,
+            range_max_pct=range_max,
+        )
 
     # ── signal execution ──────────────────────────────────────────────────────
 
@@ -303,6 +358,7 @@ class StreakSnapperTrader(threading.Thread):
             with db_context():
                 trade = TradeModel(
                     strategy=sig.strategy,
+                    symbol=self.symbol,
                     direction=sig.direction,
                     token_id=token_id,
                     window_slug=tokens.slug,
@@ -378,7 +434,7 @@ class StreakSnapperTrader(threading.Thread):
             with db_context():
                 return (
                     _db.session.query(TradeModel)
-                    .filter_by(status="open", window_slug=slug)
+                    .filter_by(status="open", window_slug=slug, symbol=self.symbol)
                     .count()
                     > 0
                 )
@@ -389,7 +445,11 @@ class StreakSnapperTrader(threading.Thread):
         """One resolution sweep. Returns the number of trades resolved."""
         try:
             with db_context():
-                open_trades = _db.session.query(TradeModel).filter_by(status="open").all()
+                open_trades = (
+                    _db.session.query(TradeModel)
+                    .filter_by(status="open", symbol=self.symbol)
+                    .all()
+                )
         except Exception:
             return 0
 
@@ -405,7 +465,7 @@ class StreakSnapperTrader(threading.Thread):
             # Binance settles the moment the candle closes; Gamma needs ~3 min,
             # which is longer than the window itself.
             source = "binance"
-            winner = get_window_direction(trade.window_ts)
+            winner = get_window_direction(trade.window_ts, symbol=self.symbol)
             if winner is None:
                 winner = self._get_window_outcome(trade.window_slug)
                 source = "gamma"
@@ -488,7 +548,8 @@ class StreakSnapperTrader(threading.Thread):
             with db_context():
                 pending = (
                     _db.session.query(TradeModel)
-                    .filter(TradeModel.resolution_source == "binance")
+                    .filter(TradeModel.resolution_source == "binance",
+                            TradeModel.symbol == self.symbol)
                     .order_by(TradeModel.id.desc())
                     .limit(CONFIRM_BATCH_SIZE)
                     .all()

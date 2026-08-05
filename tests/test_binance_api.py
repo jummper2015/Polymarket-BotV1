@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from bot.binance_api import (
     get_5min_windows,
-    get_4h_trend,
+    get_last_closed_4h_candle,
     get_btc_spot_price,
     get_window_direction,
     NEAR_FLAT_THRESHOLD,
@@ -199,96 +199,62 @@ class TestGet5minWindows:
         assert all(w["direction"] == "UP" for w in result)
 
 
-# ── get_4h_trend ──────────────────────────────────────────────────────────────
+# ── get_last_closed_4h_candle ─────────────────────────────────────────────────
 
 
-class TestGet4hTrend:
-    """Tests for get_4h_trend() — 4-hour trend direction."""
+class TestGetLastClosedFourHourCandle:
+    """The trend cycle signals off the candle that finished, not the live one."""
 
-    @patch("bot.binance_api.requests.get")
-    def test_4h_up_trend(self, mock_get):
-        """Close > Open -> UP trend."""
-        candle = [_make_kline(1_785_600_000_000, 63000.0, 63500.0)]
-
+    @staticmethod
+    def _respond(mock_get, candles):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = candle
+        mock_resp.json.return_value = candles
         mock_get.return_value = mock_resp
 
-        result = get_4h_trend()
+    @patch("bot.binance_api.requests.get")
+    def test_returns_the_closed_candle_not_the_forming_one(self, mock_get):
+        closed  = _make_kline(1_785_600_000_000, 63000.0, 63630.0)   # +1.0%
+        forming = _make_kline(1_785_614_400_000, 63630.0, 63000.0)   # still open
+        self._respond(mock_get, [closed, forming])
+
+        result = get_last_closed_4h_candle()
         assert result is not None
-        assert result["direction"] == "UP"
-        assert result["open"] == 63000.0
-        assert result["close"] == 63500.0
         assert result["ts"] == 1_785_600_000
+        assert result["direction"] == "UP"
+        assert result["close"] == 63630.0
 
     @patch("bot.binance_api.requests.get")
-    def test_4h_down_trend(self, mock_get):
-        """Close < Open -> DOWN trend."""
-        candle = [_make_kline(1_785_600_000_000, 63500.0, 62400.0)]
+    def test_strength_is_signed(self, mock_get):
+        closed  = _make_kline(1_785_600_000_000, 63000.0, 62370.0)   # −1.0%
+        forming = _make_kline(1_785_614_400_000, 62370.0, 62400.0)
+        self._respond(mock_get, [closed, forming])
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = candle
-        mock_get.return_value = mock_resp
-
-        result = get_4h_trend()
-        assert result is not None
+        result = get_last_closed_4h_candle()
         assert result["direction"] == "DOWN"
-        assert result["open"] == 63500.0
-        assert result["close"] == 62400.0
+        assert result["strength"] == pytest.approx(-0.01)
 
     @patch("bot.binance_api.requests.get")
-    def test_4h_flat_trend_is_up(self, mock_get):
-        """Close == Open -> UP (close >= open)."""
-        candle = [_make_kline(1_785_600_000_000, 62000.0, 62000.0)]
+    def test_block_covers_the_four_hours_after_the_candle(self, mock_get):
+        closed  = _make_kline(1_785_600_000_000, 63000.0, 63630.0)
+        forming = _make_kline(1_785_614_400_000, 63630.0, 63700.0)
+        self._respond(mock_get, [closed, forming])
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = candle
-        mock_get.return_value = mock_resp
-
-        result = get_4h_trend()
-        assert result is not None
-        assert result["direction"] == "UP"
+        result = get_last_closed_4h_candle()
+        assert result["block_start"] == 1_785_600_000 + 14400
+        assert result["block_end"] == 1_785_600_000 + 28800
 
     @patch("bot.binance_api.requests.get")
-    def test_4h_empty_response_returns_none(self, mock_get):
-        """Empty list from Binance -> None."""
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = []
-        mock_get.return_value = mock_resp
+    def test_single_candle_returns_none(self, mock_get):
+        """Without a forming candle there is no way to know which one closed."""
+        self._respond(mock_get, [_make_kline(1_785_600_000_000, 63000.0, 63500.0)])
+        assert get_last_closed_4h_candle() is None
 
-        result = get_4h_trend()
-        assert result is None
-
-    @patch("bot.binance_api.time.sleep")  # skip retry delay
+    @patch("bot.binance_api.time.sleep")
     @patch("bot.binance_api.requests.get")
-    def test_4h_network_error_returns_none(self, mock_get, mock_sleep):
-        """Network error -> None."""
+    def test_network_error_returns_none(self, mock_get, mock_sleep):
         mock_get.side_effect = Exception("Timeout")
-
-        result = get_4h_trend()
-        assert result is None
-
-    @patch("bot.binance_api.requests.get")
-    def test_4h_big_move(self, mock_get):
-        """Large price move — verify float parsing works with big numbers."""
-        candle = [_make_kline(1_785_600_000_000, 59800.12, 63450.89)]
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = candle
-        mock_get.return_value = mock_resp
-
-        result = get_4h_trend()
-        assert result is not None
-        assert result["direction"] == "UP"
-        assert isinstance(result["open"], float)
-        assert isinstance(result["close"], float)
-        assert result["open"] == 59800.12
-        assert result["close"] == 63450.89
+        assert get_last_closed_4h_candle() is None
 
 
 # ── get_btc_spot_price ────────────────────────────────────────────────────────

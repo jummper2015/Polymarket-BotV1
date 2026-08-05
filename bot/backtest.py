@@ -29,6 +29,8 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
+from .config import min_recovering_factor
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -40,7 +42,12 @@ FADE_LIMIT_CAP    = 0.60
 FADE_STREAK_MIN   = 4
 TREND_BASE_SHARES = 5
 TREND_LIMIT_CAP   = 0.52
-MARTINGALE_FACTOR = 1.5
+# Minimum |move| of a closed 4h candle to call it a trend. Override with
+# --min-strength to sweep it.
+TREND_MIN_STRENGTH = 0.008
+# 2.1, not 1.5: a martingale only keeps recovering while factor > 1/(1-cap),
+# which is 2.083 at the 0.52 trend cap (bot/config.py:min_recovering_factor).
+MARTINGALE_FACTOR = 2.1
 
 HISTORY_WINDOWS = 16  # windows of context for streak detection
 
@@ -121,20 +128,38 @@ def fetch_klines(interval: str, limit: int) -> Optional[List[dict]]:
 # ── 4h trend lookup ───────────────────────────────────────────────────────────
 
 
-def build_4h_trend_map(candles_4h: List[dict]) -> Dict[int, str]:
-    """Build a map: 5-min timestamp → 4h trend direction at that time."""
+FOUR_HOURS = 14400
+
+
+def build_4h_signal_map(candles_4h: List[dict]) -> Dict[int, dict]:
+    """Map each 5-min timestamp → the 4h candle that had already closed by then.
+
+    A candle licenses the *following* 4h block, never its own. Mapping a window
+    to the candle containing it — which is what this function used to do — reads
+    a close that hadn't happened yet, so every trend trade was placed knowing
+    how its own 4h candle would end. That inflated `ss_trend` in every result
+    published before this change.
+
+    Each entry carries the signed relative move so the caller can apply its own
+    "is this a trend at all" threshold.
+    """
     if not candles_4h:
         return {}
 
-    trend_map: Dict[int, str] = {}
+    signal_map: Dict[int, dict] = {}
     for c4 in candles_4h:
-        start_ts = c4["ts"]
-        end_ts = start_ts + 14400  # 4 hours
-        # Every 5-min window within this 4h block gets this trend
-        for ts in range(start_ts, end_ts, 300):
-            trend_map[ts] = c4["direction"]
+        if c4["open"] <= 0:
+            continue
+        signal = {
+            "direction": c4["direction"],
+            "strength": (c4["close"] - c4["open"]) / c4["open"],
+            "anchor_ts": c4["ts"],
+        }
+        block_start = c4["ts"] + FOUR_HOURS
+        for ts in range(block_start, block_start + FOUR_HOURS, 300):
+            signal_map[ts] = signal
 
-    return trend_map
+    return signal_map
 
 
 # ── Martingale state machine ──────────────────────────────────────────────────
@@ -203,23 +228,69 @@ def get_fade_signal(
     }
 
 
+class TrendCycleSim:
+    """The one-side-per-4h-block cycle, mirroring strategy_streak.py.
+
+    A closed 4h candle that moved at least `min_strength` locks its direction
+    for the following block. The lock outlives the block while the martingale
+    still has losses to recover — the cycle runs until it wins.
+    """
+
+    def __init__(self, martingale: MartingaleSim, min_strength: float):
+        self.mart = martingale
+        self.min_strength = min_strength
+        self.side: Optional[str] = None
+        self.anchor_ts: Optional[int] = None
+        self.extensions = 0
+        self.cycles_opened = 0
+
+    def side_for(self, ts: int, signal: Optional[dict]) -> Optional[str]:
+        if self.side is not None and self.anchor_ts is not None:
+            if ts < self.anchor_ts + 2 * FOUR_HOURS:
+                return self.side
+            if self.mart.multiplier > 1.0:
+                self.extensions += 1
+                return self.side
+            self.side = None
+            self.anchor_ts = None
+
+        if signal is None or abs(signal["strength"]) < self.min_strength:
+            return None
+
+        self.side = signal["direction"]
+        self.anchor_ts = signal["anchor_ts"]
+        self.cycles_opened += 1
+        return self.side
+
+    def on_win(self) -> None:
+        self.mart.on_win()
+        self.side = None
+        self.anchor_ts = None
+
+    def on_loss(self) -> None:
+        self.mart.on_loss()
+
+
 def get_trend_signal(
-    trend_4h: Optional[str],
-    martingale: MartingaleSim,
+    ts: int,
+    signal_4h: Optional[dict],
+    cycle: TrendCycleSim,
     limit_cap: float = TREND_LIMIT_CAP,
 ) -> Optional[dict]:
-    """Check if we have a trend-following signal."""
-    if trend_4h is None:
+    """Check if we have a trend-following signal for this window."""
+    side = cycle.side_for(ts, signal_4h)
+    if side is None:
         return None
 
+    strength = (signal_4h or {}).get("strength", 0.0)
     return {
         "strategy": "ss_trend",
-        "direction": trend_4h,
+        "direction": side,
         "limit_cap": limit_cap,
-        "shares": martingale.current_shares(),
-        "multiplier": martingale.multiplier,
-        "loss_streak": martingale.loss_streak,
-        "signal_reason": f"tendencia 4h {trend_4h}",
+        "shares": cycle.mart.current_shares(),
+        "multiplier": cycle.mart.multiplier,
+        "loss_streak": cycle.mart.loss_streak,
+        "signal_reason": f"ciclo 4h {side} ({strength * 100:+.2f}%)",
         "streak_len": 0,
         "streak_dir": "",
     }
@@ -230,9 +301,11 @@ def get_trend_signal(
 
 def run_backtest(
     windows_5m: List[dict],
-    trend_map: Dict[int, str],
+    signal_map: Dict[int, dict],
     mode: str = "both",  # "fade", "trend", "both"
     labels: Optional[Dict[int, Optional[str]]] = None,
+    factor: float = MARTINGALE_FACTOR,
+    min_strength: float = TREND_MIN_STRENGTH,
 ) -> Tuple[List[dict], dict]:
     """Run the backtest against historical 5-min windows.
 
@@ -247,8 +320,9 @@ def run_backtest(
     start_idx = HISTORY_WINDOWS
 
     # Martingale states (independent per strategy)
-    fade_mart  = MartingaleSim(FADE_BASE_SHARES, MARTINGALE_FACTOR)
-    trend_mart = MartingaleSim(TREND_BASE_SHARES, MARTINGALE_FACTOR)
+    fade_mart  = MartingaleSim(FADE_BASE_SHARES, factor)
+    trend_mart = MartingaleSim(TREND_BASE_SHARES, factor)
+    trend_cycle = TrendCycleSim(trend_mart, min_strength)
 
     trades: List[dict] = []
 
@@ -278,7 +352,8 @@ def run_backtest(
 
         entry_ts = entry_candle["ts"]
         binance_direction = outcome_candle["direction"]
-        trend_4h = trend_map.get(entry_ts)
+        signal_4h = signal_map.get(entry_ts)
+        trend_4h = signal_4h["direction"] if signal_4h else None
 
         if labels is None:
             actual_direction = binance_direction
@@ -340,7 +415,7 @@ def run_backtest(
 
         # ── Forma 2: Trend ──
         if mode in ("trend", "both"):
-            sig = get_trend_signal(trend_4h, trend_mart)
+            sig = get_trend_signal(entry_ts, signal_4h, trend_cycle)
             if sig is not None:
                 entry_price = min(sig["limit_cap"], entry_candle["open"])
                 entry_price = max(0.01, round(entry_price, 4))
@@ -374,10 +449,10 @@ def run_backtest(
                 trend_pnl += pnl
                 if won:
                     trend_wins += 1
-                    trend_mart.on_win()
+                    trend_cycle.on_win()
                 else:
                     trend_losses += 1
-                    trend_mart.on_loss()
+                    trend_cycle.on_loss()
                     max_trend_mult = max(max_trend_mult, trend_mart.multiplier)
 
     # ── Build summary ──
@@ -413,7 +488,11 @@ def run_backtest(
             "win_rate": round(trend_wins / trend_resolved, 4) if trend_resolved else 0,
             "pnl": round(trend_pnl, 4),
             "max_multiplier": round(max_trend_mult, 4),
+            "min_strength": min_strength,
+            "cycles_opened": trend_cycle.cycles_opened,
+            "windows_extended": trend_cycle.extensions,
         },
+        "factor": factor,
         "combined_pnl": round(fade_pnl + trend_pnl, 4),
     }
 
@@ -465,6 +544,12 @@ def main():
                         choices=["gamma", "binance"],
                         help="Outcome source. 'gamma' is settlement truth; "
                              "'binance' mislabels ~4.5%% of windows (default: gamma)")
+    parser.add_argument("--factor", type=float, default=MARTINGALE_FACTOR,
+                        help=f"Martingale factor (default: {MARTINGALE_FACTOR})")
+    parser.add_argument("--min-strength", type=float, default=TREND_MIN_STRENGTH,
+                        dest="min_strength",
+                        help="Min |move| of the closed 4h candle to trade its "
+                             f"direction (default: {TREND_MIN_STRENGTH})")
     args = parser.parse_args()
 
     print(f"\n{'='*60}")
@@ -473,7 +558,9 @@ def main():
     print(f"  Mode: {args.mode}")
     print(f"  Base shares: Fade={FADE_BASE_SHARES} Trend={TREND_BASE_SHARES}")
     print(f"  Limit caps: Fade≤${FADE_LIMIT_CAP} Trend≤${TREND_LIMIT_CAP}")
-    print(f"  Martingale: ×{MARTINGALE_FACTOR}")
+    print(f"  Martingale: ×{args.factor}  (recupera a {TREND_LIMIT_CAP} si >×"
+          f"{min_recovering_factor(TREND_LIMIT_CAP):.2f})")
+    print(f"  Trend mín.: {args.min_strength * 100:.3f}% de la vela 4h cerrada")
     print(f"{'='*60}\n")
 
     # Fetch data
@@ -496,8 +583,8 @@ def main():
     else:
         print(f"   Got {len(candles_4h)} 4h candles")
 
-    trend_map = build_4h_trend_map(candles_4h)
-    print(f"   Built trend map with {len(trend_map)} entries\n")
+    signal_map = build_4h_signal_map(candles_4h)
+    print(f"   Built 4h signal map with {len(signal_map)} entries\n")
 
     # Fetch outcome labels
     labels = None
@@ -519,7 +606,10 @@ def main():
 
     # Run backtest
     print("🔄 Running backtest...")
-    trades, summary = run_backtest(candles_5m, trend_map, mode=args.mode, labels=labels)
+    trades, summary = run_backtest(
+        candles_5m, signal_map, mode=args.mode, labels=labels,
+        factor=args.factor, min_strength=args.min_strength,
+    )
 
     # Print summary
     print(f"\n{'='*60}")
@@ -549,6 +639,9 @@ def main():
     print(f"  Win Rate: {summary['trend']['win_rate']:.1%}")
     print(f"  P&L:    ${summary['trend']['pnl']:+.2f}")
     print(f"  Max Martingale: ×{summary['trend']['max_multiplier']:.2f}")
+    print(f"  Ciclos abiertos: {summary['trend']['cycles_opened']}  "
+          f"(ventanas prorrogadas tras el bloque: "
+          f"{summary['trend']['windows_extended']})")
     print()
     print(f"  💰 Combined P&L: ${summary['combined_pnl']:+.2f}")
     print(f"{'='*60}\n")

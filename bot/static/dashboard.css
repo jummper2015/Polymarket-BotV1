@@ -135,6 +135,9 @@ body.ss-body {
 .ss-mart-val { color: var(--ss-text); font-weight: 600; }
 /* Loud on purpose: ×5 on a 1.5 martingale is 11× the base bet. */
 .ss-mart-val.hot { color: var(--ss-err); }
+/* A locked cycle is a state, not a problem — accent, not alarm. */
+.ss-mart-val.locked { color: var(--ss-trend); }
+.ss-mart-val.muted  { color: var(--ss-muted); font-weight: 500; }
 
 /* ── Bot status ──────────────────────────────────────────────────────────── */
 

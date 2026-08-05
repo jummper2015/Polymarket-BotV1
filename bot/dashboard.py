@@ -22,7 +22,7 @@ from . import logger
 from .auth import SESSION_KEY, auth_enabled, check_password, init_auth
 from .config import PERSISTABLE_FIELDS, RUNTIME_FIELDS, load_config
 from .db import TradeModel, clear_config, db, get_all_config, set_many_config
-from .state import STATE
+from .state import STATE, active_states
 from .trade_queries import (
     DEFAULT_PER_PAGE, iter_trades_for_export, metric_series, paginate_trades,
 )
@@ -94,21 +94,34 @@ def _build_config_updates(data: dict) -> tuple:
     return updates, None
 
 
-def _aggregate_db_stats(starting_bankroll: float) -> tuple[dict, dict]:
+def _aggregate_db_stats(
+    starting_bankroll: float, symbol: str | None = None
+) -> tuple[dict, dict, dict]:
     """Aggregate trade stats over the whole `trades` table via SQL.
 
-    Must be called inside an app context. Returns (overall_stats, per_strategy).
+    Must be called inside an app context.
+    Returns (overall_stats, per_strategy, per_symbol).
+
+    `symbol` restricts every figure to one market. Without it the totals span
+    all of them, which is right for a portfolio view and wrong for judging a
+    strategy — hence the third return value, which keeps the markets apart.
     """
-    rows = db.session.query(
+    query = db.session.query(
         TradeModel.strategy,
+        TradeModel.symbol,
         TradeModel.status,
         func.count(TradeModel.id),
         func.coalesce(func.sum(TradeModel.pnl), 0.0),
         func.coalesce(func.sum(TradeModel.cost), 0.0),
-    ).group_by(TradeModel.strategy, TradeModel.status).all()
+    )
+    if symbol:
+        query = query.filter(TradeModel.symbol == symbol)
+    rows = query.group_by(
+        TradeModel.strategy, TradeModel.symbol, TradeModel.status
+    ).all()
 
     if not rows:
-        return {}, {}
+        return {}, {}, {}
 
     def _blank() -> dict:
         return {"trades": 0, "open": 0, "wins": 0, "losses": 0,
@@ -116,10 +129,12 @@ def _aggregate_db_stats(starting_bankroll: float) -> tuple[dict, dict]:
 
     overall = _blank()
     per_strategy: dict = {}
+    per_symbol: dict = {}
 
-    for strategy, status, count, pnl_sum, cost_sum in rows:
+    for strategy, sym, status, count, pnl_sum, cost_sum in rows:
         bucket = per_strategy.setdefault(strategy, _blank())
-        for acc in (overall, bucket):
+        sym_bucket = per_symbol.setdefault(sym or "btc", _blank())
+        for acc in (overall, bucket, sym_bucket):
             acc["trades"] += count
             acc["total_invested"] += float(cost_sum or 0.0)
             if status == "won":
@@ -152,19 +167,33 @@ def _aggregate_db_stats(starting_bankroll: float) -> tuple[dict, dict]:
         "available": bankroll - overall["committed"],
     }
 
-    strat_stats = {}
-    for key in ("ss_fade", "ss_trend"):
-        acc = per_strategy.get(key, _blank())
+    def _summarise(acc: dict) -> dict:
         r = acc["wins"] + acc["losses"]
-        strat_stats[key] = {
+        return {
             "trades": acc["trades"],
+            "open": acc["open"],
             "wins": acc["wins"],
             "losses": acc["losses"],
             "win_rate": (acc["wins"] / r) if r else 0.0,
             "pnl": acc["resolved_pnl"],
+            "total_invested": acc["total_invested"],
+            "roi": (acc["resolved_pnl"] / acc["total_invested"])
+            if acc["total_invested"] else 0.0,
         }
 
-    return stats, strat_stats
+    # The known strategies always appear, even with no trades, so the dashboard
+    # renders an empty card instead of dropping the strategy off the page. Any
+    # other name found in the table is included too — that's what makes adding a
+    # strategy a one-place change rather than an edit here.
+    known = ["ss_fade", "ss_trend"]
+    for name in sorted(per_strategy):
+        if name not in known:
+            known.append(name)
+    strat_stats = {k: _summarise(per_strategy.get(k, _blank())) for k in known}
+
+    symbol_stats = {s: _summarise(acc) for s, acc in sorted(per_symbol.items())}
+
+    return stats, strat_stats, symbol_stats
 
 
 def create_app() -> Flask:
@@ -235,20 +264,28 @@ def create_app() -> Flask:
 
     @app.get("/state")
     def get_state():
-        snap = STATE.snapshot()
+        # `?symbol=eth` switches which market the live panel describes. Absent or
+        # unknown, it stays on the first one — BTC — so old clients and
+        # bookmarked URLs behave exactly as before.
+        states = active_states()
+        requested = (request.args.get("symbol") or "").strip().lower()
+        active_symbol = requested if requested in states else next(iter(states))
+        snap = states[active_symbol].snapshot()
 
         # Stats aggregate over EVERY trade in SQL, never over a page — otherwise
         # P&L / win rate / ROI silently drift once the table grows.
         db_stats: dict = {}
         db_strat_stats: dict = {}
+        db_symbol_stats: dict = {}
         try:
             with app.app_context():
-                db_stats, db_strat_stats = _aggregate_db_stats(
-                    snap["stats"]["starting_bankroll"]
+                db_stats, db_strat_stats, db_symbol_stats = _aggregate_db_stats(
+                    snap["stats"]["starting_bankroll"], symbol=active_symbol
                 )
         except Exception:
             db_stats = {}
             db_strat_stats = {}
+            db_symbol_stats = {}
 
         # Merge: DB stats override in-memory for resolved trades
         merged_stats = dict(snap["stats"])
@@ -266,8 +303,23 @@ def create_app() -> Flask:
         except Exception:
             overridden = []
 
+        # Portfolio-wide figures, so the per-market view can be read against the
+        # account as a whole rather than in isolation.
+        all_symbol_stats: dict = {}
+        try:
+            with app.app_context():
+                _, _, all_symbol_stats = _aggregate_db_stats(
+                    snap["stats"]["starting_bankroll"]
+                )
+        except Exception:
+            all_symbol_stats = {}
+
         return jsonify({
             "config_overrides": overridden,
+            "symbol": active_symbol,
+            "symbols": list(states),
+            "symbol_stats": all_symbol_stats or db_symbol_stats,
+            "skips": snap.get("skips", {}),
             "config": {
                 "mode": snap["mode"],
                 "starting_bankroll": snap["starting_bankroll"],
@@ -278,7 +330,14 @@ def create_app() -> Flask:
                 "ss_fade_streak_min": snap["ss_fade_streak_min"],
                 "ss_trend_base_shares": snap["ss_trend_base_shares"],
                 "ss_trend_limit_cap": snap["ss_trend_limit_cap"],
+                "ss_trend_min_strength": snap["ss_trend_min_strength"],
+                "ss_sizing": snap["ss_sizing"],
+                "ss_kelly_fraction": snap["ss_kelly_fraction"],
                 "ss_martingale_mult_factor": snap["ss_martingale_mult_factor"],
+                "ss_trading_hours": snap["ss_trading_hours"],
+                "ss_vol_min_pct": snap["ss_vol_min_pct"],
+                "ss_vol_max_pct": snap["ss_vol_max_pct"],
+                "ss_range_max_pct": snap["ss_range_max_pct"],
                 # POST /config has always accepted these; they just had no UI,
                 # so /settings couldn't show what was actually configured.
                 "cl_twap_enabled": snap["cl_twap_enabled"],
@@ -295,6 +354,11 @@ def create_app() -> Flask:
                 "trend": {
                     "multiplier": snap["ss_trend_martingale_mult"],
                     "loss_streak": snap["ss_trend_loss_streak"],
+                    # The locked side and the 4h candle that chose it. Null
+                    # between cycles, which the UI shows as "sin ciclo".
+                    "cycle_side": snap["ss_trend_cycle_side"],
+                    "cycle_anchor_ts": snap["ss_trend_cycle_anchor_ts"],
+                    "last_strength": snap["ss_trend_last_strength"],
                 },
             },
             "status": {

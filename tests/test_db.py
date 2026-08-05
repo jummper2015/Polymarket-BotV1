@@ -429,6 +429,61 @@ class TestMartingaleState:
             assert loaded.multiplier == 2.25
             assert loaded.loss_streak == 2
 
+    def test_open_cycle_persists_side_and_anchor(self, app):
+        from bot.db import open_cycle, MartingaleStateModel, db
+
+        with app.app_context():
+            snap = open_cycle("ss_trend", "DOWN", 1_785_600_000)
+            assert snap.cycle_side == "DOWN"
+            assert snap.cycle_anchor_ts == 1_785_600_000
+
+            loaded = db.session.query(MartingaleStateModel).filter_by(
+                strategy="ss_trend").first()
+            assert loaded.cycle_side == "DOWN"
+            assert loaded.cycle_anchor_ts == 1_785_600_000
+
+    def test_close_cycle_keeps_the_multiplier(self, app):
+        """An expired block releases the side; it does not forgive the losses."""
+        from bot.db import advance_martingale_state, close_cycle, open_cycle
+
+        with app.app_context():
+            open_cycle("ss_trend", "UP", 1_785_600_000)
+            advance_martingale_state("ss_trend", 2.1)
+
+            snap = close_cycle("ss_trend")
+            assert snap.cycle_side is None
+            assert snap.cycle_anchor_ts is None
+            assert snap.multiplier == 2.1
+            assert snap.loss_streak == 1
+
+    def test_advance_leaves_the_cycle_open(self, app):
+        from bot.db import advance_martingale_state, open_cycle
+
+        with app.app_context():
+            open_cycle("ss_trend", "UP", 1_785_600_000)
+            snap = advance_martingale_state("ss_trend", 2.1)
+            assert snap.cycle_side == "UP"
+            assert snap.cycle_anchor_ts == 1_785_600_000
+
+    def test_reset_also_closes_the_cycle(self, app):
+        """A win ends both: nothing left to recover means the side is free."""
+        from bot.db import open_cycle, reset_martingale_state
+
+        with app.app_context():
+            open_cycle("ss_trend", "UP", 1_785_600_000)
+            snap = reset_martingale_state("ss_trend")
+            assert snap.multiplier == 1.0
+            assert snap.cycle_side is None
+            assert snap.cycle_anchor_ts is None
+
+    def test_fade_never_gets_a_cycle(self, app):
+        from bot.db import get_or_create_martingale_state
+
+        with app.app_context():
+            snap = get_or_create_martingale_state("ss_fade")
+            assert snap.cycle_side is None
+            assert snap.cycle_anchor_ts is None
+
     def test_advance_full_cycle_6_losses(self, app):
         """Simulate 6 consecutive losses — verify martingale progression."""
         from bot.db import advance_martingale_state, MartingaleStateModel, db
@@ -680,3 +735,132 @@ class TestMartingaleSnapshotSurvivesContextExit:
         after_win = reset_martingale_state("ss_trend")
         assert after_win.multiplier == 1.0
         assert after_win.loss_streak == 0
+
+
+class TestLateColumnMigration:
+    """`create_all()` adds missing tables, never missing columns.
+
+    A DB created before the trend cycle existed has a `martingale_state` table
+    without `cycle_side`, and every query against the model would fail on it.
+    """
+
+    def test_cycle_columns_backfilled_on_an_old_table(self, tmp_path, monkeypatch):
+        import sqlite3
+
+        import bot.db as db_mod
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        path = tmp_path / "legacy.db"
+
+        # A pre-cycle martingale_state, built by hand with a row already in it.
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE martingale_state ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " strategy VARCHAR(16) NOT NULL UNIQUE,"
+            " multiplier FLOAT NOT NULL,"
+            " loss_streak INTEGER NOT NULL,"
+            " updated_at DATETIME NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO martingale_state"
+            " (strategy, multiplier, loss_streak, updated_at)"
+            " VALUES ('ss_trend', 2.1, 1, '2026-08-05 00:00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        db_mod.init_db(database_url=f"sqlite:///{path}")
+
+        # The pre-existing multiplier survives, and the new columns are usable.
+        snap = db_mod.get_or_create_martingale_state("ss_trend")
+        assert snap.multiplier == 2.1
+        assert snap.loss_streak == 1
+        assert snap.cycle_side is None
+
+        assert db_mod.open_cycle("ss_trend", "UP", 1_785_600_000).cycle_side == "UP"
+
+
+class TestSymbolMigration:
+    """Multi-asset: each market keeps its own martingale cycle."""
+
+    def test_states_are_independent_per_symbol(self, app):
+        import bot.db as db_mod
+
+        db_mod.advance_martingale_state("ss_fade", 2.0, "btc")
+        db_mod.advance_martingale_state("ss_fade", 2.0, "btc")
+        eth = db_mod.get_or_create_martingale_state("ss_fade", "eth")
+        btc = db_mod.get_or_create_martingale_state("ss_fade", "btc")
+
+        assert btc.multiplier == 4.0
+        assert btc.loss_streak == 2
+        # A losing run on BTC must not resize ETH's next entry.
+        assert eth.multiplier == 1.0
+        assert eth.loss_streak == 0
+
+    def test_cycles_are_independent_per_symbol(self, app):
+        import bot.db as db_mod
+
+        db_mod.open_cycle("ss_trend", "UP", 1_785_600_000, "btc")
+        db_mod.open_cycle("ss_trend", "DOWN", 1_785_600_000, "sol")
+
+        assert db_mod.get_or_create_martingale_state("ss_trend", "btc").cycle_side == "UP"
+        assert db_mod.get_or_create_martingale_state("ss_trend", "sol").cycle_side == "DOWN"
+
+        db_mod.close_cycle("ss_trend", "btc")
+        assert db_mod.get_or_create_martingale_state("ss_trend", "btc").cycle_side is None
+        assert db_mod.get_or_create_martingale_state("ss_trend", "sol").cycle_side == "DOWN"
+
+    def test_legacy_table_rebuilt_and_row_preserved(self, tmp_path, monkeypatch):
+        """The old UNIQUE(strategy) schema is rebuilt without losing the row."""
+        import sqlite3
+
+        import bot.db as db_mod
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        path = tmp_path / "legacy_symbol.db"
+
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE martingale_state ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " strategy VARCHAR(16) NOT NULL UNIQUE,"
+            " multiplier FLOAT NOT NULL,"
+            " loss_streak INTEGER NOT NULL,"
+            " cycle_side VARCHAR(4),"
+            " cycle_anchor_ts INTEGER,"
+            " updated_at DATETIME NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO martingale_state"
+            " (strategy, multiplier, loss_streak, cycle_side, cycle_anchor_ts, updated_at)"
+            " VALUES ('ss_trend', 4.41, 2, 'UP', 1785600000, '2026-08-05 00:00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        db_mod.init_db(database_url=f"sqlite:///{path}")
+
+        # The old row survives, tagged as BTC — the only market that existed.
+        btc = db_mod.get_or_create_martingale_state("ss_trend", "btc")
+        assert btc.multiplier == 4.41
+        assert btc.loss_streak == 2
+        assert btc.cycle_side == "UP"
+
+        # And the constraint it blocked is now allowed.
+        eth = db_mod.get_or_create_martingale_state("ss_trend", "eth")
+        assert eth.multiplier == 1.0
+
+    def test_trades_get_a_symbol_column(self, app):
+        import bot.db as db_mod
+
+        with db_mod.db_context():
+            row = db_mod.TradeModel(
+                strategy="ss_fade", symbol="eth", direction="UP", token_id="t",
+                window_slug="eth-updown-5m-1", window_ts=1, limit_cap=0.52,
+                entry_price=0.5, shares=5.0, cost=2.5, shares_count=5.0,
+                multiplier=1.0, loss_streak=0,
+            )
+            db_mod.db.session.add(row)
+            db_mod.db.session.commit()
+            assert row.to_dict()["symbol"] == "eth"

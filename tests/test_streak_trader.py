@@ -155,7 +155,7 @@ class TestAggregateDbStats:
                 ))
             db.session.commit()
 
-            stats, strat = _aggregate_db_stats(starting_bankroll=1000.0)
+            stats, strat, by_symbol = _aggregate_db_stats(starting_bankroll=1000.0)
 
         assert stats["trades"] == n_won
         assert stats["wins"] == n_won
@@ -178,7 +178,7 @@ class TestAggregateDbStats:
                                        status="open", cost=2.0))
             db.session.commit()
 
-            stats, strat = _aggregate_db_stats(starting_bankroll=100.0)
+            stats, strat, by_symbol = _aggregate_db_stats(starting_bankroll=100.0)
 
         assert (stats["trades"], stats["wins"], stats["losses"], stats["open"]) == (4, 2, 1, 1)
         assert stats["win_rate"] == pytest.approx(2 / 3)
@@ -187,17 +187,23 @@ class TestAggregateDbStats:
         assert stats["bankroll"] == pytest.approx(103.0)
 
         assert strat["ss_fade"] == {
-            "trades": 2, "wins": 1, "losses": 1,
+            "trades": 2, "open": 0, "wins": 1, "losses": 1,
             "win_rate": pytest.approx(0.5), "pnl": pytest.approx(0.0),
+            "total_invested": pytest.approx(5.0), "roi": pytest.approx(0.0),
         }
         assert strat["ss_trend"]["trades"] == 2
         assert strat["ss_trend"]["pnl"] == pytest.approx(3.0)
+        assert strat["ss_trend"]["open"] == 1
+
+        # Everything above was BTC, so the per-market split must reproduce it.
+        assert by_symbol["btc"]["trades"] == 4
+        assert by_symbol["btc"]["pnl"] == pytest.approx(3.0)
 
     def test_empty_table_returns_no_override(self, sqlite_db):
         from bot.dashboard import _aggregate_db_stats
 
         with db_context():
-            assert _aggregate_db_stats(starting_bankroll=1000.0) == ({}, {})
+            assert _aggregate_db_stats(starting_bankroll=1000.0) == ({}, {}, {})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -215,23 +221,33 @@ class TestContradictorySignals:
     """Buying both sides of the same window costs exactly what it pays out."""
 
     @staticmethod
-    def _conflicting(signals):
-        # Mirrors the guard in StreakSnapperTrader._run_one_window.
-        return len({s.direction for s in signals}) > 1
+    def _resolve(signals):
+        # Mirrors the tie-break in StreakSnapperTrader._run_one_window.
+        if len({s.direction for s in signals}) > 1:
+            return [s for s in signals if s.strategy == "ss_trend"]
+        return signals
 
-    def test_opposite_sides_are_flagged(self):
+    def test_opposite_sides_keep_only_trend(self):
+        """Trend's side is locked until its cycle wins, so it takes precedence.
+
+        Skipping the window instead would stall a losing cycle for as long as
+        fade kept disagreeing — and in a trending market it disagrees often.
+        """
         signals = [_sig("ss_fade", "DOWN"), _sig("ss_trend", "UP")]
-        assert self._conflicting(signals) is True
+        kept = self._resolve(signals)
+        assert [s.strategy for s in kept] == ["ss_trend"]
+        assert kept[0].direction == "UP"
 
-    def test_same_side_is_allowed(self):
+    def test_same_side_keeps_both(self):
         signals = [_sig("ss_fade", "UP"), _sig("ss_trend", "UP")]
-        assert self._conflicting(signals) is False
+        assert self._resolve(signals) == signals
 
-    def test_single_signal_is_allowed(self):
-        assert self._conflicting([_sig("ss_trend", "UP")]) is False
+    def test_single_signal_is_untouched(self):
+        signals = [_sig("ss_fade", "UP")]
+        assert self._resolve(signals) == signals
 
-    def test_no_signals_is_not_a_conflict(self):
-        assert self._conflicting([]) is False
+    def test_no_signals_stays_empty(self):
+        assert self._resolve([]) == []
 
     def test_hedged_pair_nets_to_zero(self):
         """The reason the guard exists, spelled out with the observed numbers."""
