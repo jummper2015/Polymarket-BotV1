@@ -16,7 +16,7 @@ Defaults after the Fase 8 measurement: `SS_MODE=fade` (**`ss_trend` is off** —
 python run.py                                    # start trader + dashboard (paper mode by default)
 PORT=5055 python run.py                          # bind another port if 5000 is taken
 
-python -m pytest tests/ -q                       # full suite (336 tests, ~7s)
+python -m pytest tests/ -q                       # full suite (383 tests, ~5s)
 python -m pytest tests/test_db.py -q             # one file
 python -m pytest tests/test_db.py::test_name -q  # one test
 
@@ -79,7 +79,18 @@ They are **all off by default on purpose**: ~20 filters were tested against 35 d
 
 - `bot/state.py` — one `BotState` per symbol behind an `RLock`, in `STATES = {symbol: BotState}` (use `state_for(symbol)` / `active_states()`); `STATE` remains an alias of the BTC state for dashboard and test back-compat. Holds live prices, order book, martingale mirror, skip counters, a bounded trade cache and the event log. `snapshot()` builds the `/state` payload.
 - Config precedence at startup: **`bot_config` DB rows override `.env`** (`_apply_persisted_overrides`), because `/settings` has a Save button. `mode` (paper/real) is deliberately *not* persistable — see the comment above `RUNTIME_FIELDS`.
-- `RUNTIME_FIELDS` in `bot/config.py` is the one place a runtime-editable parameter is declared. Adding a field there gives you parsing, range-checking, `POST /config` handling and persistence at once; do not add ad-hoc validation in `dashboard.py`.
+- `RUNTIME_FIELDS` in `bot/config.py` is the catalogue of runtime-editable parameters, built as `BASE_FIELDS + strategies.params()`. Declare a **strategy** parameter in its descriptor and a **bot-wide** one in `BASE_FIELDS`; either way you get parsing, range-checking, `POST /config`, persistence *and* the widget on `/settings` at once. Do not add ad-hoc validation in `dashboard.py` or a hand-written `<input>` in `settings.html`.
+
+### The strategy registry — `bot/strategies/`
+
+A strategy is a `StrategyDescriptor` (data), not a subclass: they differ too much in *how* they produce signals for a common superclass to say anything useful. The descriptor carries `id`, `name`, `description`, `params`, `symbols` (empty = all), `priority`, `is_enabled(state)`, `enabled_when` and `evaluate(ctx) -> list[Signal]`.
+
+- `ss_fade` / `ss_trend` are wrappers — their logic still lives in `bot/strategy_streak.py`. `ss_mode` remains their switch; Fase B strategies bring their own `ss_<id>_enabled` boolean.
+- The direction tie-break is `strategies.resolve_conflicts()`, ordered by `priority` (fade 100, trend 50). It is not in the trader any more, so a new descriptor joins the tie-break for free.
+- `enabled_when` is a declarative mirror of `is_enabled` that `/settings` evaluates client-side to grey out a card before saving. Two sources of truth for one fact, so `tests/test_strategies.py` asserts they agree for every value of the field — keep that test passing.
+- **Nothing in this package may import `bot.config`** — config imports the registry to build `RUNTIME_FIELDS`. Field declarations come from `bot/runtime_field.py`.
+
+`RuntimeField` also carries its own presentation (`label`, `hint`, `step`, `scale`, `choice_labels`), and `/state` serves `fields` + `strategies` so `settings.js` renders every widget generically. No frontend file names a parameter.
 
 ### Dashboard — `bot/dashboard.py`
 

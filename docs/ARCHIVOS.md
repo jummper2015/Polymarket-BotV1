@@ -10,13 +10,23 @@
 bot/
 ├── __init__.py              ← Package init (vacío)
 │
-├── main.py                  ← 🚀 Entry point
+├── main.py                  ← 🚀 Entry point (un hilo trader por activo)
 ├── config.py                ← ⚙️ Configuración (env vars)
-├── state.py                 ← 🔒 Estado compartido (thread-safe)
+│                               RUNTIME_FIELDS = BASE_FIELDS + registro
+├── runtime_field.py         ← 🏷️ RuntimeField: rango, persistencia y cómo se pinta
+├── state.py                 ← 🔒 Estado compartido (thread-safe), uno por activo
 ├── logger.py                ← 📝 Logging por mercado
 │
-├── binance_api.py           ← 📊 Cliente Binance (BTC klines)
-├── strategy_streak.py       ← 🧠 Motor de estrategias + Martingale
+├── strategies/              ← 📋 Registro de estrategias
+│   ├── __init__.py          ←    REGISTRY, params(), enabled_for(), desempate
+│   ├── base.py              ←    StrategyDescriptor + StrategyContext
+│   ├── ss_fade.py           ←    Forma 1 (envoltorio; la lógica sigue en
+│   │                             strategy_streak.py)
+│   └── ss_trend.py          ←    Forma 2, apagada por defecto
+│
+├── binance_api.py           ← 📊 Cliente Binance (BTC/ETH/SOL klines)
+├── strategy_streak.py       ← 🧠 Señales + sizing (flat/kelly/martingala)
+├── regime.py                ← 🚦 Filtros de régimen: horario, volatilidad, rango
 ├── streak_trader.py         ← 🔄 Thread principal del ciclo 5min
 │
 ├── market.py                ← 🔍 Descubrimiento de tokens (Gamma API)
@@ -58,17 +68,28 @@ bot/
 Fuera de `bot/`:
 
 ```
-tests/                          ← 🧪 278 tests
-├── test_binance_api.py         ← 28 tests
-├── test_strategy_streak.py     ← 27 tests
-├── test_db.py                  ← 28 tests
+tests/                          ← 🧪 383 tests
+├── test_binance_api.py         ←  30 tests
+├── test_strategy_streak.py     ←  47 tests (señales, sizing flat/kelly, ciclo 4h)
+├── test_db.py                  ←  40 tests (incluye migración de symbol)
 ├── test_streak_trader.py       ← 118 tests
-├── test_chainlink_feed.py      ← 19 tests (E18, frescura, 500, fail-open)
-├── test_chainlink_recorder.py  ←  8 tests (batching, purga, fallo de DB)
-└── test_dashboard.py           ← 45 tests (auth, filtros, CSV, drawdown, saldo)
+├── test_regime.py              ←  24 tests (funciones puras, sin red)
+├── test_strategies.py          ←  35 tests (registro, params, desempate)
+├── test_chainlink_feed.py      ←  19 tests (E18, frescura, 500, fail-open)
+├── test_chainlink_recorder.py  ←   8 tests (batching, purga, fallo de DB)
+└── test_dashboard.py           ←  62 tests (auth, filtros, CSV, registro, activo)
 
-data/
-├── gamma_outcomes.json      ← Caché de etiquetas de Gamma (no versionar)
+scripts/                        ← 🔬 Medición (Fase 8, docs/RUTA.md)
+├── signal_search.py            ← Gradúa señales candidatas contra Gamma
+├── oos_validation.py           ← Ordena en la primera mitad, mide en la segunda
+├── preopen_edge.py             ← ROI al precio previo a la apertura vs a +60 s
+├── regime_filter.py            ← Franja horaria, volatilidad y rango
+└── price_calibration.py        ← Calibración del precio de mercado
+
+data/                        ← Todo regenerable, nada versionado
+├── gamma_outcomes.json      ← Caché de etiquetas de Gamma
+├── klines_5m_cache.json     ← Caché de velas de Binance (scripts/)
+├── preopen_prices.json      ← Cotizaciones previas a la apertura
 └── streak_snapper.db        ← SQLite si no hay DATABASE_URL
 ```
 
@@ -78,15 +99,16 @@ data/
 
 ### `bot/main.py` — Entry point
 
-**Rol:** Arranca el bot. Inicializa DB, configura estado, lanza StreakSnapperTrader + dashboard Flask.
+**Rol:** Arranca el bot. Inicializa DB, configura estado, lanza **un
+`StreakSnapperTrader` por símbolo de `SS_SYMBOLS`** + dashboard Flask.
 
 **Dependencias internas:**
 - `bot.config.load_config()` — Carga config de env vars
-- `bot.state.STATE.configure()` — Aplica config al estado
+- `bot.state.state_for(symbol).configure()` — Aplica config a cada estado
 - `bot.db.init_db()` — Inicializa PostgreSQL/SQLite
 - `bot.dashboard.create_app()` — Crea app Flask
-- `bot.dashboard.start_price_fetcher()` — Inicia poller CoinGecko
-- `bot.streak_trader.StreakSnapperTrader` — Thread del bot
+- `bot.dashboard.start_price_fetcher()` — Inicia poller de spot por activo
+- `bot.streak_trader.StreakSnapperTrader` — Un thread por activo
 
 **Ejecutar:** `python run.py` → `bot.main.main()`
 
@@ -94,7 +116,14 @@ data/
 
 ### `bot/config.py` — Configuración
 
-**Rol:** Dataclass `Config` con todos los parámetros cargados desde variables de entorno.
+**Rol:** Dataclass `Config` con todos los parámetros cargados desde variables de
+entorno, y `RUNTIME_FIELDS` — el catálogo de lo que se puede cambiar en caliente
+desde `/settings`.
+
+`RUNTIME_FIELDS = BASE_FIELDS + strategies.params()`: los parámetros de cada
+estrategia los aporta su descriptor, así que declarar uno basta para tener
+parseo, rango, `POST /config`, persistencia en `bot_config` y su widget en la
+UI. Hay una guardia contra nombres duplicados.
 
 **Env vars que lee:**
 ```
@@ -103,11 +132,65 @@ CHAIN_ID, SIGNATURE_TYPE, PRIVATE_KEY, PROXY_WALLET,
 CLOB_HOST, GAMMA_HOST, CLOB_WS_URL,
 PORT, DASHBOARD_HOST, POLL_INTERVAL_MS,
 MARKET_RETRY_SECONDS, FIRST_PRICE_TIMEOUT,
-SS_ENABLED, SS_MODE,
+SS_ENABLED, SS_MODE, SS_SYMBOLS,
 SS_FADE_BASE_BET, SS_FADE_LIMIT_CAP, SS_FADE_STREAK_MIN,
-SS_TREND_BASE_BET, SS_TREND_LIMIT_CAP,
-SS_MARTINGALE_MULT
+SS_TREND_BASE_BET, SS_TREND_LIMIT_CAP, SS_TREND_MIN_STRENGTH,
+SS_SIZING, SS_KELLY_FRACTION, SS_MARTINGALE_MULT,
+SS_TRADING_HOURS, SS_VOL_MIN_PCT, SS_VOL_MAX_PCT, SS_RANGE_MAX_PCT,
+CL_* (ver docs/CHAINLINK_TWAP.md)
 ```
+
+---
+
+### `bot/runtime_field.py` — Declaración de un parámetro
+
+**Rol:** `RuntimeField` — nombre, tipo, rango, si persiste, y cómo se pinta
+(`label`, `hint`, `step`, `scale`, `choice_labels`). Vive aparte de `config.py`
+para que `bot/strategies/` pueda declarar parámetros sin importar config, que
+ahora importa el registro.
+
+`scale` es la conversión de presentación: `ss_trend_min_strength` se guarda como
+fracción y se muestra en porcentaje, y esa relación se declara una vez aquí en
+lugar de repetirse en el JS de carga y en el de guardado.
+
+---
+
+### `bot/strategies/` — Registro de estrategias
+
+**Rol:** Una estrategia se declara como dato (`StrategyDescriptor`), no
+heredando de una clase base: difieren demasiado en cómo generan señal (leer una
+vela, dejar una orden puesta, escuchar liquidaciones) como para compartir
+superclase. Lo común es el papeleo.
+
+**Campos del descriptor:** `id`, `name`, `description`, `notes`, `params`,
+`symbols` (vacío = todos), `priority` (desempate), `is_enabled(state)`,
+`enabled_when` (espejo declarativo para la UI) y `evaluate(ctx) -> list[Signal]`.
+
+**Funciones del paquete:**
+- `ids()` / `all_descriptors()` / `get(id)` — inventario
+- `params()` — alimenta `RUNTIME_FIELDS`
+- `enabled_for(state, symbol)` — qué corre en esta ventana, por prioridad
+- `resolve_conflicts(signals)` — `(kept, dropped)` cuando dos señales apuntan a
+  lados opuestos; gana la de mayor prioridad (fade 100, trend 50)
+- `to_json(state)` — lo que `/state` sirve y `/settings` renderiza
+
+`ss_fade` y `ss_trend` son envoltorios: su lógica sigue en `strategy_streak.py`.
+
+---
+
+### `bot/regime.py` — Filtros de régimen
+
+**Rol:** Decidir cuándo **no** operar. Funciones puras sobre velas
+(`{ts, open, high, low, close}`), testeables sin red:
+
+- `hours_filter(spec)` — franjas UTC (`"13-21,21-24"`)
+- `volatility_filter(...)` — ATR de 1h entre percentiles
+- `range_filter(...)` — rango de 2h bajo un percentil
+- `evaluate(...)` — los tres juntos → `RegimeVerdict(allowed, reason, detail)`
+
+Los percentiles se calculan sobre `PERCENTILE_LOOKBACK` (2 días) en vez de
+constantes fijas, que dejarían de significar lo mismo al cambiar el régimen.
+Todos apagados por defecto: se probaron ~20 filtros contra 35 días.
 
 ---
 
@@ -121,25 +204,35 @@ SS_MARTINGALE_MULT
 - Log de eventos
 - Historial de precios para gráficos del dashboard
 
+- Contador de ventanas descartadas por motivo (`skips`)
+
 **Exports:**
-- `STATE` — Instancia global de BotState
-- `STATES = {"btc": STATE}` — Dict para compatibilidad con dashboard
+- `STATES = {symbol: BotState}` — Un estado por activo operado
+- `state_for(symbol)` / `active_states()` — Acceso y alta perezosa
+- `STATE` — Alias del estado de BTC, para compatibilidad con dashboard y tests
 - `Trade` — Dataclass de trade en memoria
+
+`snapshot()` deriva `strategy_stats` y el bloque `strategies` del registro, así
+que una estrategia nueva aparece en el dashboard sin tocar este archivo.
 
 ---
 
 ### `bot/binance_api.py` — Cliente Binance
 
-**Rol:** Obtener datos BTC desde la API pública de Binance. Sin API key.
+**Rol:** Obtener datos de mercado desde la API pública de Binance. Sin API key.
+Todas las funciones aceptan `symbol` (`btc` / `eth` / `sol`); `SYMBOL_PAIRS` es
+el único sitio donde el nombre corto del slug de Polymarket se traduce al par de
+Binance. XRP y DOGE tienen mercado pero cotizan 3-6 centavos de spread contra 1,
+y el edge medido no llega a 2: quedan fuera.
 
 **Funciones:**
 | Función | Retorna | Uso |
 |---|---|---|
-| `get_5min_windows(n=16)` | Lista de ventanas 5m con dirección | Forma 1 — detección de rachas |
-| `get_4h_trend()` | Vela 4h actual con dirección | Forma 2 — tendencia |
-| `get_4h_trend_cached(last_ts)` | Trend con marca de caché | Forma 2 — tendencia |
-| `get_window_direction(window_ts)` | `"UP"` / `"DOWN"` / `None` | Liquidar trades al cierre de ventana |
-| `get_btc_spot_price()` | Precio spot BTC actual | Display en dashboard |
+| `get_5min_windows(n=16, symbol)` | Lista de ventanas 5m con dirección | Forma 1 — detección de rachas |
+| `get_last_closed_4h_candle(symbol)` | Última vela 4h **cerrada** | Forma 2 — tendencia |
+| `get_5min_candles(n, symbol)` | Velas OHLC | Filtros de régimen |
+| `get_window_direction(window_ts, symbol)` | `"UP"` / `"DOWN"` / `None` | Liquidar trades al cierre de ventana |
+| `get_btc_spot_price(symbol)` | Precio spot actual | Display en dashboard |
 
 `get_window_direction` devuelve `None` (y se recurre a Gamma) si la vela aún no
 ha cerrado, no está en el rango consultado, o cerró exactamente plana.
@@ -150,19 +243,30 @@ ha cerrado, no está en el rango consultado, o cerró exactamente plana.
 
 ### `bot/strategy_streak.py` — Motor de estrategias
 
-**Rol:** Generar señales de entrada y gestionar el estado Martingale.
+**Rol:** Generar señales de entrada, dimensionar la apuesta y gestionar el
+estado Martingale. Los descriptores de `bot/strategies/` envuelven estos
+métodos; la lógica vive aquí.
 
 **Clase principal:** `StreakSnapperStrategy`
 
 **Métodos clave:**
 | Método | Descripción |
 |---|---|
-| `get_fade_signal()` | Detecta racha ≥ 4 ventanas misma dirección → señal contraria |
-| `get_trend_signal()` | Detecta dirección vela 4h → señal a favor |
+| `get_fade_signal()` | Detecta racha ≥ N ventanas misma dirección → señal contraria |
+| `get_trend_signal()` | Lado fijado por la última vela 4h **cerrada** → señal a favor |
+| `_size_for(strategy, cap)` | Único punto de dimensionado: `flat` / `kelly` / `martingale` |
 | `on_win(strategy)` | Resetea multiplicador a 1.0 (persiste en DB) |
-| `on_loss(strategy)` | Multiplica ×1.5 (persiste en DB) |
+| `on_loss(strategy)` | Multiplica por `ss_martingale_mult_factor` (persiste en DB) |
 
-**Dataclass:** `StreakSignal` — Contiene dirección, limit_cap, bet_amount, multiplier, loss_streak.
+`_size_for` dimensiona al `limit_cap`, no al precio de fill: el cap es el peor
+precio que aceptamos, así que un fill mejor solo sale más conservador. Todos los
+modos pasan por el mismo techo (`MAX_BANKROLL_FRACTION = 0.10`) y el mismo suelo
+(`MIN_SHARES = 5`), y `kelly` devuelve 0 shares —no opera— cuando no ve ventaja
+al cap. `MEASURED_WIN_PROB` sale de la Fase 8; el de `ss_trend` está por debajo
+de su precio a propósito.
+
+**Dataclass:** `StreakSignal` — estrategia, dirección, limit_cap, shares,
+multiplier, loss_streak, signal_reason.
 
 ---
 
@@ -173,17 +277,21 @@ ha cerrado, no está en el rango consultado, o cerró exactamente plana.
 **Clase:** `StreakSnapperTrader(threading.Thread)`
 
 **Ciclo por ventana (`_run_one_window`):**
-1. `market.load_market_for_current_window()` → tokens UP/DOWN
+1. `market.load_market_for_current_window(symbol=…)` → tokens UP/DOWN
 2. `_resolve_pending_trades()` → resuelve trades de ventanas pasadas
 3. `_confirm_binance_resolutions()` → confirma/corrige con Gamma
 4. `PriceFeed.start()` → WebSocket bid/ask
-5. `strategy.get_fade_signal()` / `get_trend_signal()` → señales
-   ↳ si apuntan a lados opuestos, se descartan ambas
-6. `_execute_signal()` → LIMIT BUY en CLOB V2 + guardar en DB
-7. Esperar fin de ventana
-8. `_resolve_pending_trades(wait_for_slug=...)` → liquidar ESTA ventana antes de
+5. `_check_regime()` → si un filtro rechaza, se cuenta el motivo y se espera al
+   cierre. Va **antes** de las señales: una ventana filtrada cuesta una llamada
+   a Binance en vez del camino completo
+6. `strategies.enabled_for(state, symbol)` → cada descriptor evalúa; un fallo se
+   registra y no tumba la ventana
+   ↳ `resolve_conflicts()` si apuntan a lados opuestos: gana la de más prioridad
+7. `_execute_signal()` → LIMIT BUY en CLOB V2 + guardar en DB con su `symbol`
+8. Esperar fin de ventana
+9. `_resolve_pending_trades(wait_for_slug=...)` → liquidar ESTA ventana antes de
    abrir la siguiente, para que la Martingala esté al día
-9. Repetir
+10. Repetir
 
 **Helpers relevantes:**
 | Función | Descripción |
@@ -201,19 +309,25 @@ ha cerrado, no está en el rango consultado, o cerró exactamente plana.
 **Modelos:**
 | Modelo | Tabla | Campos clave |
 |---|---|---|
-| `TradeModel` | `trades` | strategy, direction, entry_price, shares, cost, pnl, status, resolution_source |
-| `MartingaleStateModel` | `martingale_state` | strategy, multiplier, loss_streak |
+| `TradeModel` | `trades` | **symbol**, strategy, direction, entry_price, shares, cost, pnl, status, resolution_source |
+| `MartingaleStateModel` | `martingale_state` | strategy, **symbol**, multiplier, loss_streak — `UNIQUE(strategy, symbol)` |
 | `BotConfigModel` | `bot_config` | key, value |
+| `ChainlinkTickModel` | `chainlink_ticks` | symbol, ts, price |
 
 **Helpers:**
 | Función | Descripción |
 |---|---|
 | `init_db(app, url)` | Inicializa SQLAlchemy, crea tablas, aplica columnas nuevas |
 | `_add_missing_columns()` | Añade columnas introducidas después de crear la tabla (`create_all()` no lo hace) |
+| `_migrate_martingale_symbol()` | Reconstruye `martingale_state` para añadir el `UNIQUE(strategy, symbol)`: SQLite no puede añadirlo en caliente |
+| `_backfill_symbol()` | Rellena con `'btc'` las filas anteriores al multi-activo |
 | `db_context()` | Context manager que pushea Flask app context (seguro en threads) |
-| `get_or_create_martingale_state(strategy)` | Carga/crea estado Martingale |
-| `reset_martingale_state(strategy)` | Reset ×1.0 tras ganar |
-| `advance_martingale_state(strategy, factor)` | Multiplica tras perder |
+| `get_or_create_martingale_state(strategy, symbol)` | Carga/crea estado Martingale |
+| `reset_martingale_state(strategy, symbol)` | Reset ×1.0 tras ganar |
+| `advance_martingale_state(strategy, factor, symbol)` | Multiplica tras perder |
+
+La unicidad por `(strategy, symbol)` es lo que impide que una racha perdedora en
+BTC redimensione la siguiente entrada de ETH.
 
 Los tres helpers de Martingale devuelven un `MartingaleSnapshot` (NamedTuple),
 no la instancia ORM: hacen `commit()`, y un commit expira todos los atributos,
@@ -252,13 +366,21 @@ así que el objeto queda inservible en cuanto se cierra el app context.
 |---|---|---|
 | GET | `/` | Dashboard HTML |
 | GET | `/settings` | Configuración HTML |
-| GET | `/state` | JSON con todo el estado del bot |
+| GET | `/state` | JSON con todo el estado del bot. `?symbol=eth` elige qué mercado describe el panel en vivo |
+| GET | `/api/trades` | Página del historial. Filtros: strategy, **symbol**, status, mode, direction, from, to, q |
+| GET | `/api/trades.csv` | El mismo conjunto filtrado, en CSV |
+| GET | `/api/metrics/series` | Capital, drawdown y win rate. `?symbol=` recorta a un mercado |
 | POST | `/config` | Actualizar configuración |
+| POST | `/config/reset` | Descartar overrides guardados y volver al `.env` |
 | GET | `/healthz` | Health check |
 
-Los KPIs (`stats`, `strategy_stats`) se agregan **en SQL sobre toda la tabla**
-`trades`; la lista `trades` del payload son solo las últimas
-`TRADE_TABLE_LIMIT` (100) filas, para la tabla del historial.
+Los KPIs (`stats`, `strategy_stats`, `symbol_stats`) se agregan **en SQL sobre
+toda la tabla** `trades`, agrupando por `(strategy, symbol)`; la lista `trades`
+del payload son solo las últimas `TRADE_TABLE_LIMIT` (100) filas, para la tabla
+del historial.
+
+`/state` sirve además `strategies` (el registro) y `fields` (la declaración de
+cada `RuntimeField`), que es de donde `/settings` se dibuja entero.
 
 ---
 

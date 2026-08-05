@@ -502,9 +502,90 @@ confirmarlo o descartarlo.
 
 ### Pendiente
 
-- [ ] Bajar `SS_FADE_LIMIT_CAP` a ~0,52 y no entrar si el ask supera el valor justo
-- [ ] Invertir el desempate: que prevalezca Fade, no Trend
-- [ ] Decidir sobre `ss_trend`: apagarlo o invertirlo (el tramo T4 es negativo
-      también invertido — no está claro que la inversión sea estable)
-- [ ] Sustituir la martingala por fracción de Kelly mientras el edge no esté confirmado
+- [x] Bajar `SS_FADE_LIMIT_CAP` a 0,52 — hecho en la Fase A
+- [x] Invertir el desempate: que prevalezca Fade, no Trend — hecho en la Fase A
+- [x] Decidir sobre `ss_trend`: **apagado** (`SS_MODE=fade`). No invertido: el
+      tramo T4 es negativo también al revés, así que la inversión no es estable
+- [x] Sustituir la martingala por sizing fijo/Kelly — `SS_SIZING=flat` por
+      defecto en la Fase A; la martingala sigue disponible
 - [ ] Entrar lo más cerca posible de la apertura: esperar a +60 s cuesta 3 puntos de ROI
+
+---
+
+## 🏗️ Fase A — Base para decidir con datos (IMPLEMENTADA, 5-ago-2026)
+
+> Plan: **[PLAN.md](PLAN.md)** § Fase A. El objetivo no era ganar más sino
+> **dejar de perder por defectos medidos** y montar el instrumento: multi-activo
+> triplica la muestra y baja el tiempo de validación de ~78 días a ~26.
+
+### A1 — Arreglos medidos
+
+| Cambio | Antes | Ahora | Por qué |
+|---|---|---|---|
+| `SS_FADE_LIMIT_CAP` | 0,60 | **0,52** | La señal vale 0,538; los 5 trades reales entraron a 0,558 |
+| `SS_MODE` | `both` | **`fade`** | `ss_trend` pierde 4,22% por operación |
+| `SS_SIZING` | — | **`flat`** | Kelly pide el 4% del bankroll; la martingala apostaba ~100× eso |
+| Desempate | Trend | **Fade** | La regla anterior descartaba 98 de 1.152 entradas de Fade |
+
+`StreakStrategy._size_for()` es el único punto de dimensionado
+(`flat` | `kelly` | `martingale`), dimensiona al cap y no al fill, y todos los
+modos pasan por el mismo techo del 10% del bankroll y suelo de 5 shares. `kelly`
+no opera cuando no ve ventaja al cap, que es como `ss_trend` se dimensiona a
+cero en vez de apostar contra su propia medición.
+
+### A2 — Filtros de régimen (`bot/regime.py`)
+
+Horario UTC, banda de percentiles de ATR de 1h y rango de 2h, sobre ventana
+móvil de 2 días en vez de constantes. **Todos apagados por defecto**: se
+probaron ~20 filtros contra 35 días, así que el mejor luce bien por
+construcción. Cada rechazo se cuenta por motivo y sale en el dashboard, que es
+lo que permite comparar «con filtro» contra «sin filtro» sobre datos nuevos en
+lugar de sobre la muestra que los eligió.
+
+### A3 — Multi-activo BTC / ETH / SOL
+
+Un hilo trader y un `BotState` por símbolo de `SS_SYMBOLS` (por defecto solo
+`btc`). `symbol` recorre `binance_api`, `market`, `state` y `db`, con
+`UNIQUE(strategy, symbol)` en `martingale_state` para que una racha perdedora en
+BTC no redimensione la entrada de ETH. XRP y DOGE se descartan: 3-6 centavos de
+spread contra 1, y el edge medido no llega a 2.
+
+### A4 — Registro de estrategias (`bot/strategies/`)
+
+Un descriptor por estrategia con sus parámetros; `RUNTIME_FIELDS` se construye
+concatenando los campos base con los del registro, y `/settings` se renderiza
+desde `/state`. Declarar un parámetro pasa de tocar cinco archivos a tocar uno.
+
+**Lo que esto destapó:** `ss_sizing`, `ss_kelly_fraction` y los cuatro filtros de
+régimen llevaban una fase enteros aceptándose por `POST /config` **sin aparecer
+en la interfaz**, precisamente porque el HTML estaba escrito a mano.
+
+### A5 — Métricas por estrategia y activo
+
+Selector de activo, tarjetas por estrategia (del registro, con ROI) y por
+activo, y desglose de ventanas descartadas por motivo. Dos filtros que parecían
+aplicarse y no se aplicaban: `/api/trades?symbol=` se perdía antes de llegar a
+`build_query`, y `/api/metrics/series` ignoraba `symbol`, así que la curva de
+capital de un mercado sumaba el P&L de todos.
+
+### Verificación
+
+- `python -m pytest tests/ -q` → **383 tests** (298 antes de la fase)
+- Un test que mentía, corregido: `TestContradictorySignals` reimplementaba el
+  desempate dentro del propio test, así que seguía verde afirmando que ganaba
+  Trend mucho después de que el trader conservara Fade
+
+### Lo que esta fase NO promete
+
+Ningún filtro llega a significancia con 35 días de datos. Esto elimina pérdidas
+medidas y construye el instrumento para decidir; no convierte el bot en
+rentable. La única cifra con respaldo sólido sigue siendo que lo que había
+perdía dinero de forma evitable.
+
+### Pendiente de la fase
+
+- [ ] Encender ETH y SOL (`SS_SYMBOLS=btc,eth,sol`) cuando BTC lleve unos días
+      verde con la base nueva
+- [ ] Volver a medir con `python scripts/regime_filter.py` sobre operaciones
+      nuevas — es el script que decide si los filtros se quedan
+- [ ] Verificación en vivo en paper del ciclo completo con la base nueva
