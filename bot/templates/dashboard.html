@@ -3,6 +3,10 @@
 
 {% block content %}
 
+{# ── Asset selector. Hidden while a single market is configured (SS_SYMBOLS),
+     so a BTC-only setup doesn't grow a tab bar with one tab in it. ── #}
+<div id="symbol-tabs" class="ss-symbol-tabs mt-2" style="display:none"></div>
+
 {# ── KPIs ── #}
 <div class="row g-3 mt-1">
   <div class="col-xl-2 col-md-4 col-6">
@@ -194,8 +198,35 @@
 <div class="row g-3 mt-1">
   <div class="col-12">
     <div class="ss-card notika-shadow">
-      <div class="ss-card-head"><h2><i class="bi bi-pie-chart"></i> Métricas por Estrategia</h2></div>
+      <div class="ss-card-head">
+        <h2><i class="bi bi-pie-chart"></i> Métricas por Estrategia</h2>
+        <span class="text-muted small" id="strat-metrics-scope">—</span>
+      </div>
       <div class="row g-2" id="strat-metrics"></div>
+    </div>
+  </div>
+</div>
+
+{# ── Per-asset metrics + regime skips ── #}
+<div class="row g-3 mt-1">
+  <div class="col-lg-7">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-coin"></i> Métricas por Activo</h2>
+        <span class="text-muted small">histórico completo, todos los mercados</span>
+      </div>
+      <div class="row g-2" id="symbol-metrics"></div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-funnel"></i> Ventanas descartadas</h2>
+        <span class="text-muted small">desde el arranque</span>
+      </div>
+      {# What makes "with filter" comparable against "without": the count of
+         what each filter refused, by reason. #}
+      <div id="skip-metrics"></div>
     </div>
   </div>
 </div>
@@ -213,11 +244,17 @@
 
       <div class="row g-2 mb-3 ss-filters">
         <div class="col-lg-2 col-md-4 col-6">
+          {# Options come from the registry (see trades.js), not from this file:
+             a strategy added to the bot has to be filterable without an edit. #}
           <label class="form-label small text-muted mb-1">Estrategia</label>
           <select id="f-strategy" class="form-select form-select-sm">
             <option value="all">Todas</option>
-            <option value="ss_fade">Fade</option>
-            <option value="ss_trend">Trend</option>
+          </select>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+          <label class="form-label small text-muted mb-1">Activo</label>
+          <select id="f-symbol" class="form-select form-select-sm">
+            <option value="all">Todos</option>
           </select>
         </div>
         <div class="col-lg-2 col-md-4 col-6">
@@ -269,13 +306,13 @@
         <table class="table table-sm table-hover align-middle ss-trades">
           <thead>
             <tr>
-              <th>#</th><th>Fecha</th><th>Estrategia</th><th>Lado</th>
+              <th>#</th><th>Fecha</th><th>Activo</th><th>Estrategia</th><th>Lado</th>
               <th>Precio</th><th>Shares</th><th>Costo</th><th>×Mult</th>
               <th>Estado</th><th>P&amp;L</th><th>Fuente</th><th>Nota</th>
             </tr>
           </thead>
           <tbody id="trades-body">
-            <tr><td colspan="12" class="ss-empty">Cargando…</td></tr>
+            <tr><td colspan="13" class="ss-empty">Cargando…</td></tr>
           </tbody>
         </table>
       </div>

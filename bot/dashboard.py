@@ -383,9 +383,12 @@ def create_app() -> Flask:
         })
 
     def _filters_from_request() -> dict:
+        # `symbol` belongs here as much as `strategy` does. It was missing while
+        # `build_query` already supported it, so /api/trades?symbol=eth quietly
+        # returned every market — a filter that looks applied and isn't.
         return {
             key: request.args.get(key, "")
-            for key in ("strategy", "status", "mode", "direction",
+            for key in ("strategy", "symbol", "status", "mode", "direction",
                         "resolution_source", "from", "to", "q")
         }
 
@@ -436,12 +439,19 @@ def create_app() -> Flask:
 
     @app.get("/api/metrics/series")
     def api_metrics_series():
-        """Equity, drawdown and win-rate series for the charts."""
+        """Equity, drawdown and win-rate series for the charts.
+
+        `?symbol=` narrows the curve to one market. `metric_series` accepted it
+        from the start; the route didn't pass it, so the chart under an ETH tab
+        was drawing every market's equity added together.
+        """
         try:
             with app.app_context():
+                symbol = (request.args.get("symbol") or "").strip().lower()
                 return jsonify(metric_series(
                     STATE.starting_bankroll,
                     rolling_window=request.args.get("rolling", 50, type=int),
+                    symbol=symbol or None,
                 ))
         except Exception as exc:
             logger.warn(f"[dashboard] /api/metrics/series falló: {exc}")

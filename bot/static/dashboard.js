@@ -69,12 +69,34 @@
   const STRAT_LABELS = { ss_fade: "Fade", ss_trend: "Trend" };
   const STRAT_COLORS = { ss_fade: COLORS.fade, ss_trend: COLORS.trend };
 
+  /* Which market the live panel describes. The trader runs one thread per
+   * symbol in SS_SYMBOLS, so prices, order book and window countdown belong to
+   * exactly one of them — mixing them would show a BTC price under an ETH
+   * window. Remembered across reloads; a stale name just falls back to the
+   * first symbol the backend reports. */
+  let activeSymbol = null;
+  try {
+    activeSymbol = localStorage.getItem("ss_symbol");
+  } catch (_) { /* private mode */ }
+
+  function setActiveSymbol(symbol) {
+    activeSymbol = symbol;
+    try {
+      localStorage.setItem("ss_symbol", symbol);
+    } catch (_) { /* private mode */ }
+    refresh();
+  }
+
   // ── main render loop ──
   let failures = 0;
+  let registry = [];   // /state.strategies, for names and colours
 
   async function refresh() {
     try {
-      const resp = await fetch("/state", { cache: "no-store" });
+      const url = activeSymbol
+        ? "/state?symbol=" + encodeURIComponent(activeSymbol)
+        : "/state";
+      const resp = await fetch(url, { cache: "no-store" });
       if (resp.status === 401) {
         // Session expired — the page is now useless, so send the user to login.
         window.location.href = "/login";
@@ -86,6 +108,15 @@
       failures = 0;
       setConnectionError(false);
 
+      // The backend decides which symbol it actually served (an unknown one
+      // falls back), so follow it instead of trusting what we asked for.
+      if (s.symbol) activeSymbol = s.symbol;
+      registry = s.strategies || registry;
+      registry.forEach((d) => {
+        STRAT_LABELS[d.id] = d.name || d.id;
+      });
+
+      renderSymbolTabs(s);
       renderHeader(s);
       renderKpis(s);
       renderMartingale(s);
@@ -94,6 +125,8 @@
       renderOrderBook(s);
       renderPriceChart(s);
       renderStrategyMetrics(s);
+      renderSymbolMetrics(s);
+      renderSkips(s);
       renderLog(s);
     } catch (err) {
       /* The old code swallowed this, so a dead backend looked like a frozen but
@@ -470,34 +503,149 @@
     }
   }
 
+  /* Per-strategy cards, one per registered strategy plus anything with history
+   * in the table. The list used to be hard-coded here, so a strategy added to
+   * the bot traded invisibly until someone remembered this file. */
   function renderStrategyMetrics(s) {
     const el = $("strat-metrics");
     if (!el) return;
     const ss = s.strategy_stats || {};
 
-    const strats = [
-      { key: "ss_fade", label: "Fade (Anti-racha)", c: COLORS.fade },
-      { key: "ss_trend", label: "Trend (Tendencia 4h)", c: COLORS.trend },
-    ];
+    const scope = $("strat-metrics-scope");
+    if (scope) {
+      scope.textContent = s.symbol
+        ? `histórico de ${String(s.symbol).toUpperCase()}`
+        : "histórico completo";
+    }
 
-    el.innerHTML = strats.map(({ key, label, c }) => {
-      const st = ss[key] || { trades: 0, wins: 0, losses: 0, win_rate: 0, pnl: 0 };
+    // Registry order first; then any id the DB knows about and the registry
+    // doesn't — a retired strategy still owns its history.
+    const keys = registry.map((d) => d.id);
+    Object.keys(ss).forEach((k) => { if (!keys.includes(k)) keys.push(k); });
+
+    const width = keys.length >= 3 ? "col-lg-4 col-md-6" : "col-md-6";
+
+    el.innerHTML = keys.map((key) => {
+      const desc = registry.find((d) => d.id === key);
+      const label = desc ? desc.name : STRAT_LABELS[key] || key;
+      const c = STRAT_COLORS[key] || COLORS.muted;
+      const st = ss[key] || { trades: 0, wins: 0, losses: 0, win_rate: 0, pnl: 0, roi: 0 };
       const resolved = (st.wins || 0) + (st.losses || 0);
       const pnlCls = (st.pnl || 0) >= 0 ? "ss-pos" : "ss-neg";
+      const roiCls = (st.roi || 0) >= 0 ? "ss-pos" : "ss-neg";
       const wrCls = resolved > 0 ? ((st.win_rate || 0) >= 0.5 ? "ss-pos" : "ss-neg") : "";
+      // A registered strategy that is switched off still shows its history —
+      // greyed, so nobody reads a frozen P&L as a live one.
+      const off = desc && desc.enabled === false;
       const row = (k, v, cls) =>
         `<div class="ss-mart-row"><span>${k}</span><span class="ss-mart-val ${cls || ""}">${v}</span></div>`;
       return `
-        <div class="col-md-6">
-          <div class="ss-mart" style="border-left-color:${c}">
-            <div class="ss-mart-head" style="color:${c}">${label}</div>
+        <div class="${width}">
+          <div class="ss-mart${off ? " ss-strategy-off" : ""}" style="border-left-color:${c}">
+            <div class="ss-mart-head" style="color:${c}">
+              ${esc(label)}${off ? ' <span class="ss-badge warn">apagada</span>' : ""}
+            </div>
             ${row("Trades", st.trades)}
             ${row("V / D", `${st.wins}V / ${st.losses}D`)}
             ${row("Win Rate", resolved > 0 ? fmtPct(st.win_rate) : "—", wrCls)}
             ${row("P&amp;L", fmtSigned(st.pnl), pnlCls)}
+            ${row("ROI", st.total_invested ? fmtPct(st.roi) : "—", roiCls)}
           </div>
         </div>`;
     }).join("");
+  }
+
+  /* The asset tabs. One market configured means no tab bar: SS_SYMBOLS defaults
+   * to btc and a single-tab selector is just noise. */
+  function renderSymbolTabs(s) {
+    const el = $("symbol-tabs");
+    if (!el) return;
+    const symbols = s.symbols || [];
+    if (symbols.length < 2) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.display = "";
+    el.innerHTML = symbols.map((sym) => {
+      const active = sym === s.symbol ? " active" : "";
+      return `<button type="button" class="ss-symbol-tab${active}" data-symbol="${esc(sym)}">
+                ${esc(String(sym).toUpperCase())}
+              </button>`;
+    }).join("");
+  }
+
+  // Delegated so it survives every re-render of the tab bar.
+  document.addEventListener("click", (ev) => {
+    const tab = ev.target.closest ? ev.target.closest("[data-symbol]") : null;
+    if (tab && tab.classList.contains("ss-symbol-tab")) {
+      setActiveSymbol(tab.dataset.symbol);
+    }
+  });
+
+  /* Per-asset totals. Always every market, never filtered by the tab: the point
+   * is comparing BTC against ETH against SOL, which a filtered view can't do. */
+  function renderSymbolMetrics(s) {
+    const el = $("symbol-metrics");
+    if (!el) return;
+    const stats = s.symbol_stats || {};
+    const keys = Object.keys(stats);
+
+    if (!keys.length) {
+      el.innerHTML = '<div class="col-12"><div class="ss-empty">Sin operaciones todavía</div></div>';
+      return;
+    }
+
+    el.innerHTML = keys.map((sym) => {
+      const st = stats[sym];
+      const resolved = (st.wins || 0) + (st.losses || 0);
+      const pnlCls = (st.pnl || 0) >= 0 ? "ss-pos" : "ss-neg";
+      const row = (k, v, cls) =>
+        `<div class="ss-mart-row"><span>${k}</span><span class="ss-mart-val ${cls || ""}">${v}</span></div>`;
+      return `
+        <div class="col-md-4">
+          <div class="ss-mart${sym === s.symbol ? " ss-mart-active" : ""}">
+            <div class="ss-mart-head">${esc(String(sym).toUpperCase())}</div>
+            ${row("Trades", st.trades)}
+            ${row("Win Rate", resolved > 0 ? fmtPct(st.win_rate) : "—")}
+            ${row("P&amp;L", fmtSigned(st.pnl), pnlCls)}
+            ${row("ROI", st.total_invested ? fmtPct(st.roi) : "—")}
+          </div>
+        </div>`;
+    }).join("");
+  }
+
+  /* Windows a regime filter refused, by reason. The filters are all off by
+   * default and only reach significance with live data, so the count of what
+   * each one *would have* skipped is the measurement, not a footnote. */
+  const SKIP_LABELS = {
+    SKIP_HOURS: "Fuera de la franja horaria",
+    SKIP_VOL: "Volatilidad fuera de banda",
+    SKIP_RANGE: "Rango de 2h demasiado ancho",
+  };
+
+  function renderSkips(s) {
+    const el = $("skip-metrics");
+    if (!el) return;
+    const skips = s.skips || {};
+    const entries = Object.entries(skips).sort((a, b) => b[1] - a[1]);
+
+    if (!entries.length) {
+      el.innerHTML =
+        '<div class="ss-empty">Ningún filtro ha descartado ventanas' +
+        '<div class="ss-field-hint mt-1">Todos vienen apagados por defecto</div></div>';
+      return;
+    }
+
+    const total = entries.reduce((acc, [, n]) => acc + n, 0);
+    el.innerHTML =
+      entries.map(([reason, count]) => `
+        <div class="ss-mart-row">
+          <span>${esc(SKIP_LABELS[reason] || reason)}</span>
+          <span class="ss-mart-val">${count}</span>
+        </div>`).join("") +
+      `<div class="ss-mart-row mt-1" style="border-top:1px solid var(--ss-border)">
+         <span><strong>Total</strong></span><span class="ss-mart-val">${total}</span>
+       </div>`;
   }
 
   function renderLog(s) {

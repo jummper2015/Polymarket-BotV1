@@ -236,9 +236,22 @@
     }
   }
 
+  /* The charts follow the asset tab. Without this the equity curve under an
+   * ETH tab was every market's P&L added together, which is a portfolio line
+   * dressed up as a per-market one. `ss_symbol` is written by dashboard.js. */
+  function symbolQuery() {
+    try {
+      const sym = localStorage.getItem("ss_symbol");
+      return sym ? "?symbol=" + encodeURIComponent(sym) : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
   async function loadSeries() {
     try {
-      const resp = await fetch("/api/metrics/series", { cache: "no-store" });
+      const resp = await fetch("/api/metrics/series" + symbolQuery(),
+                               { cache: "no-store" });
       if (!resp.ok) return;
       const series = await resp.json();
       lastSeries = series;
@@ -265,7 +278,7 @@
 
   async function loadStrategyPnl() {
     try {
-      const resp = await fetch("/state", { cache: "no-store" });
+      const resp = await fetch("/state" + symbolQuery(), { cache: "no-store" });
       if (!resp.ok) return;
       const s = await resp.json();
       renderStrategyPnl(s.strategy_stats);

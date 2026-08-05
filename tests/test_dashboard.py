@@ -380,6 +380,7 @@ class TestTradesFilters:
         data = client.get("/api/trades?strategy=ss_trend&status=won").get_json()
         assert data["total"] == 1
 
+
     def test_all_is_the_same_as_no_filter(self, client):
         assert client.get("/api/trades?strategy=all").get_json()["total"] == 4
 
@@ -393,6 +394,47 @@ class TestTradesFilters:
 
     def test_search_with_no_match_is_empty(self, client):
         assert client.get("/api/trades?q=zzzz").get_json()["total"] == 0
+
+
+class TestTradesSymbolFilter:
+    """`build_query` supported `symbol` before the endpoint passed it through,
+    so /api/trades?symbol=eth returned every market — a filter that looks
+    applied and isn't is worse than one that doesn't exist."""
+
+    @pytest.fixture(autouse=True)
+    def _seed_symbols(self, app):
+        _seed(app, [
+            _make_trade(symbol="btc", strategy="ss_fade", status="won", pnl=1.0),
+            _make_trade(symbol="eth", strategy="ss_fade", status="lost", pnl=-2.0),
+            _make_trade(symbol="eth", strategy="ss_trend", status="won", pnl=3.0),
+        ])
+
+    def test_filter_by_symbol(self, client):
+        data = client.get("/api/trades?symbol=eth").get_json()
+        assert data["total"] == 2
+        assert {t["symbol"] for t in data["items"]} == {"eth"}
+
+    def test_no_filter_spans_every_market(self, client):
+        assert client.get("/api/trades").get_json()["total"] == 3
+
+    def test_combines_with_strategy(self, client):
+        data = client.get("/api/trades?symbol=eth&strategy=ss_fade").get_json()
+        assert data["total"] == 1
+
+    def test_csv_export_honours_it(self, client):
+        """The export follows the filters on screen; it used to ignore this one."""
+        body = client.get("/api/trades.csv?symbol=eth").get_data(as_text=True)
+        assert body.count("\n") >= 3          # header + 2 rows
+        assert ",btc," not in body
+
+    def test_series_can_be_cut_by_symbol(self, client):
+        """The equity curve of one market, not of all of them added together."""
+        one = client.get("/api/metrics/series?symbol=eth").get_json()
+        assert one["resolved_trades"] == 2
+
+    def test_series_without_symbol_spans_every_market(self, client):
+        every = client.get("/api/metrics/series").get_json()
+        assert every["resolved_trades"] == 3
 
 
 class TestTradesDateFilter:

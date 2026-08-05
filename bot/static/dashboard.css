@@ -255,9 +255,25 @@ body.ss-body {
 
 /* A strategy whose toggle is off. Dimmed rather than hidden: its parameters
    stay readable and editable, which is what you want when you're about to
-   turn it on. */
+   turn it on, and its past P&L is still history worth reading. */
 .ss-strategy-block { border-left: 3px solid var(--ss-border); padding-left: .75rem; }
-.ss-strategy-block.ss-strategy-off { opacity: .55; }
+.ss-strategy-off { opacity: .55; }
+
+/* ── Asset selector ──────────────────────────────────────────────────────── */
+
+.ss-symbol-tabs { display: flex; gap: .5rem; flex-wrap: wrap; }
+.ss-symbol-tab {
+  border: 1px solid var(--ss-border); border-radius: var(--ss-radius);
+  background: transparent; color: var(--ss-muted);
+  padding: .3rem .9rem; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.ss-symbol-tab:hover  { border-color: var(--ss-accent); color: var(--ss-text); }
+.ss-symbol-tab.active {
+  border-color: var(--ss-accent); color: var(--ss-text);
+  background: rgba(0,194,146,.08);
+}
+/* The market the live panel is currently describing. */
+.ss-mart-active { border-left-color: var(--ss-accent); }
 
 @media (max-width: 576px) {
   .ss-kpi-value { font-size: 18px; }

@@ -20,6 +20,7 @@
 
   const FILTER_INPUTS = {
     strategy: "f-strategy",
+    symbol: "f-symbol",
     status: "f-status",
     direction: "f-direction",
     mode: "f-mode",
@@ -56,7 +57,7 @@
 
     if (!items.length) {
       tbody.innerHTML =
-        '<tr><td colspan="12" class="ss-empty">Sin operaciones con estos filtros.</td></tr>';
+        '<tr><td colspan="13" class="ss-empty">Sin operaciones con estos filtros.</td></tr>';
       return;
     }
 
@@ -70,6 +71,7 @@
         <tr>
           <td>${t.id}</td>
           <td class="text-muted">${esc(fmtDateTime(t.opened_at))}</td>
+          <td>${esc(String(t.symbol || "btc").toUpperCase())}</td>
           <td class="${stratCls}">${esc(STRAT_LABELS[t.strategy] || t.strategy)}</td>
           <td class="${sideCls}">${esc(t.direction)}</td>
           <td>$${fmtPrice(price)}</td>
@@ -149,7 +151,7 @@
       const tbody = $("trades-body");
       if (tbody) {
         tbody.innerHTML =
-          '<tr><td colspan="12" class="ss-empty">No se pudieron cargar las operaciones.</td></tr>';
+          '<tr><td colspan="13" class="ss-empty">No se pudieron cargar las operaciones.</td></tr>';
       }
     }
   }
@@ -157,6 +159,35 @@
   function reload() {
     page = 1;   // any filter change invalidates the current page
     load();
+  }
+
+  /* The strategy and asset dropdowns are filled from /state, not written into
+   * the template: a strategy added to the registry, or a symbol added to
+   * SS_SYMBOLS, has to be filterable without editing the HTML. One call at
+   * startup is enough — neither list changes without a restart. */
+  async function populateFilters() {
+    try {
+      const resp = await fetch("/state", { cache: "no-store" });
+      if (!resp.ok) return;
+      const s = await resp.json();
+
+      const fill = (id, options) => {
+        const el = $(id);
+        if (!el || !options.length) return;
+        const keep = el.value;
+        el.innerHTML =
+          el.options[0].outerHTML +
+          options.map(([v, label]) =>
+            `<option value="${esc(v)}">${esc(label)}</option>`).join("");
+        el.value = keep;   // a reload mustn't silently widen the filter
+      };
+
+      fill("f-strategy", (s.strategies || []).map((d) => [d.id, d.name || d.id]));
+      fill("f-symbol", (s.symbols || []).map((sym) => [sym, String(sym).toUpperCase()]));
+    } catch (_) {
+      // Leaving the dropdowns with just "Todas" is a degraded filter, not a
+      // broken table — the rows load either way.
+    }
   }
 
   // ── wiring ──
@@ -206,6 +237,7 @@
     });
   }
 
+  populateFilters();
   load();
   setInterval(() => { if (!document.hidden) load(); }, AUTO_REFRESH_MS);
 })();
