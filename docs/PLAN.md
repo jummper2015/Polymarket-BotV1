@@ -177,3 +177,186 @@ python run.py
    el Martingale y arriesga de más. Afecta al **11%** de las ventanas con el
    umbral actual. Es el precio —medido y favorable— de reducir el riesgo 5.
    Ver [CHAINLINK_TWAP.md §11.1.b](CHAINLINK_TWAP.md).
+
+
+5 de Agosto 2026
+Plan — Filtros de régimen, multi-activo y registro de estrategias
+
+ Contexto
+
+ El bot opera hoy un solo activo (BTC) con dos formas, ss_fade y ss_trend.
+ La medición sobre 10.119 ventanas etiquetadas por Gamma y 3.734 con cotización
+ previa a la apertura (documentado en docs/RUTA.md Fase 8) dice:
+
+ - ss_trend pierde −4,22% por operación (−7,08% al excluir ventanas con
+ racha, t=−2,61). No es neutral: está del lado perdedor de un efecto real.
+ - ss_fade gana +3,74% por operación (53,8% de acierto a 0,519), pero el
+ cap actual de 0,60 lo destruye: los 5 trades reales entraron a 0,558 de
+ media, por encima del valor justo de 0,538.
+ - El desempate de streak_trader.py:207-214 descarta Fade y conserva Trend
+ — justo al revés de lo que dicen los datos (98 de 1.152 Fade descartados).
+ - La martingala apuesta ~100× lo que justifica el edge (Kelly pide 4,03% del
+ bankroll; el backtest llega a $983 en una ventana).
+
+ Sobre la idea de "operar solo en horas de poca volatilidad": la versión ingenua
+ empeora las cosas — el cuartil de menor volatilidad da −0,46%, porque en un
+ mercado plano una racha de 4 ventanas es ruido. Lo que sí mide bien es
+ volatilidad media (+6,44%), rango estrecho de 2h (+6,06%) y sobre todo
+ franja horaria: US 13-21h UTC da +9,22% y es positivo en los 4 tramos de
+ 8,8 días (+12,8%, +4,8%, +8,1%, +11,4%), mientras Europa 08-13h da −5,0%.
+
+ Todo esto sigue por debajo de significancia (t=+1,93 en el mejor caso, y probé
+ ~20 filtros). Por eso el objetivo de esta fase no es "ganar más" sino dejar de
+ perder por defectos medidos y montar la infraestructura para decidir con datos:
+ multi-activo triplica la muestra y baja el tiempo de validación de ~78 días a
+ ~26.
+
+ Decisiones tomadas
+
+ - ss_trend se apaga por defecto (sigue en el código y en la config).
+ - Las dos estrategias de liquidaciones se construyen sobre un feed gratuito:
+ verifiqué que Bybit v5 allLiquidation.<SYM> funciona (ack OK, control
+ 958 msg, 1 liquidación real capturada en 120 s). Binance !forceOrder@arr
+ está bloqueado en este entorno pero probablemente funcione en el VPS — se
+ añade como fuente secundaria opcional.
+ - Entrega por fases. Este plan cubre la Fase A en detalle y deja la
+ Fase B esbozada.
+
+ Fase A — Base
+
+ A1. Arreglos medidos de la estrategia vigente
+
+ En bot/config.py (load_config + RUNTIME_FIELDS) y .env.example:
+
+ - SS_FADE_LIMIT_CAP: 0.60 → 0.52
+ - SS_MODE: both → fade
+ - Nuevo SS_SIZING: flat | kelly | martingale, por defecto flat.
+ martingale sigue disponible pero deja de ser el camino por defecto.
+ - Nuevo SS_KELLY_FRACTION (0.05–1.0, def. 0.25) para el modo kelly.
+
+ En bot/streak_trader.py, invertir el desempate: hoy conserva ss_trend
+ cuando las señales chocan; debe conservar ss_fade. El comentario que justifica
+ la regla actual queda obsoleto y hay que reescribirlo citando la medición.
+
+ En bot/strategy_streak.py, el sizing sale de on_win/on_loss hacia una
+ función size_for(strategy, price, state) que respeta SS_SIZING.
+
+ A2. Filtros de régimen configurables
+
+ Módulo nuevo bot/regime.py con funciones puras y testeables que reciben la
+ ventana y el historial de velas y devuelven (permitido: bool, razón: str):
+
+ - hours_filter — lista de franjas UTC permitidas (SS_TRADING_HOURS, formato
+ "13-21,21-24", vacío = todas)
+ - volatility_filter — banda de ATR de 1 h entre percentiles
+ (SS_VOL_MIN_PCT / SS_VOL_MAX_PCT, def. 25/75, que es la banda que midió
+ +6,44%)
+ - range_filter — rango de 2 h por debajo de un percentil (SS_RANGE_MAX_PCT)
+
+ Los percentiles se calculan sobre una ventana móvil de las últimas N velas, no
+ sobre constantes fijas, para que no caduquen al cambiar el régimen de
+ volatilidad. Todos por defecto desactivados salvo el horario, que arranca
+ apagado también: la evidencia es sugerente, no concluyente, y el dashboard debe
+ poder medir con y sin filtro.
+
+ Cada rechazo se registra con su razón para que el motivo del skip sea auditable
+ (mismo patrón que los SKIP_* de las estrategias de Revisar Estrategias/).
+
+ A3. Multi-activo BTC / ETH / SOL
+
+ Verificado en vivo: los tres tienen mercado de 5 m con spread de 1 centavo
+ (profundidad BTC 376/1059, ETH 110/496, SOL 40/165 shares) y también existen los
+ de 15 m, que hacen falta para corridor. XRP y DOGE existen pero con spreads de
+ 3–6 centavos: se descartan.
+
+ - bot/binance_api.py: todas las funciones pasan a aceptar symbol
+ (BTCUSDT/ETHUSDT/SOLUSDT). Hoy está fijo en BTCUSDT.
+ - bot/market.py: ya acepta symbol en los slugs de 5 m; hay que
+ parametrizar slug_for_15m_timestamp, que está fijo en btc.
+ - bot/state.py: STATES pasa a ser un diccionario real
+ {symbol: BotState}. STATE se mantiene como alias del de BTC para no
+ romper dashboard.py y los tests durante la transición.
+ - bot/db.py: añadir columna symbol a TradeModel (el helper
+ _add_missing_columns() ya existe para esto) y cambiar la unicidad de
+ MartingaleStateModel de strategy a (strategy, symbol). Las filas
+ existentes se rellenan con symbol='btc'.
+ - Un hilo trader por activo, con SS_SYMBOLS (def. btc) para elegir cuáles.
+ Arrancar con BTC solo y añadir ETH/SOL cuando la base esté verde.
+
+ A4. Registro de estrategias
+
+ Hoy añadir un parámetro obliga a tocar cinco sitios (config.py, state.py,
+ dashboard.py, settings.html, settings.js), y _aggregate_db_stats tiene
+ los nombres ("ss_fade", "ss_trend") escritos a mano. Eso no escala a seis
+ estrategias × tres activos.
+
+ Paquete nuevo bot/strategies/ con un descriptor por estrategia:
+
+ id, nombre, descripción, activos soportados,
+ params: tuple[RuntimeField, ...],   # reutiliza el tipo que ya existe en config.py
+ enabled_field: str,                 # el toggle de activación
+ evaluate(ctx) -> list[Signal]
+
+ ss_fade y ss_trend se migran a este formato como primeros miembros — sin
+ cambiar su lógica, solo su envoltorio. RUNTIME_FIELDS pasa a construirse
+ concatenando los campos base con los de cada estrategia registrada, de modo
+ que la validación, la persistencia en bot_config y el reset ya existentes
+ funcionen sin tocarlos.
+
+ bot/templates/settings.html deja de tener un bloque escrito a mano por
+ estrategia y pasa a renderizar el registro: por cada estrategia, una tarjeta con
+ su toggle y sus campos, generada desde el JSON que ya sirve /state.
+
+ A5. Métricas por estrategia en el dashboard
+
+ - bot/dashboard.py: _aggregate_db_stats agrupa por (strategy, symbol) y
+ deriva las claves del registro en vez de la tupla fija.
+ - bot/trade_queries.py: metric_series ya es genérico sobre
+ t.strategy (usa setdefault), así que solo hay que añadir el corte por
+ symbol y exponer symbol como filtro en build_query, junto a los que ya
+ soporta.
+ - El dashboard gana un selector de activo y una fila de tarjetas por estrategia
+ con trades, V/D, win rate, P&L, ROI y drawdown, más el desglose de skips por
+ razón — que es lo que permite comparar "con filtro" contra "sin filtro".
+
+ Fase B — Estrategias nuevas (esbozo)
+
+ Sobre la base anterior, una por una y en paper:
+
+ 1. spread_harvest_maker y box_builder — no predicen dirección,
+ cobran el spread. Son las que tienen razón estructural para ser positivas.
+ Necesitan órdenes maker (post_only) y gestión de cancelación, que el bot
+ hoy no tiene: es el trabajo real de esta fase.
+ 2. mid_price_continuation — solo necesita spot + libro, ya disponibles.
+ 3. corridor — necesita operar 5 m y 15 m a la vez; los mercados existen.
+ 4. Liquidaciones — primero un bot/liquidation_feed.py (Bybit WS, con
+ Binance !forceOrder@arr opcional) y su grabador, siguiendo el patrón de
+ chainlink_recorder.py. Las liquidaciones no se sirven históricamente: sin
+ semanas de tape grabado no hay forma de validar liq_cascade_chaser ni
+ small_liq_continuation, así que el grabador va antes que las estrategias.
+
+ Verificación
+
+
+     Verificación
+
+     - python -m pytest tests/ -q — la suite (298 tests) debe seguir en verde;
+     añadir tests para bot/regime.py (funciones puras, sin red), para el sizing
+     flat/kelly, para el desempate invertido y para la migración de symbol.
+     - DATABASE_URL="sqlite:////tmp/verify.db" PORT=5055 python run.py en paper,
+     comprobando en el log que el desempate conserva Fade, que el cap es 0,52 y que
+     los skips por régimen aparecen con su razón.
+     - sqlite3 /tmp/verify.db "select strategy, symbol, entry_price, status from trades;"
+     para confirmar que la columna nueva se rellena.
+     - curl -s localhost:5055/state | python -m json.tool — verificar que
+     strategy_stats sale del registro y trae el corte por activo.
+     - Re-medir con python -m scripts.regime_filter tras acumular operaciones
+     nuevas, que es el script que decide si los filtros se quedan.
+
+     Lo que este plan NO promete
+
+     Ninguno de los filtros llega a significancia estadística con 35 días de datos.
+     La Fase A elimina pérdidas medidas (cap, desempate, martingala, ss_trend) y
+     construye el instrumento para decidir; no convierte el bot en rentable. La
+     única cifra con respaldo sólido es que lo que hay hoy pierde dinero de forma
+     evitable.

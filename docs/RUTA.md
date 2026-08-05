@@ -155,12 +155,155 @@ Auditoría completa + ejecución en vivo. Corregido:
 
 **Pendiente de este bloque:**
 
-- [ ] Punto 6 de `revisar.md`: operar un solo lado durante las 4h y seguir el
-      ciclo hasta ganar. Es un cambio de **estrategia**, no de dashboard —
-      toca `strategy_streak.py` y el Martingale.
-- [ ] Servir con gunicorn en vez del servidor de desarrollo de Werkzeug
-      (`main.py` usa `app.run()`; gunicorn ya está en `requirements.txt`).
-      Importa más ahora que el panel puede quedar expuesto.
+- [x] Punto 6 de `revisar.md` → **Fase 4.7**, más abajo.
+- [ ] Servir con gunicorn en vez del servidor de desarrollo de Werkzeug.
+      ⚠️ **La nota original de este punto tenía dos datos mal:**
+      - El `app.run()` está en **`bot/main.py:218`**, no en `main.py`. El
+        `main.py` de la raíz es un stub (`print("Hello from repl-nix-workspace!")`).
+      - 🔴 **`.replit:6` ya intenta servir con gunicorn y está roto**:
+        `run = ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]` apunta a ese
+        stub, que no expone ningún `app`. El deployment falla con *Failed to
+        find attribute 'app' in 'main'*. El workflow de desarrollo funciona
+        porque usa `python run.py`.
+
+      Y el cambio no es cosmético. Gunicorn solo sirve WSGI: no ejecutaría
+      `init_db()`, `start_price_fetcher()`, el feed de Chainlink ni el
+      `StreakSnapperTrader`. Hace falta un entrypoint WSGI que arranque esos
+      hilos, y además:
+      - **`--workers 1` es obligatorio.** Varios workers son varios
+        `StreakSnapperTrader` → órdenes duplicadas y martingalas divergentes.
+        Y `STATE` es memoria de proceso: con 2+ workers el dashboard mostraría
+        datos distintos según quién respondiese. Concurrencia solo con
+        `--threads`.
+      - `deploymentTarget = "autoscale"` (`.replit:4`) es incompatible por lo
+        mismo — escalar a 2 instancias son 2 bots operando. El target correcto
+        es `reserved-vm`.
+      - `_check_port_available()` (`bot/main.py:118`) y el log «dashboard
+        listening» dejan de aplicar.
+
+---
+
+## ✅ Fase 4.7 — Ciclo 4h de un solo lado (punto 6 de `revisar.md`)
+
+> Fecha: 5-ago-2026. Suite: **304 tests** (antes 278).
+
+**Qué hace ahora `ss_trend`:**
+
+La tendencia se mide sobre la **vela 4h ya cerrada** y su lado se opera durante
+las **4h siguientes**. Si el bloque termina con pérdidas sin recuperar, el ciclo
+**se prorroga hasta ganar** antes de volver a mirar la tendencia.
+
+```
+vela 4h N (cerrada)          bloque N+1 (48 ventanas de 5 min)
+|-------------------|        |-----------------------------------|
+ open --------> close         lado fijo = dirección(N)
+ |mov| >= umbral?  sí  ---->  se opera ese lado
+                    no  ---->  no se opera el bloque N+1
+```
+
+| Situación | Acción |
+|---|---|
+| Ciclo abierto, dentro del bloque anclado | operar `cycle_side` |
+| Bloque expirado, **multiplicador > 1** | **prorrogar** hasta ganar |
+| Bloque expirado, multiplicador == 1 | cerrar ciclo y reevaluar |
+| Sin ciclo, movimiento ≥ umbral | abrir ciclo, operar |
+| Sin ciclo, movimiento < umbral | sin señal |
+
+Ganar cierra el ciclo. Si aún queda bloque, la siguiente ventana lo reabre con
+el mismo lado a ×1.0 — sale de las reglas, sin caso especial.
+
+- [x] `bot/binance_api.py` — `get_last_closed_4h_candle()` con `strength` con
+      signo y el bloque que licencia
+- [x] `bot/db.py` — `martingale_state.cycle_side` y `cycle_anchor_ts`, en la
+      misma fila que el multiplicador (una escritura, imposible desincronizar),
+      con migración en `_LATE_COLUMNS`. Helpers `open_cycle` / `close_cycle`;
+      `reset_martingale_state()` cierra también el ciclo
+- [x] `bot/strategy_streak.py` — motor del ciclo
+- [x] `bot/streak_trader.py` — en señales contradictorias **prevalece Trend** y
+      se descarta Fade, en vez de omitir la ventana: si no, fade podría dejar un
+      ciclo perdedor sin cerrar indefinidamente
+- [x] `bot/backtest.py`, dashboard, `/settings`, `.env.example`
+
+### ⚠️ Reversión consciente de la corrección de Fase 4.5
+
+La entrada «**Vela 4h congelada**» de Fase 4.5 catalogó como bug que la
+dirección se fijase y no se actualizara durante 4 h. **Eso es exactamente lo
+que el punto 6 pide**, así que se ha revertido a propósito. La diferencia que lo
+hace correcto ahora: se lee la vela **cerrada**, no la que se está formando —
+una vela recién abierta tiene `close == open` y no hay tendencia que leer. No
+volver a "corregirlo".
+
+### 🔴 La aritmética del ×1,5 no cerraba el ciclo
+
+Comprando `s` shares a precio `p`, un ciclo solo se recupera indefinidamente si
+
+```
+factor > 1 / (1 − p)
+```
+
+Para ×1,5 eso exige `p < 0,333`, y `SS_TREND_LIMIT_CAP` es **0,52**. Con base 5
+shares a 0,52 el neto de ganar en el intento 3 ya era **−1,10**: «seguir hasta
+ganar» agrandaba la pérdida en vez de cerrarla.
+
+- **`SS_MARTINGALE_MULT`: 1.5 → 2.1** (mínimo teórico 2,083 a 0,52).
+- `min_recovering_factor()` en `bot/config.py` es la fuente única del cálculo;
+  `bot/main.py` avisa al arrancar si el factor configurado no recupera, y la
+  previsualización de `/settings` ahora muestra **el neto si ganas en cada
+  paso**, no solo el tamaño de la apuesta.
+- ⚠️ El factor es **compartido** por ambas estrategias y el cap de Fade (0,60)
+  exige ×2,5. Con 2,1 el aviso salta para Fade.
+
+### 🔴 El backtest de `ss_trend` miraba el futuro
+
+`build_4h_trend_map()` mapeaba cada ventana a la vela 4h **que la contenía**, o
+sea a un cierre que aún no había ocurrido. Sustituida por
+`build_4h_signal_map()`, que usa la última vela **cerrada antes** de la ventana.
+Medido sobre 3.000 ventanas etiquetadas por Gamma:
+
+| Mapa | Win rate | P&L |
+|---|---|---|
+| Antiguo (con sesgo) | 54,4% | +$669 |
+| Nuevo (vela cerrada) | **48,7%** | **−$1.210** |
+
+**Todos los resultados de `ss_trend` publicados antes de este cambio estaban
+inflados por 5,7 puntos de win rate.**
+
+### 📉 `SS_TREND_MIN_STRENGTH = 0.008` — y qué mide de verdad
+
+Barrido sobre **10.000 ventanas (34,7 días)** con etiquetas de Gamma
+(`python -m bot.backtest --mode trend --min-strength X --factor Y`):
+
+| umbral | trades | win rate | z | P&L ×1,5 | P&L ×2,1 | maxDD ×2,1 | mayor trade |
+|---|---|---|---|---|---|---|---|
+| 0,00% | 9980 | 49,1% | −1,86 | −$2.057 | +$13.581 | −$36.509 | $40.163 |
+| 0,30% | 5453 | 48,9% | −1,61 | −$779 | +$7.038 | −$3.940 | $4.337 |
+| 0,50% | 3872 | 48,5% | −1,83 | −$600 | +$4.954 | −$3.940 | $4.337 |
+| **0,80%** | 1764 | 48,3% | −1,43 | −$158 | +$2.195 | **−$892** | **$983** |
+| 1,20% | 735 | 47,3% | −1,44 | −$105 | +$898 | −$892 | $983 |
+
+Dos conclusiones que conviene no perder:
+
+1. **El win rate está por debajo del 50% en todos los umbrales** (47,3–49,1%,
+   z entre −1,1 y −1,9). Esta señal **no tiene edge medible**; no hay umbral que
+   "elegir bien". Sobre 3.000 ventanas salía 51,9% a 0,8%, y con 10.000 se dio
+   la vuelta a 48,3% — era ruido.
+2. **El P&L positivo de ×2,1 es un artefacto de bankroll infinito.** Sin umbral,
+   el simulador llega a apostar **$40.163 en una sola ventana de 5 minutos** y a
+   un drawdown de −$36.509. Ni es financiable con el bankroll de $1.000 por
+   defecto, ni es llenable en el libro de Polymarket.
+
+0,8% se elige por **supervivencia de capital**, no por rentabilidad: es el
+umbral más bajo cuyo peor caso (−$892 de drawdown, $983 de trade máximo) todavía
+cabe en el bankroll por defecto. Re-medir antes de operar en real.
+
+### Decisión sobre Chainlink
+
+Se mantiene **Binance + Gamma** como fuente de resolución. Adoptar Chainlink
+exigiría el stream `btc-usd` de pago ($150/mes, sin tier gratuito, sin SDK de
+Python — **[§11.2.b](CHAINLINK_TWAP.md)**), y el propio documento recomienda
+medir el residuo del umbral `5e-5` unas semanas antes de gastarlo. En
+consecuencia, el pendiente «cablear el veto por divergencia» de la Fase 7 queda
+**descartado**: Chainlink no se usará para detectar impulsos ni retrocesos.
 
 ---
 
@@ -182,6 +325,43 @@ Auditoría completa + ejecución en vivo. Corregido:
 - [ ] Soporte multi-símbolo (SOL, ETH además de BTC)
 - [ ] Alertas Telegram/Discord en trades y pérdidas
 - [ ] Backtesting con datos históricos de Binance
+
+### 📊 Base en dólares en vez de shares — analizado 5-ago-2026, **no implementado**
+
+> Escenario evaluado: sustituir `shares = 5 × mult` por `coste = $5 × mult`, con
+> `shares = coste / precio`. Decisión: **dejarlo como está**. Se registra aquí
+> para no volver a derivarlo.
+
+**El problema que resolvería es real.** «5 shares base» no es un tamaño de
+apuesta: su coste depende del precio de llenado. Sobre los 65 trades reales de
+la DB, los precios de entrada van de **0,18 a 0,60** (mediana 0,51) y solo el
+**43 % llena al cap**, así que el escalón base del martingale oscila entre
+**$0,90 y $3,00** — 3,3× de diferencia. Una martingala existe para controlar el
+dinero en riesgo escalón a escalón, y hoy lo decide el mercado.
+
+**Lo que NO cambiaría:**
+
+- La condición de recuperación. El beneficio de ganar pasa de `s(1−p)` a
+  `d(1−p)/p`, pero la razón beneficio/riesgo es `(1−p)/p` en ambos: son las
+  mismas cuotas escritas de otra forma. **`factor > 1/(1−p)` sigue igual**, y el
+  ×2,1 sigue siendo el valor correcto.
+- El valor esperado. Es **cero en ambos esquemas** a precios justos. La
+  diferencia es varianza y exposición, no rentabilidad.
+
+**Lo que costaría:** en el backtest todos los fills son al cap, así que el
+cambio es un escalado exacto de $2,60 → $5,00 por trade base (×1,92). Al umbral
+0,8 % con ×2,1: drawdown **−$892 → −$1.715** y mayor trade **$983 → $1.890**.
+Ambos superan el bankroll de $1.000 por defecto. La base equivalente a la
+exposición actual sería **$2,60**, no $5.
+
+**Riesgo nuevo:** a precios bajos la base en dólares compra muchas más shares —
+a 0,18 el sexto escalón son **1.134 shares** frente a 204 hoy. Habría que
+comprobar la profundidad del libro, cosa que hoy no se hace.
+
+Si se retoma, toca: `ss_*_base_shares` → `*_base_stake` (config, `.env.example`,
+`/settings`, `state.py`, `dashboard.py`), el suelo `max(5.0, …)` de
+`strategy_streak.py` —que es un suelo **en shares**— y `MartingaleSim` en
+`backtest.py`. Verificar antes el tamaño mínimo de orden de Polymarket.
 
 ---
 
@@ -236,3 +416,95 @@ Auditoría completa + ejecución en vivo. Corregido:
 - **Sí existe historial de Chainlink** — la Candlestick API sirve OHLC histórico,
   contra lo que concluía §6 (**[§11.2.c](CHAINLINK_TWAP.md)**). Aun así el
   backtest se etiqueta con Gamma, que es gratis y es la verdad de liquidación.
+
+---
+
+## 🔬 Fase 8 — ¿Existe edge direccional? (MEDIDO, 5-ago-2026)
+
+> Pregunta de partida: ¿es la tendencia de 4h una buena forma de elegir lado, y
+> hay alternativas mejores? Respuesta corta: **la señal de 4h está del lado
+> equivocado de un efecto real**, y el efecto real es la reversión.
+>
+> Scripts: `scripts/signal_search.py`, `scripts/oos_validation.py`,
+> `scripts/preopen_edge.py`. Datos: 10.119 ventanas etiquetadas por Gamma
+> (35,2 días) y 3.734 con cotización previa a la apertura.
+
+### 🔴 El precio que se medía no era el precio de entrada
+
+`scripts/price_calibration.py` concluía que el mercado está perfectamente
+calibrado (z=+0.00, n=3.986) y que por tanto ninguna señal puede ganar. **Esa
+conclusión era un artefacto de muestreo.** `/prices-history` tiene fidelidad de
+1 minuto, así que «la primera cotización a partir de +15 s» cae en realidad a
+una **mediana de +67 s** dentro de la ventana. A esa altura el precio ya sabe
+cómo va la ventana — información mucho mejor que cualquier señal previa.
+
+El bot no entra a +67 s. Entra en los primeros segundos, y **la cotización
+previa a la apertura es plana**: 0,505 durante los 15 minutos anteriores, con
+libro real (bid 0,50 × 400 sh / ask 0,51 × 693 sh, **spread de 1 centavo**).
+
+Medido sobre las mismas operaciones (`scripts/preopen_edge.py`, sección C):
+
+| Momento de entrada | precio medio | brecha/share | ROI |
+|---|---|---|---|
+| Previo a la apertura | 0,514 | +0,0240 | **+4,67%** |
+| A +60 s (lo que se medía antes) | 0,529 | +0,0091 | +1,71% |
+
+### 📉 `ss_trend` no es neutral: está en el lado perdedor
+
+Al precio previo real, más medio spread:
+
+| Estrategia | n | acierto | precio | ROI/op | t |
+|---|---|---|---|---|---|
+| **ss_trend 4h (>0,8%)** | 1725 | 48,2% | 0,504 | **−4,22%** | −1,77 |
+| ss_trend 4h, sin ventanas con racha | 1335 | 46,8% | 0,504 | −7,08% | −2,61 |
+| **ss_fade racha≥4** | 1150 | 53,8% | 0,519 | **+3,74%** | +1,32 |
+| anti-trend 4h (invertida) | 1725 | 51,8% | 0,506 | +2,22% | +0,94 |
+
+Por tramos de ~8,8 días (ROI/op):
+
+| Estrategia | T1 | T2 | T3 | T4 | total |
+|---|---|---|---|---|---|
+| ss_trend 4h | −8,3% | −8,2% | −2,4% | +3,9% | −4,2% |
+| anti-trend 4h | +6,3% | +6,2% | +0,4% | −5,8% | +2,2% |
+| fade racha≥4 | +14,1% | −3,8% | +5,4% | +2,2% | +3,7% |
+
+### ✅ La reversión es real; el momentum no
+
+`scripts/oos_validation.py` parte los 35 días en dos mitades, ordena 49 señales
+en la primera y las mide en la segunda:
+
+- **r = +0,727** entre acierto en entrenamiento y en prueba.
+- Solo el **22%** de las señales cambia de lado (con ruido puro sería ~50%).
+- `fade racha≥4`: 54,3% dentro de muestra → **53,4% fuera de muestra**.
+- `reversion 24w` se mantiene sobre 50% en los 4 tramos; `trend 4h` no.
+
+O sea: la dirección de una ventana de 5 min **no es ruido puro**, revierte
+débilmente. La señal de 4h apuesta a continuación, que es el lado contrario.
+
+### ⚠️ Pero el edge no es significativo todavía
+
+Al ask real, `fade racha≥4` da +3,74% con **t = +1,32**. Consistente entre
+mitades (+4,20% y +3,29%) pero por debajo de significancia. Harían falta
+~2.539 operaciones ≈ **78 días** al ritmo actual (33 señales/día) para
+confirmarlo o descartarlo.
+
+### 🔴 Tres defectos concretos de la implementación actual
+
+1. **El cap de Fade (0,60) paga muy por encima del valor justo.** La señal vale
+   0,538; pagar 0,60 es −6,2 puntos garantizados. Los 5 trades reales de
+   `ss_fade` en la DB entraron a **0,558 de media**. El cap debería estar en
+   ~0,52.
+2. **El desempate favorece a la señal equivocada.** `streak_trader.py` descarta
+   Fade cuando choca con Trend. Ocurre en el 9% de los Fade (98 de 1.152).
+3. **La martingala apuesta ~100× lo que justifica el edge.** Con 53,8% a 0,519
+   Kelly pide el **4,03% del bankroll** ($40 sobre $1.000; cuarto de Kelly $10).
+   El backtest de la Fase 4.7 llega a apostar **$983 en una sola ventana**.
+
+### Pendiente
+
+- [ ] Bajar `SS_FADE_LIMIT_CAP` a ~0,52 y no entrar si el ask supera el valor justo
+- [ ] Invertir el desempate: que prevalezca Fade, no Trend
+- [ ] Decidir sobre `ss_trend`: apagarlo o invertirlo (el tramo T4 es negativo
+      también invertido — no está claro que la inversión sea estable)
+- [ ] Sustituir la martingala por fracción de Kelly mientras el edge no esté confirmado
+- [ ] Entrar lo más cerca posible de la apertura: esperar a +60 s cuesta 3 puntos de ROI

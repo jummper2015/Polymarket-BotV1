@@ -29,6 +29,12 @@ node_modules/
 # Gamma outcome cache — regenerable, and ~20k entries of API data
 data/gamma_outcomes.json
 
+# Caches de los scripts de medición (scripts/*.py) — regenerables desde las
+# APIs públicas de Binance y Gamma, y suman ~2,4 MB de datos crudos
+data/klines_5m_cache.json
+data/preopen_prices.json
+data/price_calibration.json
+
 # Claude Code local config — settings.json holds an API key in plain text
 .claude/
 
