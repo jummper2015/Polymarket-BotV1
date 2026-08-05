@@ -272,6 +272,64 @@ class TestToJson:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+class TestStateAcceptsEveryRuntimeField:
+    """`BotState` used to carry two hand-written allow-lists of field names.
+
+    A field added to RUNTIME_FIELDS was then validated by POST /config, stored
+    in `bot_config`, echoed back by /state — and silently dropped on its way
+    into the state, so the trader kept running with the old value. Both lists
+    are derived now; these tests are what keeps them derived.
+    """
+
+    def _state(self):
+        from bot.state import BotState
+
+        return BotState()
+
+    def test_update_runtime_config_accepts_all_of_them(self):
+        state = self._state()
+        sample = {name: _sample_value(f) for name, f in RUNTIME_FIELDS.items()}
+        accepted = state.update_runtime_config(**sample)
+        assert set(accepted) == set(RUNTIME_FIELDS)
+
+    def test_configure_applies_all_of_them(self):
+        state = self._state()
+        sample = {name: _sample_value(f) for name, f in RUNTIME_FIELDS.items()}
+        state.configure(**sample)
+        for name, value in sample.items():
+            assert getattr(state, name) == value, f"{name} no llegó al estado"
+
+    def test_snapshot_reports_all_of_them(self):
+        """/settings renders a widget per field and saves what it read back.
+        A field missing from the snapshot renders empty and then saves empty."""
+        snap = self._state().snapshot()
+        missing = set(RUNTIME_FIELDS) - set(snap)
+        assert not missing, f"ausentes del snapshot: {sorted(missing)}"
+
+    def test_unknown_keys_are_still_rejected(self):
+        state = self._state()
+        assert state.update_runtime_config(pwned=True) == {}
+        assert not hasattr(state, "pwned")
+
+    def test_mode_is_accepted_but_is_not_a_runtime_field(self):
+        """Deliberate: persisting paper/real would let an old setting start the
+        bot with real money after a restart."""
+        assert "mode" not in RUNTIME_FIELDS
+        assert self._state().update_runtime_config(mode="real") == {"mode": "real"}
+
+
+def _sample_value(field):
+    """A valid, non-default value for any field kind."""
+    if field.kind == "bool":
+        return True
+    if field.kind == "choice":
+        return field.choices[-1]
+    if field.kind == "hours":
+        return "13-21"
+    mid = ((field.minimum or 0) + (field.maximum or 100)) / 2
+    return int(mid) if field.kind == "int" else mid
+
+
 class TestRuntimeFieldJson:
     def test_defaults_to_the_field_name_as_label(self):
         assert RuntimeField("x", "float").to_json()["label"] == "x"

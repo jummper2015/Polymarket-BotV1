@@ -24,6 +24,22 @@ from .strategies import ids as strategy_ids
 from .strategies import to_json as strategy_registry_json
 
 
+def _runtime_field_names() -> set:
+    """Names of every runtime-editable parameter.
+
+    Imported lazily and read at call time rather than copied into a literal:
+    the two allow-lists here used to be hand-written, so a field added to
+    RUNTIME_FIELDS was accepted by POST /config and then silently dropped on
+    its way into the state — configured in the UI, ignored by the trader.
+
+    Local import because the dependency runs the other way at module level
+    (config → strategies), and keeping it here documents that.
+    """
+    from .config import RUNTIME_FIELDS
+
+    return set(RUNTIME_FIELDS)
+
+
 @dataclass
 class Trade:
     """In-memory trade record (mirrors DB for fast access)."""
@@ -91,6 +107,10 @@ class BotState:
         self.ss_vol_min_pct: float = 0.0
         self.ss_vol_max_pct: float = 100.0
         self.ss_range_max_pct: float = 100.0
+        # Not a regime filter: on by default. A window that is already old can
+        # only fill the side the market has written off, because the cap prices
+        # the favourite out.
+        self.ss_max_entry_age: int = 60
 
         # Windows skipped by a filter, counted by reason. This is the whole
         # point of shipping the filters off by default: it lets the dashboard
@@ -165,35 +185,16 @@ class BotState:
     # ── config helpers ────────────────────────────────────────────────────────
 
     def configure(self, **kwargs) -> None:
-        allowed = {
-            "mode", "has_credentials", "starting_bankroll",
-            "ss_enabled", "ss_mode",
-            "ss_fade_base_shares", "ss_fade_limit_cap", "ss_fade_streak_min",
-            "ss_trend_base_shares", "ss_trend_limit_cap", "ss_trend_min_strength",
-            "ss_sizing", "ss_kelly_fraction", "ss_martingale_mult_factor",
-            "ss_trading_hours", "ss_vol_min_pct", "ss_vol_max_pct",
-            "ss_range_max_pct",
-            "cl_enabled",
-            "cl_twap_enabled", "cl_twap_window", "cl_twap_stale_seconds",
-            "cl_divergence_max", "cl_record_ticks",
-        }
+        # Startup path: every runtime field, plus the three things that aren't
+        # runtime fields (`mode` is never persisted; the other two are derived).
+        allowed = _runtime_field_names() | {"mode", "has_credentials", "cl_enabled"}
         with self._lock:
             for key, val in kwargs.items():
                 if key in allowed:
                     setattr(self, key, val)
 
     def update_runtime_config(self, **kwargs) -> Dict[str, object]:
-        allowed = {
-            "mode", "starting_bankroll",
-            "ss_enabled", "ss_mode",
-            "ss_fade_base_shares", "ss_fade_limit_cap", "ss_fade_streak_min",
-            "ss_trend_base_shares", "ss_trend_limit_cap", "ss_trend_min_strength",
-            "ss_sizing", "ss_kelly_fraction", "ss_martingale_mult_factor",
-            "ss_trading_hours", "ss_vol_min_pct", "ss_vol_max_pct",
-            "ss_range_max_pct",
-            "cl_twap_enabled", "cl_twap_window", "cl_twap_stale_seconds",
-            "cl_divergence_max", "cl_record_ticks",
-        }
+        allowed = _runtime_field_names() | {"mode"}
         accepted: Dict[str, object] = {}
         with self._lock:
             for key, val in kwargs.items():
@@ -471,6 +472,7 @@ class BotState:
                 "ss_vol_min_pct": self.ss_vol_min_pct,
                 "ss_vol_max_pct": self.ss_vol_max_pct,
                 "ss_range_max_pct": self.ss_range_max_pct,
+                "ss_max_entry_age": self.ss_max_entry_age,
                 "skips": dict(self.skips),
                 # Runtime martingale
                 "ss_fade_martingale_mult": self.ss_fade_martingale_mult,

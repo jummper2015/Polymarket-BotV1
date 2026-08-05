@@ -136,6 +136,18 @@ BASE_FIELDS: tuple[RuntimeField, ...] = (
         label="Rango 2h máximo (pct)", step=5,
         hint="100 = sin filtro. Rango estrecho midió +6,1%",
     ),
+    # How late into a window an entry is still allowed. Not a regime filter —
+    # this one is on by default, because a late entry is adverse selection by
+    # construction: with a cap of 0.52 the favourite is already priced out, so
+    # the only side that can still fill is the one the market has written off.
+    # Observed in paper: starting the bot 182 s into a window bought DOWN at
+    # $0.06. Fase 8 measured +4.67% at the pre-open price against +1.71% at
+    # +60 s, so the cost of being late is real well before this ceiling.
+    RuntimeField(
+        "ss_max_entry_age", "int", minimum=5, maximum=280,
+        label="Antigüedad máxima de entrada (s)", step=5,
+        hint="No abre posición si la ventana lleva más de esto abierta",
+    ),
     RuntimeField(
         "starting_bankroll", "float", minimum=1.0, maximum=10_000_000,
         label="Bankroll inicial", step=50,
@@ -247,6 +259,10 @@ class Config:
     ss_vol_min_pct: float           # 0   = no lower bound
     ss_vol_max_pct: float           # 100 = no upper bound
     ss_range_max_pct: float         # 100 = no restriction
+
+    # Seconds into a window after which no new position is opened. On by
+    # default, unlike the filters above: see the RuntimeField comment.
+    ss_max_entry_age: int
 
     # ── Chainlink TWAP ────────────────────────────────────────────────────────
     cl_twap_enabled: bool
@@ -372,6 +388,12 @@ def load_config() -> Config:
         ss_vol_min_pct=_env_float("SS_VOL_MIN_PCT", 0.0),
         ss_vol_max_pct=_env_float("SS_VOL_MAX_PCT", 100.0),
         ss_range_max_pct=_env_float("SS_RANGE_MAX_PCT", 100.0),
+        # 60 s. In steady state the bot enters within seconds of the boundary, so
+        # this only bites after a restart or a slow market load — exactly the
+        # cases where it found a window already decided. Fase 8 measured entry
+        # quality falling from +4.67% (pre-open) to +1.71% (+60 s), so this is a
+        # ceiling on a known cost, not a free parameter.
+        ss_max_entry_age=_env_int("SS_MAX_ENTRY_AGE", 60),
 
         # ── Chainlink TWAP ────────────────────────────────────────────────────
         cl_twap_enabled=_env_bool("CL_TWAP_ENABLED", False),

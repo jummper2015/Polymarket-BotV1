@@ -217,6 +217,54 @@ def _sig(strategy, direction):
                         shares=5.0, multiplier=1.0, loss_streak=0, signal_reason="t")
 
 
+class TestLateEntryGate:
+    """Refusing a window that is already underway.
+
+    Found in paper: the loop only waits for the next boundary when less than
+    60 s remain, so a restart 182 s into a window traded it — and bought DOWN
+    at $0.06. That fill is adverse selection by construction: the limit cap
+    prices the favourite out, so the only side that can still fill late is the
+    one the market has already written off.
+    """
+
+    def test_a_fresh_window_is_allowed(self):
+        from bot.streak_trader import is_entry_too_late
+
+        assert is_entry_too_late(1_000, 1_002, 60) is False
+
+    def test_the_boundary_itself_is_allowed(self):
+        from bot.streak_trader import is_entry_too_late
+
+        assert is_entry_too_late(1_000, 1_000, 60) is False
+
+    def test_exactly_at_the_limit_is_still_allowed(self):
+        from bot.streak_trader import is_entry_too_late
+
+        assert is_entry_too_late(1_000, 1_060, 60) is False
+
+    def test_one_second_past_the_limit_is_refused(self):
+        from bot.streak_trader import is_entry_too_late
+
+        assert is_entry_too_late(1_000, 1_061, 60) is True
+
+    def test_the_observed_case_is_refused(self):
+        """182 s into the window — the restart that bought DOWN at $0.06."""
+        from bot.streak_trader import is_entry_too_late
+
+        assert is_entry_too_late(1_000, 1_182, 60) is True
+
+    def test_clock_skew_before_the_open_is_not_late(self):
+        """A negative age must not read as 'very late' through a sign flip."""
+        from bot.streak_trader import is_entry_too_late
+
+        assert is_entry_too_late(1_000, 990, 60) is False
+
+    def test_a_wider_setting_allows_a_later_entry(self):
+        from bot.streak_trader import is_entry_too_late
+
+        assert is_entry_too_late(1_000, 1_182, 240) is False
+
+
 class TestContradictorySignals:
     """Buying both sides of the same window costs exactly what it pays out."""
 

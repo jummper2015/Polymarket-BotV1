@@ -30,6 +30,7 @@
       "ss_vol_min_pct",
       "ss_vol_max_pct",
       "ss_range_max_pct",
+      "ss_max_entry_age",
     ],
     "chainlink-fields": [
       "cl_twap_enabled",

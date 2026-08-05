@@ -56,6 +56,16 @@ CONFIRM_BATCH_SIZE   = 50
 MEM_TRADE_CACHE_SIZE = 500
 
 
+def is_entry_too_late(window_ts: float, now: float, max_age: float) -> bool:
+    """Whether a window is too far along to open a position in it.
+
+    Split out of the loop so it can be tested without driving a whole window.
+    A negative age (clock skew, or a window that hasn't opened yet) is never
+    late — the check exists to refuse stale entries, not early ones.
+    """
+    return (now - window_ts) > max_age
+
+
 def _floor_to_tick(price: float) -> float:
     """Floor a price to the CLOB tick size, without binary-float drift.
 
@@ -185,6 +195,31 @@ class StreakSnapperTrader(threading.Thread):
         time.sleep(2.0)  # brief warmup for first prices
 
         try:
+            # ── late-entry gate ───────────────────────────────────────────────
+            # A window that is already well underway is not the window the
+            # strategies were measured on. Worse, the entry is adversely
+            # selected by construction: the limit cap prices the favourite out,
+            # so the only side that can still fill is the one the market has
+            # already written off. Observed in paper — a restart 182 s into a
+            # window bought DOWN at $0.06, which is a lottery ticket, not a fade.
+            #
+            # Before the regime gate because it needs no network at all.
+            now = time.time()
+            age = now - tokens.window_ts
+            if is_entry_too_late(tokens.window_ts, now, self.state.ss_max_entry_age):
+                self.state.record_skip("SKIP_LATE")
+                detail = (
+                    f"ventana abierta hace {age:.0f}s "
+                    f"(máximo {self.state.ss_max_entry_age}s)"
+                )
+                self.state.set_status("watching", detail)
+                logger.info(f"[SS] SKIP_LATE: {detail}", icon="⏭")
+                ttl = tokens.window_ts + WINDOW_SECONDS - time.time()
+                if ttl > 0:
+                    self._stop.wait(ttl + RESOLVE_GRACE_SECONDS)
+                self._last_window_slug = tokens.slug
+                return
+
             # ── regime gate ───────────────────────────────────────────────────
             # Checked before the signals so a filtered window costs one Binance
             # call instead of the whole signal path, and so the skip reason is

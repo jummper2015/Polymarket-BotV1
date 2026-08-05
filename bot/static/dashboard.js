@@ -621,6 +621,8 @@
     SKIP_HOURS: "Fuera de la franja horaria",
     SKIP_VOL: "Volatilidad fuera de banda",
     SKIP_RANGE: "Rango de 2h demasiado ancho",
+    // Este no es un filtro de régimen: viene encendido. Ver ss_max_entry_age.
+    SKIP_LATE: "Ventana demasiado avanzada",
   };
 
   function renderSkips(s) {
