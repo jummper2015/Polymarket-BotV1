@@ -589,3 +589,183 @@ perdía dinero de forma evitable.
 - [ ] Volver a medir con `python scripts/regime_filter.py` sobre operaciones
       nuevas — es el script que decide si los filtros se quedan
 - [ ] Verificación en vivo en paper del ciclo completo con la base nueva
+
+---
+
+## ✅ Fase A.1 — El cap era un filtro que no filtraba (6-ago-2026)
+
+> Script: `python scripts/cap_impact.py` (offline, solo caches en disco).
+> Datos: los mismos 10.141 ventanas de Gamma / 1.150 señales de la Fase 8.
+
+### 🔴 `min(cap, ask)` no descartaba la ventana cara: pujaba por debajo del ask
+
+`_execute_signal` calculaba el precio límite como `min(cap, ask)`. Cuando el ask
+superaba el cap —el **36%** de las señales de fade— eso no era «no operar»: era
+dejar una puja *por debajo* del ask. Dos consecuencias, ninguna intencionada:
+
+- **En paper** el trade se anotaba como llenado al cap. El registro medía una
+  estrategia que no existe, y precisamente en el 36% de ventanas peores.
+- **En real** quedaba una GTC colgada. No hay verificación de llenado
+  (`get_order`) ni cancelación en ningún punto de `bot/`, así que la orden
+  sobrevive a la ventana y la posición ya está escrita en `trades`.
+- Los llenados que sí llegasen serían los tóxicos: una puja en reposo solo
+  cruza cuando alguien vende contra ella. Es la misma selección adversa que
+  `Revisar Estrategias/spread_harvest_maker/RESEARCH.md` documenta para las
+  stink bids ≤ 0,35 (32–35% de acierto sobre 184 llenados).
+
+Ahora la ventana se descarta con `SKIP_ASK_ABOVE_CAP`, contado por motivo como
+los filtros de régimen y con etiqueta propia en el dashboard.
+
+### 📈 Y el cap, aplicado como filtro, es donde está el edge
+
+La Fase 8 midió `ss_fade` **sin cap**. Esa no es la estrategia que corre. Al
+descartar las ventanas caras, sobre la misma muestra:
+
+| | n | acierto | precio | ROI/op | t |
+|---|---|---|---|---|---|
+| fade≥4 sin cap (lo que medía la Fase 8) | 1150 | 53,8% | 0,519 | +3,91% | +1,37 |
+| **fade≥4 cap 0,52 (lo que corre)** | **734** | **54,9%** | **0,504** | **+8,77%** | **+2,40** |
+| fade≥4 cap 0,50 | 206 | 55,3% | 0,482 | +14,16% | +1,96 |
+| fade≥4 cap 0,48 | 39 | 38,5% | 0,405 | −5,24% | −0,27 |
+
+El cap no solo abarata: **selecciona**. Y aguanta el troceado — positivo en los
+cuatro cuartos de 8,8 días (+13,1 / +2,9 / +11,0 / +9,2), cosa que sin cap no
+hacía (T2 daba −2,3%).
+
+Dos controles que impiden leer esto como «comprar barato funciona»:
+
+- Comprar **cualquier** lado a ≤ 0,52 **sin señal** da −1,3% / −0,3%.
+- Por debajo de 0,48 el efecto se invierte (38,5% de acierto, n=39): un
+  descuento grande es información, no regalo. La banda útil es 0,50–0,52.
+
+Consecuencia práctica: **490 operaciones para t=1,96 a 20,8 ejecutables/día ≈ 24
+días**, no los ~78 que estimaba la Fase 8 sobre el ROI sin cap.
+
+⚠️ Los ROI de la tabla son equiponderados por operación (que es lo que exige el
+t), así que leen un pelo por encima del +3,74% ponderado por dólar publicado en
+la Fase 8. Misma muestra, distinta agregación.
+
+⚠️ **Sigue siendo dentro de muestra.** El 0,52 se eligió por el valor justo de
+la señal (0,538), no con este cálculo —eso ayuda—, pero sobre estos mismos 35
+días se probaron ~20 filtros, así que t=+2,40 es nominal. Lo que sí es firme es
+la parte negativa: la implementación anterior registraba posiciones que no
+existían.
+
+### 🔴 Enviar una orden no es tener una posición (verificación de llenado)
+
+El segundo defecto de la misma ruta, y el que importa cuando haya dinero real.
+`_place_limit_buy` devolvía el `orderID` y el trade se escribía acto seguido,
+sin comprobar nada. No había ninguna llamada a `get_order` ni a `cancel_order`
+en todo `bot/`. Consecuencias:
+
+- Una orden **sin llenar** quedaba registrada como posición abierta, y el paso
+  de resolución la liquidaba en un P&L y avanzaba la martingala con ella.
+- La orden **seguía viva** después de su ventana. El bot mantiene hasta
+  resolución y nunca vuelve a un slug, así que podía llenarse minutos más
+  tarde contra una ventana ya liquidada.
+- Un **llenado parcial** se anotaba al tamaño pedido, no al que se llenó.
+
+Ahora, en modo real y solo ahí:
+
+| Estado de la orden | Qué hace |
+|---|---|
+| Llenada del todo (lo normal: es marketable) | registra la posición, sin consulta extra |
+| Sin llenar tras `FILL_WAIT_SECONDS` (5 s) | cancela, `SKIP_NO_FILL`, **no** registra |
+| Parcial | cancela el resto, registra las shares que sí se llenaron |
+| Desconocido | registra el tamaño pedido y lo grita en el log |
+
+Dos decisiones que conviene no revertir sin leer esto:
+
+- **`matched_shares()` devuelve `None`, no `0.0`, cuando la respuesta no dice
+  nada inteligible.** «No se llenó» y «no tengo idea» piden tratamientos
+  distintos; unirlos es exactamente cómo una posición real deja de estar
+  registrada.
+- **Ante un estado desconocido se registra la posición.** Los dos errores no
+  son simétricos: una posición sobre-registrada es un número mal en el P&L,
+  mientras que una posición real sin registrar es dinero gastado que no
+  resuelve ni aparece en ningún sitio. El log lo marca a nivel de error.
+
+Una cancelación que el CLOB rechace se reintenta en el `finally` de la ventana
+(`_sweep_pending_cancels`), porque la alternativa es dejarla viva.
+
+⚠️ **Nada de esto se puede verificar en paper**, que no envía órdenes. Está
+cubierto por 21 tests con un CLOB falso, y la comprobación por mutación
+confirma que 3 de ellos fallan si se vuelve al registro sin verificar — pero la
+primera ejecución real es la primera vez que este código habla con el CLOB de
+verdad.
+
+### Pendiente de la fase
+
+- [ ] Verificar `SKIP_ASK_ABOVE_CAP` en vivo — con señal cada ~9 ventanas y un
+      36% de descarte, hace falta más de una hora de paper para verlo saltar
+- [ ] Verificar la ruta de llenado contra el CLOB real (con credenciales y
+      tamaño mínimo). Los nombres de campo (`size_matched`, `status`) se leen de
+      forma defensiva, pero solo una orden real confirma cuáles llegan
+- [x] El ciclo de `ss_trend` ya no se abre al generar la señal — ver abajo
+- [ ] Órdenes maker (`post_only`) y su gestión — lo que falta para la Fase B.
+      La cancelación y la consulta de estado ya están, que era la mitad del
+      trabajo
+
+---
+
+## ✅ Fase A.2 — El ciclo de `ss_trend` se compromete al entrar, no al señalar
+
+> Fecha: 6-ago-2026. Suite: **422 tests**.
+
+`get_trend_signal()` llamaba a `open_cycle()` en el momento de generar la señal.
+Pero una señal de trend todavía puede caerse por el desempate contra fade, por
+`SKIP_ASK_ABOVE_CAP`, por `SKIP_ORDER_FAILED` o por `SKIP_NO_FILL`: en los cuatro
+casos quedaba un lado comprometido durante cuatro horas sin nada comprado contra
+él. Ahora la señal **propone** el ancla (`pending_cycle_anchor_ts`) y el trader
+llama a `strategy.on_entry(sig)` cuando la posición ya está en los libros.
+
+### Corrección a la nota anterior de esta fase
+
+La nota que dejó la Fase A.1 decía que esto era el efecto lateral de los skips
+nuevos. Medido contra el código, **era más leve de lo que decía**: `open_cycle()`
+no toca el multiplicador (solo `cycle_side` y `cycle_anchor_ts`), y como el ancla
+es el `ts` de la vela cerrada, abrir el ciclo en la ventana W o en la W+5 del
+mismo bloque da el mismo lado y el mismo final de bloque. Con el multiplicador en
+×1,0 el bloque expiraba y el ciclo se cerraba limpio.
+
+Lo que sí arregla el cambio es que el estado deje de mentir: un ciclo abierto
+ahora significa «hay o hubo una posición en él», que es lo que hace que la regla
+de prórroga signifique algo. Y el panel de `/state` deja de mostrar un lado
+comprometido en ventanas donde no se compró nada — que es justo el panel con el
+que se decidirá si `ss_trend` se reenciende.
+
+### 🔴 Lo que apareció al mirar: la prórroga no encaja con `SS_SIZING=flat`
+
+`on_loss()` avanza `ss_trend_martingale_mult` **en todos los modos de sizing**,
+incluido `flat`, que es el que corre por defecto desde la Fase A. Y la regla de
+prórroga del ciclo pregunta exactamente eso:
+
+```python
+if self.state.ss_trend_martingale_mult > 1.0:   # → prorrogar hasta ganar
+```
+
+Con `flat`, una sola pérdida deja el multiplicador por encima de 1,0 para siempre
+(hasta ganar), así que el ciclo **se prorroga sin límite** y el lado queda
+bloqueado — pero el tamaño de la apuesta no crece, así que no hay ningún
+mecanismo de recuperación. «Correr hasta ganar» tiene sentido con una martingala
+detrás; sin ella solo mantiene una dirección secuestrada.
+
+No es un problema vivo: `ss_trend` está apagado (`SS_MODE=fade`).
+
+### Decisión (6-ago-2026): documentado y **no** arreglado
+
+Se deja como está, a propósito. `ss_trend` mide **−4,22% por operación** sobre
+1.725 señales (Fase 8) y puede no volver a encenderse nunca; arreglar hoy la
+semántica de una estrategia apagada es trabajo especulativo. Queda registrado
+aquí para que quien la reencienda no lo descubra en producción.
+
+**Si se reenciende `ss_trend`, esto es de resolución obligatoria antes.** Las
+opciones evaluadas, por si sirve al que llegue:
+
+1. Condicionar la prórroga a `ss_sizing == "martingale"` — un cambio de una
+   línea que restaura la lógica de la propia regla, ya que es el único modo
+   donde existe la recuperación que la prórroga espera. Era la recomendación.
+2. Acotar la prórroga a un máximo de N bloques, independientemente del sizing.
+
+No se ha tocado porque cambia la semántica de la estrategia, y eso es una
+decisión de producto y no de limpieza.

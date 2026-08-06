@@ -48,7 +48,9 @@ One iteration of `_run_one_window()` per 5-minute boundary:
 3. `PriceFeed` (CLOB v2 WebSocket) starts and stays connected for the whole window.
 4. `_check_regime()` → `bot/regime.py`. Runs **before** the signals so a filtered window costs one Binance call instead of the whole signal path, and so the skip reason is recorded even when a signal would have fired.
 5. `strategy.get_fade_signal()` / `get_trend_signal()` per `ss_mode`.
-6. `_execute_signal()` — limit BUY at `min(limit_cap, current_ask)`, floored to the $0.01 tick, persisted to `trades` with its `symbol`.
+6. `_execute_signal()` — skips the window with `SKIP_ASK_ABOVE_CAP` when the ask is above the cap, otherwise limit BUY at `min(limit_cap, current_ask)`, floored to the $0.01 tick, persisted to `trades` with its `symbol`. The skip is load-bearing: `min()` alone left a resting bid *under* the ask, booked as a fill in paper and as an unverified GTC order in real (`docs/RUTA.md` Fase A.1).
+
+   In real mode the fill is then verified before anything is persisted (`_settle_order`): a full fill is usually already reported in the POST response, an unfilled order is cancelled and counted as `SKIP_NO_FILL` with **no** position recorded, and a partial fill is kept at the size that actually filled with the remainder cancelled. `matched_shares()` returns `None` rather than `0.0` for an unintelligible response, because "did not fill" and "no idea" need different handling — on `None` the position *is* recorded, since an unrecorded real position is money that never resolves. None of this path runs in paper, so it is covered by tests with a fake CLOB only.
 7. Wait for window close, then settle **this** window before the next one opens.
 
 Step 7 is load-bearing: the martingale multiplier for the next entry is only correct once the window that just closed has resolved.

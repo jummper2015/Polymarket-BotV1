@@ -69,6 +69,13 @@ class StreakSignal:
     loss_streak: int    # consecutive losses before this trade
     signal_reason: str  # human-readable reason (for logging)
 
+    # Set only by the ss_trend signal that would *open* a 4h cycle, and only
+    # acted on once the entry is actually on the books (`on_entry`). Committing
+    # a side is a claim about a position we hold, so it cannot be written while
+    # the signal can still be dropped by the tie-break or refused by the ask,
+    # the order or the fill.
+    pending_cycle_anchor_ts: Optional[int] = None
+
 
 # ── Strategy class ────────────────────────────────────────────────────────────
 
@@ -306,11 +313,27 @@ class StreakSnapperStrategy:
             f"({strength * 100:+.3f}%) → se opera {trend_dir} durante 4h",
             icon="📈",
         )
-        self._open_trend_cycle(trend_dir, candle["ts"])
-
-        return self._trend_signal(
+        # The cycle is *not* opened here. This signal still has to survive the
+        # tie-break against fade, the ask-vs-cap gate, the order and the fill;
+        # writing the locked side now would commit ss_trend to a direction for
+        # four hours on the strength of a position it may never take.
+        signal = self._trend_signal(
             trend_dir, f"tendencia 4h {trend_dir} ({strength * 100:+.2f}%)"
         )
+        if signal is not None:
+            signal.pending_cycle_anchor_ts = int(candle["ts"])
+        return signal
+
+    def on_entry(self, sig: StreakSignal) -> None:
+        """Commit what the signal only proposed, now that the entry exists.
+
+        Called by the trader once the position is on the books. Only the
+        ss_trend signal that opens a block carries an anchor; every other signal
+        — including ss_trend inside an already-open cycle — is a no-op here.
+        """
+        if sig.pending_cycle_anchor_ts is None:
+            return
+        self._open_trend_cycle(sig.direction, sig.pending_cycle_anchor_ts)
 
     # ── Martingale hooks ──────────────────────────────────────────────────────
 

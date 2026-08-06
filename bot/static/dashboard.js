@@ -623,8 +623,14 @@
     SKIP_RANGE: "Rango de 2h demasiado ancho",
     // Este no es un filtro de régimen: viene encendido. Ver ss_max_entry_age.
     SKIP_LATE: "Ventana demasiado avanzada",
+    // Tampoco: el libro pedía más que el cap. Antes se dejaba una puja por
+    // debajo del ask y se registraba como posición. Ver is_ask_above_cap.
+    SKIP_ASK_ABOVE_CAP: "Ask por encima del cap",
     // Solo en modo real: la orden no llegó a enviarse.
     SKIP_ORDER_FAILED: "Orden rechazada por el CLOB",
+    // Solo en modo real: se envió, no se llenó y se canceló. Antes de que se
+    // verificara el llenado esto se registraba como posición.
+    SKIP_NO_FILL: "Orden enviada sin llenar",
   };
 
   function renderSkips(s) {

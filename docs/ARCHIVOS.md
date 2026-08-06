@@ -84,6 +84,7 @@ scripts/                        ← 🔬 Medición (Fase 8, docs/RUTA.md)
 ├── oos_validation.py           ← Ordena en la primera mitad, mide en la segunda
 ├── preopen_edge.py             ← ROI al precio previo a la apertura vs a +60 s
 ├── regime_filter.py            ← Franja horaria, volatilidad y rango
+├── cap_impact.py               ← El cap como filtro de entrada (Fase A.1)
 └── price_calibration.py        ← Calibración del precio de mercado
 
 data/                        ← Todo regenerable, nada versionado

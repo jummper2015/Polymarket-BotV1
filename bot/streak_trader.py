@@ -52,6 +52,15 @@ RESOLVE_MAX_WAIT      = 45.0
 GAMMA_SETTLE_SECONDS = 200
 CONFIRM_BATCH_SIZE   = 50
 
+# Fill verification (real mode only). The cap gate guarantees the limit price
+# equals the ask, so the order is marketable and either crosses at once or is
+# not a position at all. This is only how long we let it prove that before
+# cancelling the remainder — kept tight because Fase 8 measured that entering
+# late costs about 3 points of ROI, and a resting bid is the very thing this
+# check exists to avoid leaving behind.
+FILL_WAIT_SECONDS = 5.0
+FILL_POLL_SECONDS = 0.5
+
 # How many past trades to keep in the in-memory dashboard cache.
 MEM_TRADE_CACHE_SIZE = 500
 
@@ -64,6 +73,67 @@ def is_entry_too_late(window_ts: float, now: float, max_age: float) -> bool:
     late — the check exists to refuse stale entries, not early ones.
     """
     return (now - window_ts) > max_age
+
+
+def is_ask_above_cap(ask: Optional[float], cap: float) -> bool:
+    """Whether the book prices this window out of the strategy's band.
+
+    Split out of `_execute_signal` so the decision is testable without a live
+    book. Missing or non-positive asks return False on purpose: the WebSocket
+    hiccuping is not a reason to refuse the window, the same fail-open stance
+    the regime gate takes when Binance has no candles to offer.
+
+    The comparison is exact rather than tick-tolerant — prices live on a
+    one-cent grid, so an ask *equal* to the cap is tradeable and only a
+    genuinely higher one is not.
+    """
+    if not ask or ask <= 0:
+        return False
+    return ask > cap
+
+
+# The CLOB reports an order as filled, resting or dead. Only the first means we
+# hold shares; the other two mean we hold nothing *yet* and the difference
+# between them is whether waiting could still change that.
+_FILLED_STATUSES = {"matched", "filled", "complete"}
+_RESTING_STATUSES = {"live", "delayed", "open", "pending"}
+_DEAD_STATUSES = {"canceled", "cancelled", "unmatched", "rejected", "expired"}
+
+
+def matched_shares(payload: object, requested: float) -> Optional[float]:
+    """How many shares an order actually filled, per the CLOB's own answer.
+
+    Reads both shapes the client returns as plain dicts: the POST /order
+    response and the GET /order lookup. `size_matched` is the authoritative
+    field and is in shares, so it wins whenever it is present; the textual
+    status is the fallback for responses that omit it.
+
+    Returns **None** when the payload says nothing intelligible about matching.
+    That is deliberately distinct from 0.0: "the order did not fill" and "we
+    have no idea whether it filled" call for different handling, and collapsing
+    them is how a real position becomes untracked.
+    """
+    if not isinstance(payload, dict):
+        return None
+
+    for key in ("size_matched", "sizeMatched", "matched_size", "size_filled"):
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        try:
+            # Clamped: an over-fill is not a thing the exchange should report,
+            # and if it ever does we would rather under-record than invent
+            # shares that the resolution step would then settle.
+            return max(0.0, min(float(raw), requested))
+        except (TypeError, ValueError):
+            break  # present but unreadable — fall through to the status
+
+    status = str(payload.get("status") or "").strip().lower()
+    if status in _FILLED_STATUSES:
+        return requested
+    if status in _RESTING_STATUSES or status in _DEAD_STATUSES:
+        return 0.0
+    return None
 
 
 def _floor_to_tick(price: float) -> float:
@@ -98,6 +168,9 @@ class StreakSnapperTrader(threading.Thread):
 
         # Track current window for resolution
         self._last_window_slug: Optional[str] = None
+
+        # Orders the CLOB refused to cancel, retried before the window ends.
+        self._pending_cancels: list[str] = []
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -297,6 +370,11 @@ class StreakSnapperTrader(threading.Thread):
         finally:
             feed.stop()
             self.state.set_ws_connected(False)
+            # Last chance before the slug is abandoned: the bot never revisits a
+            # window, so an order still alive here can only fill against one that
+            # has already settled. In `finally` so an exception on the way out
+            # cannot be what leaves it resting.
+            self._sweep_pending_cancels()
 
         self._last_window_slug = tokens.slug
 
@@ -353,6 +431,35 @@ class StreakSnapperTrader(threading.Thread):
         ask_up, ask_down = self.state.get_asks()
         current_ask = ask_up if sig.direction == "UP" else ask_down
 
+        # ── ask-above-cap gate ────────────────────────────────────────────────
+        # `min(cap, ask)` below turns a priced-out window into a resting bid
+        # *under* the ask, which is a different trade from the one that was
+        # measured: in paper it was booked as a fill that would never have
+        # happened, and in real mode it left a GTC order the bot neither
+        # verifies nor cancels — the position lands in `trades` either way.
+        #
+        # And the fills it does get are the toxic ones: a bid only trades when
+        # someone sells into it, i.e. when the side is already going wrong.
+        #
+        # Skipping instead is also where the edge is. Over the 1.150 fade
+        # signals of the Gamma sample the ask beats the 0,52 cap in 36% of
+        # windows; dropping exactly those takes the signal from +3,91%/trade
+        # (n=1150, t=+1,37) to +8,77% (n=734, 54,9%, t=+2,40), positive in the
+        # four ~8,8-day quarters and in both halves. Buying any side at ≤0,52
+        # with no signal returns −1,3%, so this is the signal, not cheapness.
+        # Reproducible with `python scripts/cap_impact.py`; those ROIs are
+        # equal-weighted per operation (what the t needs), so they read a shade
+        # above the dollar-weighted +3,74% published in docs/RUTA.md Fase 8.
+        if is_ask_above_cap(current_ask, sig.limit_cap):
+            self.state.record_skip("SKIP_ASK_ABOVE_CAP")
+            detail = (
+                f"ask {current_ask:.4f} > cap {sig.limit_cap:.4f} "
+                f"({sig.direction})"
+            )
+            self.state.set_status("watching", detail)
+            logger.info(f"[SS {strategy_label}] SKIP_ASK_ABOVE_CAP: {detail}", icon="⏭")
+            return
+
         # Determine limit price: min(cap, current_ask)
         if current_ask and current_ask > 0:
             limit_price = round(min(sig.limit_cap, current_ask), 4)
@@ -390,7 +497,7 @@ class StreakSnapperTrader(threading.Thread):
                 return
 
             try:
-                order_id = self._place_limit_buy(token_id, limit_price, shares)
+                order_id, placed = self._place_limit_buy(token_id, limit_price, shares)
             except Exception as exc:
                 logger.err(f"[SS {strategy_label}] order failed: {exc}")
                 return
@@ -408,6 +515,37 @@ class StreakSnapperTrader(threading.Thread):
                 )
                 self.state.record_skip("SKIP_ORDER_FAILED")
                 return
+
+            # ── fill verification ─────────────────────────────────────────────
+            # Sending an order is not holding a position. Until this existed the
+            # trade was written the moment the CLOB accepted the order, so an
+            # unfilled bid became a position on the books that the resolution
+            # step then settled into a P&L — and the order itself stayed alive
+            # past its own window, because nothing ever cancelled it.
+            filled = self._settle_order(order_id, placed, shares, strategy_label)
+
+            if filled <= 0:
+                logger.warn(
+                    f"[SS {strategy_label}] la orden no se llenó en "
+                    f"{FILL_WAIT_SECONDS:.0f}s — cancelada, sin posición en "
+                    f"{tokens.slug}",
+                    icon="⏭",
+                )
+                self.state.record_skip("SKIP_NO_FILL")
+                return
+
+            if filled < shares:
+                # A partial fill is a real position at a smaller size, so it is
+                # kept and recorded at what actually filled — recording the
+                # requested size would overstate the stake and, with martingale
+                # sizing, compound that error into the next entry.
+                logger.warn(
+                    f"[SS {strategy_label}] llenado parcial "
+                    f"{filled:g}/{shares:g} shares — resto cancelado",
+                    icon="◐",
+                )
+                shares = filled
+                cost = round(shares * limit_price, 4)
 
         # ── persist trade to DB ───────────────────────────────────────────────
         trade_id: int = 0
@@ -458,6 +596,13 @@ class StreakSnapperTrader(threading.Thread):
                 limit_cap=sig.limit_cap,
             )
             self.state.add_trade(mem_trade)
+
+            # Only now is the position real, so only now may a strategy commit
+            # state that claims one. For ss_trend that is the 4h locked side:
+            # opening it at signal time meant the tie-break, the cap gate, a
+            # rejected order or an unfilled one each left a committed cycle
+            # behind with nothing bought against it.
+            self.strategy.on_entry(sig)
         except Exception as exc:
             logger.err(f"[SS {strategy_label}] DB save failed: {exc}")
 
@@ -727,8 +872,15 @@ class StreakSnapperTrader(threading.Thread):
 
     # ── CLOB V2 order helper ──────────────────────────────────────────────────
 
-    def _place_limit_buy(self, token_id: str, price: float, shares: float) -> Optional[str]:
-        """Place a GTC limit BUY order. Returns order_id or None."""
+    def _place_limit_buy(
+        self, token_id: str, price: float, shares: float
+    ) -> tuple[Optional[str], Optional[dict]]:
+        """Place a GTC limit BUY order. Returns (order_id, raw response).
+
+        The response is handed back, not discarded: for a marketable order the
+        CLOB already reports the match in it, so the common case needs no
+        follow-up lookup at all.
+        """
         try:
             from py_clob_client_v2 import OrderArgs, OrderType
 
@@ -742,10 +894,103 @@ class StreakSnapperTrader(threading.Thread):
                 order_args, order_type=OrderType.GTC, post_only=False
             )
             if resp and isinstance(resp, dict):
-                return resp.get("orderID") or resp.get("id")
+                return (resp.get("orderID") or resp.get("id"), resp)
         except Exception as exc:
             logger.err(f"[SS] CLOB order failed: {exc}")
-        return None
+        return (None, None)
+
+    def _fetch_order(self, order_id: str) -> Optional[dict]:
+        """Look an order up. Returns None on any failure, never raises.
+
+        A failed lookup is not evidence of anything, which is exactly why it
+        returns None rather than an empty dict: `matched_shares` reads None as
+        "unknown", and the caller must not mistake a network error for "did not
+        fill".
+        """
+        try:
+            resp = self._client.get_order(str(order_id))
+            return resp if isinstance(resp, dict) else None
+        except Exception as exc:
+            logger.warn(f"[SS] no se pudo consultar la orden {order_id}: {exc}")
+            return None
+
+    def _cancel_order(self, order_id: str) -> bool:
+        """Cancel an order. Returns whether the CLOB accepted the cancellation.
+
+        Orders left alive outlive their window: the bot holds to resolution and
+        never re-visits a slug, so an uncancelled remainder can fill minutes
+        later against a window that has already settled.
+        """
+        try:
+            from py_clob_client_v2 import OrderPayload
+
+            self._client.cancel_order(OrderPayload(orderID=str(order_id)))
+            return True
+        except Exception as exc:
+            logger.err(f"[SS] no se pudo cancelar la orden {order_id}: {exc}")
+            return False
+
+    def _settle_order(
+        self, order_id: str, placed: Optional[dict], requested: float, label: str
+    ) -> float:
+        """Shares we actually hold after placing `order_id`, remainder cancelled.
+
+        The order is marketable, so the usual path is a full fill reported in
+        the POST response and no lookup at all. Anything short of that is
+        polled briefly, then cancelled — a partial fill is a real position and
+        is kept; the unfilled remainder is not left resting.
+        """
+        filled = matched_shares(placed, requested)
+        deadline = time.time() + FILL_WAIT_SECONDS
+
+        while (filled is None or filled < requested) and time.time() < deadline:
+            if self._stop.wait(FILL_POLL_SECONDS):
+                break  # shutdown: stop waiting, still cancel below
+            filled = matched_shares(self._fetch_order(order_id), requested)
+
+        if filled is not None and filled >= requested:
+            return requested
+
+        cancelled = self._cancel_order(order_id)
+        if not cancelled:
+            # Sweep it again before the window ends. Retried rather than
+            # ignored because the alternative is an order that can fill after
+            # its own window has settled.
+            self._pending_cancels.append(order_id)
+
+        # After a cancellation the order is final, so this lookup is the
+        # authoritative fill count — the poll above may have caught it mid-match.
+        final = matched_shares(self._fetch_order(order_id), requested)
+        if final is not None:
+            return final
+        if filled is not None:
+            return filled
+
+        # Nothing — the POST response, the polls and the post-cancel lookup all
+        # came back unintelligible. Assume the order filled, because the two
+        # errors are not symmetric: an over-recorded position shows up in the
+        # P&L as a wrong number, while an unrecorded real one is money spent
+        # that never resolves and never appears anywhere.
+        logger.err(
+            f"[SS {label}] estado de llenado desconocido para {order_id} — "
+            f"se registra como llenado ({requested}) para no perder la posición"
+        )
+        return requested
+
+    def _sweep_pending_cancels(self) -> None:
+        """Retry cancellations the CLOB refused earlier in the window."""
+        if not self._pending_cancels:
+            return
+        still: list[str] = []
+        for order_id in self._pending_cancels:
+            if not self._cancel_order(order_id):
+                still.append(order_id)
+        if still:
+            logger.err(
+                f"[SS] {len(still)} orden(es) siguen vivas tras reintentar "
+                f"la cancelación: {', '.join(still)}"
+            )
+        self._pending_cancels = still
 
     # ── CLOB V2 client builder ────────────────────────────────────────────────
 

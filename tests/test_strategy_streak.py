@@ -189,6 +189,20 @@ def _signal(strategy, candle):
         return strategy.get_trend_signal()
 
 
+def _enter(strategy, candle):
+    """Signal *and* commit the entry — the sequence the trader performs.
+
+    `get_trend_signal` no longer opens the cycle by itself: the signal still has
+    to survive the tie-break against fade and the cap, order and fill gates, and
+    a committed side is a claim about a position we actually hold. So a test that
+    needs an open cycle has to enter, not merely signal.
+    """
+    sig = _signal(strategy, candle)
+    if sig is not None:
+        strategy.on_entry(sig)
+    return sig
+
+
 class TestTrendSignal:
 
     def test_up_trend_signal(self, strategy):
@@ -244,7 +258,7 @@ class TestTrendCycle:
 
     def test_opening_a_cycle_records_side_and_anchor(self, strategy):
         candle = _make_candle("UP")
-        _signal(strategy, candle)
+        _enter(strategy, candle)
         assert strategy.state.ss_trend_cycle_side == "UP"
         assert strategy.state.ss_trend_cycle_anchor_ts == candle["ts"]
 
@@ -255,7 +269,7 @@ class TestTrendCycle:
         candle is what the 4h cycle exists to stop (docs/revisar.md punto 6).
         """
         anchor = int(time.time()) - FOUR_HOURS
-        assert _signal(strategy, _make_candle("UP", ts=anchor)).direction == "UP"
+        assert _enter(strategy, _make_candle("UP", ts=anchor)).direction == "UP"
 
         # A DOWN candle arrives while the block is still running — ignored.
         newer = _make_candle("DOWN", strength=0.03, ts=anchor + FOUR_HOURS)
@@ -264,7 +278,7 @@ class TestTrendCycle:
     def test_block_expiry_with_losses_extends_the_cycle(self, strategy):
         """Unrecovered losses keep the side committed past the 4h block."""
         expired = int(time.time()) - 3 * FOUR_HOURS
-        _signal(strategy, _make_candle("UP", ts=expired))
+        _enter(strategy, _make_candle("UP", ts=expired))
         strategy.state.ss_trend_martingale_mult = 2.1  # a loss happened
 
         sig = _signal(strategy, _make_candle("DOWN", strength=0.03, ts=expired))
@@ -274,29 +288,72 @@ class TestTrendCycle:
     def test_block_expiry_without_losses_reevaluates(self, strategy):
         """A clean block ends the cycle and the next candle decides again."""
         expired = int(time.time()) - 3 * FOUR_HOURS
-        _signal(strategy, _make_candle("UP", ts=expired))
+        _enter(strategy, _make_candle("UP", ts=expired))
         assert strategy.state.ss_trend_martingale_mult == 1.0
 
         fresh = _make_candle("DOWN", strength=0.03)
-        sig = _signal(strategy, fresh)
+        sig = _enter(strategy, fresh)
         assert sig.direction == "DOWN"
         assert strategy.state.ss_trend_cycle_anchor_ts == fresh["ts"]
 
     def test_expired_clean_block_stops_when_no_clear_trend(self, strategy):
         expired = int(time.time()) - 3 * FOUR_HOURS
-        _signal(strategy, _make_candle("UP", ts=expired))
+        _enter(strategy, _make_candle("UP", ts=expired))
 
         assert _signal(strategy, _make_candle("UP", strength=0.001)) is None
         assert strategy.state.ss_trend_cycle_side is None
 
     def test_loss_keeps_the_side(self, strategy):
-        _signal(strategy, _make_candle("UP"))
+        _enter(strategy, _make_candle("UP"))
         with patch("bot.strategy_streak.advance_martingale_state"):
             strategy.on_loss("ss_trend")
         assert strategy.state.ss_trend_cycle_side == "UP"
 
+    def test_a_signal_that_is_never_entered_commits_no_cycle(self, strategy):
+        """The point of deferring `open_cycle` to `on_entry`.
+
+        A trend signal can be dropped by the tie-break with fade, refused by the
+        ask-vs-cap gate, rejected by the CLOB or left unfilled. Opening the cycle
+        at signal time committed the side for four hours in every one of those
+        cases, with nothing bought against it.
+        """
+        sig = _signal(strategy, _make_candle("UP"))
+
+        assert sig is not None and sig.direction == "UP"
+        assert sig.pending_cycle_anchor_ts is not None   # the intent is carried
+        assert strategy.state.ss_trend_cycle_side is None
+        assert strategy.state.ss_trend_cycle_anchor_ts is None
+
+    def test_entering_commits_what_the_signal_proposed(self, strategy):
+        candle = _make_candle("UP")
+        sig = _signal(strategy, candle)
+        strategy.on_entry(sig)
+
+        assert strategy.state.ss_trend_cycle_side == "UP"
+        assert strategy.state.ss_trend_cycle_anchor_ts == candle["ts"]
+
+    def test_entering_inside_an_open_cycle_carries_no_anchor(self, strategy):
+        """Only the signal that *opens* a block commits anything."""
+        anchor = int(time.time()) - FOUR_HOURS
+        _enter(strategy, _make_candle("UP", ts=anchor))
+
+        follow_up = _signal(strategy, _make_candle("UP", ts=anchor))
+        assert follow_up.pending_cycle_anchor_ts is None
+
+        strategy.on_entry(follow_up)  # no-op, must not move the anchor
+        assert strategy.state.ss_trend_cycle_anchor_ts == anchor
+
+    def test_on_entry_ignores_a_fade_signal(self, strategy):
+        from bot.strategy_streak import StreakSignal
+
+        strategy.on_entry(StreakSignal(
+            strategy="ss_fade", direction="UP", limit_cap=0.52, shares=5.0,
+            multiplier=1.0, loss_streak=0, signal_reason="racha",
+        ))
+        assert strategy.state.ss_trend_cycle_side is None
+
     def test_win_closes_the_cycle(self, strategy):
-        _signal(strategy, _make_candle("UP"))
+        _enter(strategy, _make_candle("UP"))
         with patch("bot.strategy_streak.reset_martingale_state"):
             strategy.on_win("ss_trend")
         assert strategy.state.ss_trend_cycle_side is None
@@ -305,7 +362,7 @@ class TestTrendCycle:
     def test_win_mid_block_reopens_the_same_side_at_base_size(self, strategy):
         """A win inside the block doesn't interrupt the trend, only the stake."""
         candle = _make_candle("UP")
-        _signal(strategy, candle)
+        _enter(strategy, candle)
         strategy.state.ss_trend_martingale_mult = 2.1
         with patch("bot.strategy_streak.reset_martingale_state"):
             strategy.on_win("ss_trend")

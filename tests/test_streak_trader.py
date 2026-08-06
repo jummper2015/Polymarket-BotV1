@@ -2,6 +2,7 @@
 
 import os
 import sys
+import threading
 
 import pytest
 
@@ -263,6 +264,408 @@ class TestLateEntryGate:
         from bot.streak_trader import is_entry_too_late
 
         assert is_entry_too_late(1_000, 1_182, 240) is False
+
+
+class TestAskAboveCapGate:
+    """The cap must skip the window, not turn into a bid under the ask.
+
+    `min(cap, ask)` quietly made a priced-out window into a resting maker bid:
+    in paper it was booked as a fill that would never have happened, and in
+    real mode it left a GTC order the bot neither verifies nor cancels, with
+    the position already written to `trades`.
+
+    Measured over the 1.150 fade signals of the Gamma sample, the ask beats the
+    0,52 cap in 36% of windows; skipping exactly those takes the signal from
+    +3,91%/trade (n=1150, t=+1,37) to +8,77% (n=734, 54,9%, t=+2,40).
+    Reproducible with `python scripts/cap_impact.py`.
+    """
+
+    def test_an_ask_under_the_cap_is_tradeable(self):
+        from bot.streak_trader import is_ask_above_cap
+
+        assert is_ask_above_cap(0.50, 0.52) is False
+
+    def test_an_ask_equal_to_the_cap_is_tradeable(self):
+        """Prices live on a one-cent grid: paying the cap is what it allows."""
+        from bot.streak_trader import is_ask_above_cap
+
+        assert is_ask_above_cap(0.52, 0.52) is False
+
+    def test_one_tick_over_the_cap_is_refused(self):
+        from bot.streak_trader import is_ask_above_cap
+
+        assert is_ask_above_cap(0.53, 0.52) is True
+
+    def test_the_common_case_is_refused(self):
+        """0,56 under a 0,52 cap — the shape of the 36% that used to rest."""
+        from bot.streak_trader import is_ask_above_cap
+
+        assert is_ask_above_cap(0.56, 0.52) is True
+
+    def test_a_missing_ask_does_not_refuse(self):
+        """Fail-open: a WebSocket hiccup is not a reason to halt trading.
+
+        Same stance as the regime gate when Binance has no candles.
+        """
+        from bot.streak_trader import is_ask_above_cap
+
+        assert is_ask_above_cap(None, 0.52) is False
+
+    def test_a_zero_ask_does_not_refuse(self):
+        from bot.streak_trader import is_ask_above_cap
+
+        assert is_ask_above_cap(0.0, 0.52) is False
+
+    def test_execute_signal_skips_without_recording_a_position(self, monkeypatch):
+        """The gate has to fire in the trader, not just in the helper.
+
+        The defect was never in the arithmetic — `min()` did what it says. It
+        was that a priced-out window still reached the persist block, so this
+        asserts the early return: a counted skip and no trade.
+        """
+        from bot.streak_trader import StreakSnapperTrader
+
+        class FakeState:
+            mode = "paper"
+
+            def __init__(self):
+                self.skips = []
+                self.added = []
+                self.status = None
+
+            def get_asks(self):
+                return (0.56, 0.44)          # UP priced out, DOWN would be fine
+
+            def record_skip(self, reason):
+                self.skips.append(reason)
+
+            def set_status(self, *a):
+                self.status = a
+
+            def add_trade(self, trade):      # must never be reached
+                self.added.append(trade)
+
+        trader = StreakSnapperTrader.__new__(StreakSnapperTrader)
+        trader.state = FakeState()
+        trader.symbol = "btc"
+        trader._client = None
+
+        class Tokens:
+            up_token_id = "up"
+            down_token_id = "down"
+            slug = "btc-updown-5m-1"
+            window_ts = 1_785_600_000
+
+        sig = _sig("ss_fade", "UP")
+        sig.limit_cap = 0.52
+
+        trader._execute_signal(Tokens(), sig)
+
+        assert trader.state.skips == ["SKIP_ASK_ABOVE_CAP"]
+        assert trader.state.added == []
+
+    def test_the_other_side_still_trades(self, sqlite_db):
+        """Only the signalled side's ask matters — DOWN at 0,44 is tradeable.
+
+        Guards against reading the wrong leg of `get_asks()`, which would skip
+        every window whenever either side happened to be expensive. Runs
+        against a real SQLite DB so it reaches the persist block: the persist
+        block swallows its own exceptions, so a stubbed DB would make this pass
+        without proving anything.
+        """
+        from bot import streak_trader as st
+
+        class FakeState:
+            mode = "paper"
+
+            def __init__(self):
+                self.skips = []
+                self.added = []
+
+            def get_asks(self):
+                return (0.56, 0.44)
+
+            def record_skip(self, reason):
+                self.skips.append(reason)
+
+            def set_status(self, *a):
+                pass
+
+            def add_trade(self, trade):
+                self.added.append(trade)
+
+        trader = st.StreakSnapperTrader.__new__(st.StreakSnapperTrader)
+        trader.state = FakeState()
+        trader.symbol = "btc"
+        trader._client = None
+
+        class Tokens:
+            up_token_id = "up"
+            down_token_id = "down"
+            slug = "btc-updown-5m-1"
+            window_ts = 1_785_600_000
+
+        sig = _sig("ss_fade", "DOWN")
+        sig.limit_cap = 0.52
+
+        trader._execute_signal(Tokens(), sig)
+
+        assert trader.state.skips == []
+        assert len(trader.state.added) == 1
+        # Entered at the ask, not at the cap: the cap is the worst price we
+        # accept, not the price we pay.
+        assert trader.state.added[0].price == pytest.approx(0.44)
+
+
+class TestMatchedShares:
+    """Reading the CLOB's answer about what actually filled.
+
+    `size_matched` is in shares and authoritative; the textual status is the
+    fallback for responses that omit it. The case that matters most is the one
+    that returns None — see TestFillVerification.
+    """
+
+    def test_size_matched_wins_over_status(self):
+        from bot.streak_trader import matched_shares
+
+        # A resting order that has partially matched reports both, and the
+        # number is the truth: "live" here means "not done", not "not filled".
+        payload = {"status": "live", "size_matched": "2"}
+        assert matched_shares(payload, 5.0) == pytest.approx(2.0)
+
+    def test_string_sizes_are_parsed(self):
+        """The API returns numbers as JSON strings."""
+        from bot.streak_trader import matched_shares
+
+        assert matched_shares({"size_matched": "5"}, 5.0) == pytest.approx(5.0)
+
+    def test_camel_case_variant_is_read(self):
+        from bot.streak_trader import matched_shares
+
+        assert matched_shares({"sizeMatched": 3}, 5.0) == pytest.approx(3.0)
+
+    def test_matched_status_means_fully_filled(self):
+        from bot.streak_trader import matched_shares
+
+        assert matched_shares({"status": "matched"}, 5.0) == pytest.approx(5.0)
+
+    def test_status_is_case_insensitive(self):
+        """POST responses answer lowercase, the order lookup uppercase."""
+        from bot.streak_trader import matched_shares
+
+        assert matched_shares({"status": "MATCHED"}, 5.0) == pytest.approx(5.0)
+        assert matched_shares({"status": "LIVE"}, 5.0) == pytest.approx(0.0)
+
+    def test_resting_and_dead_statuses_mean_nothing_filled(self):
+        from bot.streak_trader import matched_shares
+
+        for status in ("live", "delayed", "canceled", "unmatched", "rejected"):
+            assert matched_shares({"status": status}, 5.0) == pytest.approx(0.0)
+
+    def test_an_overfill_is_clamped(self):
+        from bot.streak_trader import matched_shares
+
+        assert matched_shares({"size_matched": 9}, 5.0) == pytest.approx(5.0)
+
+    def test_unknown_payloads_return_none_not_zero(self):
+        """The distinction the whole design rests on.
+
+        None means "no idea", 0.0 means "did not fill". Collapsing them is how a
+        real position stops being tracked.
+        """
+        from bot.streak_trader import matched_shares
+
+        assert matched_shares({}, 5.0) is None
+        assert matched_shares({"status": "wat"}, 5.0) is None
+        assert matched_shares(None, 5.0) is None
+        assert matched_shares("not a dict", 5.0) is None
+
+    def test_an_unreadable_size_falls_through_to_status(self):
+        from bot.streak_trader import matched_shares
+
+        assert matched_shares({"size_matched": "abc", "status": "matched"}, 5.0) == 5.0
+        assert matched_shares({"size_matched": None, "status": "live"}, 5.0) == 0.0
+
+
+class _FakeClient:
+    """Stands in for the CLOB. Records what was asked of it."""
+
+    def __init__(self, post_response=None, lookups=None, cancel_ok=True):
+        self._post_response = post_response or {"orderID": "0xabc", "status": "live"}
+        self._lookups = list(lookups or [])
+        self._cancel_ok = cancel_ok
+        self.cancelled: list[str] = []
+        self.lookup_count = 0
+
+    def create_and_post_order(self, *a, **kw):
+        return self._post_response
+
+    def get_order(self, order_id):
+        self.lookup_count += 1
+        if not self._lookups:
+            return {}
+        # Last answer repeats, so a test only lists the states it cares about.
+        return self._lookups.pop(0) if len(self._lookups) > 1 else self._lookups[0]
+
+    def cancel_order(self, payload):
+        if not self._cancel_ok:
+            raise RuntimeError("cancel refused")
+        self.cancelled.append(payload.orderID)
+        return {"canceled": [payload.orderID]}
+
+
+def _real_trader(client, monkeypatch):
+    """A trader in real mode wired to a fake CLOB, with waits collapsed."""
+    from bot import streak_trader as st
+
+    monkeypatch.setattr(st, "FILL_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(st, "FILL_POLL_SECONDS", 0.0)
+
+    class FakeState:
+        mode = "real"
+
+        def __init__(self):
+            self.skips = []
+            self.added = []
+
+        def get_asks(self):
+            return (0.50, 0.50)
+
+        def record_skip(self, reason):
+            self.skips.append(reason)
+
+        def set_status(self, *a):
+            pass
+
+        def add_trade(self, trade):
+            self.added.append(trade)
+
+    trader = st.StreakSnapperTrader.__new__(st.StreakSnapperTrader)
+    trader.state = FakeState()
+    trader.symbol = "btc"
+    trader._client = client
+    trader._stop = threading.Event()
+    trader._pending_cancels = []
+    return trader
+
+
+class _Tokens:
+    up_token_id = "up"
+    down_token_id = "down"
+    slug = "btc-updown-5m-1"
+    window_ts = 1_785_600_000
+
+
+class TestFillVerification:
+    """Sending an order is not holding a position.
+
+    Until this existed the trade was written the moment the CLOB accepted the
+    order: an unfilled bid became a position the resolution step settled into a
+    P&L, and the order stayed alive past its own window because nothing
+    cancelled it. Real mode only — paper places no orders, so none of this can
+    be verified by running the bot in paper.
+    """
+
+    def test_a_full_fill_in_the_post_response_needs_no_lookup(self, sqlite_db, monkeypatch):
+        """The common case: a marketable order crosses immediately."""
+        client = _FakeClient({"orderID": "0xabc", "status": "matched"})
+        trader = _real_trader(client, monkeypatch)
+        sig = _sig("ss_fade", "UP")
+        sig.limit_cap = 0.52
+
+        trader._execute_signal(_Tokens(), sig)
+
+        assert client.lookup_count == 0
+        assert client.cancelled == []
+        assert trader.state.skips == []
+        assert len(trader.state.added) == 1
+        assert trader.state.added[0].shares == pytest.approx(5.0)
+
+    def test_an_unfilled_order_is_cancelled_and_records_no_position(
+        self, sqlite_db, monkeypatch
+    ):
+        """The bug, stated as a test."""
+        client = _FakeClient(
+            {"orderID": "0xabc", "status": "live"}, lookups=[{"status": "live"}]
+        )
+        trader = _real_trader(client, monkeypatch)
+        sig = _sig("ss_fade", "UP")
+        sig.limit_cap = 0.52
+
+        trader._execute_signal(_Tokens(), sig)
+
+        assert client.cancelled == ["0xabc"]
+        assert trader.state.skips == ["SKIP_NO_FILL"]
+        assert trader.state.added == []
+
+    def test_a_partial_fill_is_kept_at_the_size_that_filled(self, sqlite_db, monkeypatch):
+        """Recording the requested size would overstate the stake — and with
+        martingale sizing that error compounds into the next entry."""
+        client = _FakeClient(
+            {"orderID": "0xabc", "status": "live"},
+            lookups=[{"status": "live", "size_matched": "2"}],
+        )
+        trader = _real_trader(client, monkeypatch)
+        sig = _sig("ss_fade", "UP")
+        sig.limit_cap = 0.52
+
+        trader._execute_signal(_Tokens(), sig)
+
+        assert client.cancelled == ["0xabc"]          # remainder not left resting
+        assert trader.state.skips == []
+        assert len(trader.state.added) == 1
+        held = trader.state.added[0]
+        assert held.shares == pytest.approx(2.0)
+        assert held.cost == pytest.approx(round(2.0 * 0.50, 4))
+
+    def test_an_unknown_state_records_the_position(self, sqlite_db, monkeypatch):
+        """Asymmetric errors: an over-recorded position is a wrong number in the
+        P&L, an unrecorded real one is money spent that never resolves."""
+        client = _FakeClient({"orderID": "0xabc"}, lookups=[{}])
+        trader = _real_trader(client, monkeypatch)
+        sig = _sig("ss_fade", "UP")
+        sig.limit_cap = 0.52
+
+        trader._execute_signal(_Tokens(), sig)
+
+        assert trader.state.skips == []
+        assert len(trader.state.added) == 1
+        assert trader.state.added[0].shares == pytest.approx(5.0)
+
+    def test_a_refused_cancellation_is_retried_at_window_close(self, sqlite_db, monkeypatch):
+        """A cancel the CLOB rejects must not be shrugged off: the order can
+        still fill against a window that has already settled."""
+        client = _FakeClient(
+            {"orderID": "0xabc", "status": "live"},
+            lookups=[{"status": "live"}],
+            cancel_ok=False,
+        )
+        trader = _real_trader(client, monkeypatch)
+        sig = _sig("ss_fade", "UP")
+        sig.limit_cap = 0.52
+
+        trader._execute_signal(_Tokens(), sig)
+        assert trader._pending_cancels == ["0xabc"]
+
+        client._cancel_ok = True
+        trader._sweep_pending_cancels()
+        assert client.cancelled == ["0xabc"]
+        assert trader._pending_cancels == []
+
+    def test_paper_mode_places_no_order_at_all(self, sqlite_db, monkeypatch):
+        """The verification path is real-mode only; paper must be untouched."""
+        client = _FakeClient({"orderID": "0xabc", "status": "live"})
+        trader = _real_trader(client, monkeypatch)
+        trader.state.mode = "paper"
+        sig = _sig("ss_fade", "UP")
+        sig.limit_cap = 0.52
+
+        trader._execute_signal(_Tokens(), sig)
+
+        assert client.lookup_count == 0
+        assert client.cancelled == []
+        assert len(trader.state.added) == 1
+        assert trader.state.added[0].shares == pytest.approx(5.0)
 
 
 class TestContradictorySignals:
