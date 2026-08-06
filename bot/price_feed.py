@@ -36,6 +36,7 @@ from . import logger
 
 
 PriceCallback = Callable[[str, float, float, float], None]  # (side, bid, ask, mid)
+OrderBookCallback = Callable[[str, list, list], None]  # (side, bids, asks)
 
 
 # ── price helpers ─────────────────────────────────────────────────────────────
@@ -104,6 +105,7 @@ class PriceFeed:
         down_token_id: str,
         on_price: PriceCallback,
         on_status: Callable[[bool], None] = lambda _: None,
+        on_order_book: OrderBookCallback = lambda *_: None,
         reconnect_seconds: float = 3.0,
     ) -> None:
         self.ws_url         = ws_url
@@ -111,6 +113,7 @@ class PriceFeed:
         self.down_token_id  = down_token_id
         self.on_price       = on_price
         self.on_status      = on_status
+        self.on_order_book  = on_order_book
         self.reconnect_seconds = reconnect_seconds
 
         self._stop   = threading.Event()
@@ -198,10 +201,14 @@ class PriceFeed:
 
     def _on_close(self, ws, status_code, msg) -> None:
         self.on_status(False)
-        logger.warn(
-            f"price feed disconnected (code={status_code}); "
-            f"reconnecting in {self.reconnect_seconds}s"
-        )
+        if self._stop.is_set():
+            # Intentional shutdown — no warning needed
+            logger.info("price feed closed (intentional)", icon="🔌")
+        else:
+            logger.warn(
+                f"price feed disconnected (code={status_code}); "
+                f"reconnecting in {self.reconnect_seconds}s"
+            )
 
     def _on_error(self, ws, error) -> None:
         logger.warn(f"price feed error: {error}")
@@ -239,6 +246,9 @@ class PriceFeed:
             asks = item.get("asks") or []
             best_bid = _best_from_levels(bids, max)
             best_ask = _best_from_levels(asks, min)
+
+            # Emit order book data for dashboard
+            self.on_order_book(side, bids, asks)
 
             if best_bid is not None and best_ask is not None and best_bid > 0 and best_ask > 0 and best_bid <= best_ask:
                 mid = (best_bid + best_ask) / 2.0

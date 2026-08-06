@@ -20,14 +20,14 @@ def current_slug(symbol: str = "btc") -> Tuple[str, int]:
     return slug_for_timestamp(int(time.time()), symbol)
 
 
-def slug_for_15m_timestamp(unix_seconds: int) -> Tuple[str, int]:
-    """Return (slug, window_ts) for the 15-min BTC corridor window containing unix_seconds."""
+def slug_for_15m_timestamp(unix_seconds: int, symbol: str = "btc") -> Tuple[str, int]:
+    """Return (slug, window_ts) for the 15-min corridor window containing unix_seconds."""
     window_ts = (unix_seconds // 900) * 900
-    return f"btc-updown-15m-{window_ts}", window_ts
+    return f"{symbol}-updown-15m-{window_ts}", window_ts
 
 
-def current_15m_slug() -> Tuple[str, int]:
-    return slug_for_15m_timestamp(int(time.time()))
+def current_15m_slug(symbol: str = "btc") -> Tuple[str, int]:
+    return slug_for_15m_timestamp(int(time.time()), symbol)
 
 
 @dataclass
@@ -131,7 +131,7 @@ def load_market_for_current_window(
             return MarketTokens(slug=slug, window_ts=ts, up_token_id=tokens[0], down_token_id=tokens[1])
 
         time.sleep(retry_seconds)
-        new_slug, new_ts = current_slug()
+        new_slug, new_ts = current_slug(symbol)
         if new_slug != slug:
             logger.info(f"window rolled over while waiting; switching to {new_slug}", icon="↻")
             slug, ts = new_slug, new_ts

@@ -6,13 +6,13 @@ Rules:
      minute.  After second 45 no new initial trades are fired.
   3. If price is ALREADY >= trigger_price when the last minute begins → skip.
      We only buy when the price CROSSES the trigger from below during last minute.
-  4. Execute the buy at the ACTUAL current market price (observed_price), not at
-     the fixed trigger threshold.  trigger_price is purely an entry signal.
+  4. Execute the buy at the ACTUAL market ASK price (not the mid). The mid price
+     is only used as the entry signal (trigger crossing check).
   5. Hedge: if the initial side's price rises to hedge_threshold, buy the opposite
-     side with the same number of shares (provided opposite mid < 1.00).
+     side at its ASK price with the same number of shares (provided ask < 1.00).
   6. Emergency hedge (modified): if an open position has NOT been hedged and 10
      seconds or fewer remain, WAIT until 5 seconds remain and buy 50% of the
-     initial shares on the opposite side to mitigate losses.
+     initial shares on the opposite side at ASK to mitigate losses.
   7. max_trades_per_window controls how many initial (non-hedge) trades per window.
   8. Early-entry strategy: at window_ts + 40s buy 25% of mm_shares on the dominant
      side, then apply Kelly criterion for a 1–3% coverage hedge immediately.
@@ -593,8 +593,9 @@ class Trader:
     # ----- trade execution -----
 
     def _fire_emergency_sell(self, tokens) -> None:
-        up = self.state.last_up_price
-        down = self.state.last_down_price
+        # Use BID prices for selling — you sell at the bid, not the mid
+        up = self.state.last_up_bid
+        down = self.state.last_down_bid
         open_trades = self.state.find_all_open_trades_for_window(tokens.slug)
 
         if not open_trades:
@@ -605,7 +606,7 @@ class Trader:
         for trade in open_trades:
             sell_price_raw = up if trade.side == "UP" else down
             if sell_price_raw is None:
-                logger.warn(f"emergency sell #{trade.id}: no price for {trade.side} — skipping")
+                logger.warn(f"emergency sell #{trade.id}: no bid for {trade.side} — skipping")
                 continue
 
             sell_price = round(sell_price_raw, 4)
@@ -637,20 +638,20 @@ class Trader:
         self.state.set_status("sold", f"emergency exit @ {round((up or 0), 4)}/{round((down or 0), 4)}")
 
     def _fire_half_hedge(self, tokens, initial_trade: Trade) -> None:
-        """Buy 50% of initial shares on the opposite side to mitigate losses."""
+        """Buy 50% of initial shares on the opposite side at ASK to mitigate losses."""
         opp_side     = "DOWN" if initial_trade.side == "UP" else "UP"
         opp_token_id = tokens.down_token_id if initial_trade.side == "UP" else tokens.up_token_id
         opp_price_raw = (
-            self.state.last_down_price if initial_trade.side == "UP" else self.state.last_up_price
+            self.state.last_down_ask if initial_trade.side == "UP" else self.state.last_up_ask
         )
 
         if opp_price_raw is None:
-            logger.warn(f"half hedge: sin precio para {opp_side} — omitiendo")
+            logger.warn(f"half hedge: sin ask para {opp_side} — omitiendo")
             return
 
         if opp_price_raw >= 1.00:
             logger.warn(
-                f"half hedge: {opp_side} precio {opp_price_raw:.4f} >= 1.00 — omitiendo"
+                f"half hedge: {opp_side} ask {opp_price_raw:.4f} >= 1.00 — omitiendo"
             )
             return
 
@@ -702,20 +703,20 @@ class Trader:
         self.state.set_status("hedged", f"semi-hedge 50% {initial_trade.side}+{opp_side}")
 
     def _fire_emergency_hedge(self, tokens, initial_trade: Trade) -> None:
-        """Buy the opposite side with the same shares as the initial trade (legacy, kept for reference)."""
+        """Buy the opposite side at ASK with the same shares as the initial trade (legacy, kept for reference)."""
         opp_side     = "DOWN" if initial_trade.side == "UP" else "UP"
         opp_token_id = tokens.down_token_id if initial_trade.side == "UP" else tokens.up_token_id
         opp_price_raw = (
-            self.state.last_down_price if initial_trade.side == "UP" else self.state.last_up_price
+            self.state.last_down_ask if initial_trade.side == "UP" else self.state.last_up_ask
         )
 
         if opp_price_raw is None:
-            logger.warn(f"emergency hedge: sin precio para {opp_side} — omitiendo")
+            logger.warn(f"emergency hedge: sin ask para {opp_side} — omitiendo")
             return
 
         if opp_price_raw >= 1.00:
             logger.warn(
-                f"emergency hedge: {opp_side} precio {opp_price_raw:.4f} >= 1.00 — omitiendo"
+                f"emergency hedge: {opp_side} ask {opp_price_raw:.4f} >= 1.00 — omitiendo"
             )
             return
 
@@ -765,15 +766,23 @@ class Trader:
         self.state.set_status("hedged", f"emergency hedge {initial_trade.side}+{opp_side}")
 
     def _fire_initial_trade(self, tokens, side: str, token_id: str, observed_price: float) -> None:
+        """Execute a trigger trade at the ASK price (observed_price/mid is only the entry signal)."""
         trigger = self.state.trigger_price
         buy_amount = self.state.buy_amount
-        exec_price = round(observed_price, 4)
+
+        # Use ASK for actual execution — mid (observed_price) is only the trigger signal
+        ask = self.state.last_up_ask if side == "UP" else self.state.last_down_ask
+        if ask is None:
+            logger.warn(f"initial trade: sin ask para {side} — usando mid como fallback")
+            ask = observed_price
+
+        exec_price = round(ask, 4)
         shares = math.floor((buy_amount / exec_price) * 100) / 100.0
         cost = round(shares * exec_price, 4)
 
         logger.ok(
             f"TRIGGER  side={side}  signal={trigger:.2f}  "
-            f"exec_price={exec_price:.4f}  shares={shares:.2f}  cost=${cost:.4f}",
+            f"exec_price={exec_price:.4f} (ask)  shares={shares:.2f}  cost=${cost:.4f}",
             icon="🚀",
         )
 
@@ -814,13 +823,26 @@ class Trader:
         self.state.set_status("traded", f"{side} @ {exec_price:.4f} (signal {trigger:.2f})")
 
     def _fire_hedge(self, tokens, initial_trade: Trade, opp_side: str, opp_token_id: str, opp_mid: float) -> None:
-        exec_price = round(opp_mid, 4)
+        """Execute hedge at the ASK price (opp_mid is only the hedge signal)."""
+        # Use ASK for actual execution — mid is only the reference/display price
+        ask = self.state.last_up_ask if opp_side == "UP" else self.state.last_down_ask
+        if ask is None:
+            logger.warn(f"hedge: sin ask para {opp_side} — usando mid como fallback")
+            ask = opp_mid
+
+        if ask >= 1.00:
+            logger.warn(
+                f"hedge: {opp_side} ask {ask:.4f} >= 1.00 — omitiendo"
+            )
+            return
+
+        exec_price = round(ask, 4)
         shares = initial_trade.shares
         cost = round(shares * exec_price, 4)
 
         logger.ok(
             f"HEDGE  {initial_trade.side}@{initial_trade.price:.4f} "
-            f"→ {opp_side} {shares:.2f} shares @ {exec_price:.4f}",
+            f"→ {opp_side} {shares:.2f} shares @ {exec_price:.4f} (ask)",
             icon="🛡",
         )
 

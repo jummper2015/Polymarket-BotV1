@@ -1,623 +1,151 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Polymarket Bot — Configuración</title>
-  <link rel="stylesheet" href="static/dashboard.css?v=9" />
-  <style>
-    .market-tabs { display:flex; gap:6px; margin-bottom:18px; flex-wrap:wrap; }
-    .market-tab {
-      flex:1; padding:9px 10px; border-radius:8px; min-width:80px;
-      background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.10);
-      color:var(--muted); font-size:13px; font-weight:600; cursor:pointer;
-      transition:background 0.15s, border-color 0.15s, color 0.15s;
-    }
-    .market-tab:hover { background:rgba(255,255,255,0.09); color:var(--text); }
-    .market-tab.active {
-      background:rgba(59,130,246,0.14); border-color:rgba(59,130,246,0.45);
-      color:#60a5fa;
-    }
-    .market-tab.tab-corridor.active {
-      background:rgba(167,139,250,0.14); border-color:rgba(167,139,250,0.45);
-      color:#a78bfa;
-    }
-    .cfg-actions { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:14px 0 4px; }
-    .btn-apply-all {
-      background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.14);
-      color:var(--muted); font-size:13px; padding:9px 20px; border-radius:8px;
-      cursor:pointer; transition:all 0.15s;
-    }
-    .btn-apply-all:hover { background:rgba(255,255,255,0.12); color:var(--text); }
-  </style>
-</head>
-<body>
+{% extends "base.html" %}
+{% block title %}Streak Snapper — Configuración{% endblock %}
 
-<header class="topbar">
-  <div class="brand">
-    <span class="logo">⏱</span>
-    <h1>Polymarket Bot <span class="muted" style="font-weight:400;font-size:14px;">Multi-Market</span></h1>
-  </div>
-  <nav class="nav-links">
-    <a href="/" class="nav-link">📊 Mercados</a>
-    <a href="/settings" class="nav-link active">⚙ Configuración</a>
-  </nav>
-  <div class="topbar-right">
-    <div class="badges">
-      <span id="mode-badge" class="badge paper">PAPER</span>
-    </div>
-  </div>
-</header>
+{% block content %}
+<div class="row g-3 mt-1 mb-3">
+  <div class="col-lg-8">
 
-<main>
-  <section class="grid config-grid">
-    <div class="card wide config-card">
-      <div class="card-head">
-        <h2>⚙ Configuración de la operativa</h2>
-        <span id="cfg-save-msg" class="cfg-msg"></span>
+    {# ── Master switch + strategy mode ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-power"></i> Estrategia</h2>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" id="cfg-ss-enabled" checked />
+          <label class="form-check-label small" for="cfg-ss-enabled" id="ss-enabled-label">Activado</label>
+        </div>
       </div>
 
-      <!-- Market selector tabs -->
-      <div class="market-tabs">
-        <button type="button" class="market-tab active"      data-sym="btc"   data-type="5m">₿ Bitcoin</button>
-        <button type="button" class="market-tab"             data-sym="sol"   data-type="5m">◎ Solana</button>
-        <button type="button" class="market-tab"             data-sym="eth"   data-type="5m">⬡ Ethereum</button>
-        <button type="button" class="market-tab tab-corridor" data-sym="btc15" data-type="corridor">🌙 BTC 15m</button>
+      <div class="row g-2 mb-3">
+        <div class="col-md-4">
+          <div class="ss-mode-card" data-mode="fade" role="button">
+            <i class="bi bi-arrow-repeat fs-4"></i>
+            <h6>Fade</h6>
+            <p>Contrarian: apuesta contra la racha</p>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="ss-mode-card" data-mode="trend" role="button">
+            <i class="bi bi-graph-up-arrow fs-4"></i>
+            <h6>Trend</h6>
+            <p>Sigue la tendencia de 4h</p>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="ss-mode-card" data-mode="both" role="button">
+            <i class="bi bi-layers fs-4"></i>
+            <h6>Ambas</h6>
+            <p>Las dos en paralelo</p>
+          </div>
+        </div>
       </div>
 
-      <form id="cfg-form" class="cfg-form" autocomplete="off">
-
-        <!-- ══ STANDARD 5m MARKET CONFIG ══ -->
-        <div id="standard-config">
-
-          <!-- ── TRIGGER STRATEGY ── -->
-          <div class="cfg-section-header">⚡ Estrategia Trigger</div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Activar Trigger
-              <span class="cfg-hint">Compra cuando el precio supera el umbral al final de la ventana</span>
-            </label>
-            <label class="toggle-switch">
-              <input type="checkbox" id="cfg-trigger-enabled" />
-              <span class="toggle-label" id="trigger-enabled-label">Desactivado</span>
-            </label>
-          </div>
-          <div id="trigger-config-section">
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Precio trigger
-                <span class="cfg-hint">Umbral de activación (0.01 – 0.99)</span>
-              </label>
-              <input id="cfg-trigger" type="number" class="cfg-input" step="0.01" min="0.01" max="0.99" placeholder="0.90" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Monto por trade (USDC)
-                <span class="cfg-hint">Inversión por operación</span>
-              </label>
-              <input id="cfg-buy" type="number" class="cfg-input" step="0.5" min="0.5" max="100000" placeholder="5.00" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Trades por ventana
-                <span class="cfg-hint">Máx. posiciones iniciales por ventana (1–10)</span>
-              </label>
-              <input id="cfg-max-trades" type="number" class="cfg-input" step="1" min="1" max="10" placeholder="1" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Hedge a partir de
-                <span class="cfg-hint">Precio que activa la cobertura (0.50 – 0.99)</span>
-              </label>
-              <input id="cfg-hedge" type="number" class="cfg-input" step="0.01" min="0.50" max="0.99" placeholder="0.96" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Segundos de entrada
-                <span class="cfg-hint">Ventana de entrada al final del evento (10 – 240 s)</span>
-              </label>
-              <input id="cfg-lastmin" type="number" class="cfg-input" step="5" min="10" max="240" placeholder="60" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Semi-cobertura final
-                <span class="cfg-hint">A los 10s restantes espera 5s y compra 50% del lado contrario para mitigar pérdidas</span>
-              </label>
-              <div style="font-size:12px;color:var(--ee);background:rgba(167,139,250,0.10);border:1px solid rgba(167,139,250,0.25);border-radius:8px;padding:8px 12px;">
-                Activado automáticamente — se ejecuta cuando no hay hedge en los últimos 10s
-              </div>
-            </div>
-          </div>
-
-          <!-- ── BOX BUILDER (MARKET MAKING) ── -->
-          <div class="cfg-section-header">📦 Box Builder (Market Making)</div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Activar Market Making
-              <span class="cfg-hint">Puja post-only en ambos lados para capturar el spread del corredor</span>
-            </label>
-            <label class="toggle-switch">
-              <input type="checkbox" id="cfg-mm-enabled" />
-              <span class="toggle-label" id="mm-enabled-label">Desactivado</span>
-            </label>
-          </div>
-          <div id="mm-config-section" style="display:none">
-            <div style="font-size:12px;color:var(--muted);background:rgba(96,165,250,0.07);border:1px solid rgba(96,165,250,0.20);border-radius:8px;padding:10px 14px;margin-bottom:14px;line-height:1.6">
-              <strong style="color:#60a5fa">Estrategia Box Builder:</strong> puja post-only en AMBOS lados (UP + DOWN)
-              en la primera mitad de la ventana. Si ambas piernas se llenan, la caja redime
-              exactamente <strong>$1.00</strong> en resolución — sin importar qué lado gana.
-              Ganancia bloqueada = 1.00 − (bid_UP + bid_DOWN).<br/>
-              <span style="color:#f59e0b">⚠ Puerta de armado:</span> sólo arma si
-              <code>ask_UP + ask_DOWN ≥ arm_gate</code>. Sin puja después de T-cutoff.
-              Pierna varada a T-90 → corte al mejor bid.
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Shares por pierna
-                <span class="cfg-hint">Misma cantidad en UP y DOWN para que la caja redima limpia (mín 5)</span>
-              </label>
-              <input id="cfg-mm-shares" type="number" class="cfg-input" step="1" min="1" max="100000" placeholder="5" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Puerta de armado (ask_UP + ask_DN ≥)
-                <span class="cfg-hint">Suma mínima de asks para armar el box (1.00 – 1.20)</span>
-              </label>
-              <input id="cfg-mm-arm-spread" type="number" class="cfg-input" step="0.01" min="1.00" max="1.20" placeholder="1.03" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Techo de suma de pujas (bid_UP + bid_DN ≤)
-                <span class="cfg-hint">Ganancia mínima bloqueada = 1.00 − cap (0.70 – 0.99)</span>
-              </label>
-              <input id="cfg-mm-bid-cap" type="number" class="cfg-input" step="0.01" min="0.70" max="0.99" placeholder="0.94" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Corte de cotización (T-N segundos)
-                <span class="cfg-hint">Sin nuevas pujas después de este tiempo restante (60 – 270 s)</span>
-              </label>
-              <input id="cfg-mm-cutoff" type="number" class="cfg-input" step="10" min="60" max="270" placeholder="150" />
-            </div>
-          </div>
-
-          <!-- ── EARLY ENTRY ── -->
-          <div class="cfg-section-header">🎯 Early Entry</div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Activar Early Entry
-              <span class="cfg-hint">Abre posición temprana en el lado dominante y monitorea TP y cobertura automática</span>
-            </label>
-            <label class="toggle-switch">
-              <input type="checkbox" id="cfg-early-entry" />
-              <span class="toggle-label" id="early-entry-label">Desactivado</span>
-            </label>
-          </div>
-
-          <div id="early-entry-config" style="display:none">
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Shares de entrada
-                <span class="cfg-hint">Cantidad de shares a comprar en el lado dominante</span>
-              </label>
-              <input id="cfg-ee-shares" type="number" class="cfg-input" step="0.5" min="0.01" max="100000" placeholder="5" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Take-profit (%)
-                <span class="cfg-hint">Venta automática cuando la ganancia alcanza este % (0.1 – 100)</span>
-              </label>
-              <input id="cfg-ee-tp-pct" type="number" class="cfg-input" step="0.5" min="0.1" max="100" placeholder="3" />
-            </div>
-            <div class="cfg-row">
-              <label class="cfg-label">
-                Segundos de entrada
-                <span class="cfg-hint">Momento de entrada desde el inicio de la ventana (5 – 270 s)</span>
-              </label>
-              <input id="cfg-ee-entry-sec" type="number" class="cfg-input" step="5" min="5" max="270" placeholder="40" />
-            </div>
-          </div>
-
-          <!-- ── GENERAL ── -->
-          <div class="cfg-section-header">🏦 General</div>
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Bankroll inicial (USDC)
-              <span class="cfg-hint">Capital de referencia para calcular P&L</span>
-            </label>
-            <input id="cfg-bankroll" type="number" class="cfg-input" step="100" min="1" max="10000000" placeholder="1000" />
-          </div>
-          <div class="cfg-row cfg-mode-row">
-            <label class="cfg-label">
-              Modo de operación
-              <span class="cfg-hint">Paper = simulación · Real = órdenes reales en Polymarket</span>
-            </label>
-            <div class="mode-toggle">
-              <button type="button" id="btn-paper" class="mode-btn active" data-mode="paper">Paper</button>
-              <button type="button" id="btn-real"  class="mode-btn"        data-mode="real">Real</button>
-            </div>
-          </div>
-
-          <div class="cfg-actions">
-            <button type="submit"  id="btn-apply-one" class="btn-apply">Aplicar a BTC</button>
-            <button type="button" id="btn-apply-all" class="btn-apply-all">Aplicar a los 3 mercados 5m</button>
-          </div>
-        </div>
-
-        <!-- ══ CORRIDOR COLLECTOR CONFIG (BTC15 tab) ══ -->
-        <div id="corridor-config" style="display:none">
-
-          <div style="font-size:12px;color:var(--muted);background:rgba(167,139,250,0.08);border:1px solid rgba(167,139,250,0.25);border-radius:8px;padding:12px 16px;margin-bottom:18px;line-height:1.7">
-            <strong style="color:#a78bfa">🌙 Corridor Collector:</strong>
-            compra el 15m-LÍDER + 5m-OPUESTO con precio BTC de Binance.<br/>
-            Ambas resoluciones en <strong>T15+900</strong> — el suelo de $1 es el stop, el pasillo de $2 es el premio.<br/>
-            <span style="color:#f59e0b">⚠</span>
-            Requiere un mercado <code>btc-updown-15m-{T15}</code> activo en Polymarket.
-          </div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Activar Corridor Collector
-              <span class="cfg-hint">Habilita el trader BTC 15m y la estrategia de corredor</span>
-            </label>
-            <label class="toggle-switch">
-              <input type="checkbox" id="cfg-cc-enabled" />
-              <span class="toggle-label" id="cc-enabled-label">Desactivado</span>
-            </label>
-          </div>
-
-          <div class="cfg-section-header">📐 Parámetros de Corredor</div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Shares por pierna
-              <span class="cfg-hint">Igual en el 15m-líder y el 5m-opuesto (mín 1)</span>
-            </label>
-            <input id="cfg-cc-shares" type="number" class="cfg-input" step="1" min="1" max="100000" placeholder="5" />
-          </div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Lead mínimo (bps)
-              <span class="cfg-hint">Movimiento BTC mínimo P0→P10 en puntos base (5 – 30)</span>
-            </label>
-            <input id="cfg-cc-lead-min" type="number" class="cfg-input" step="0.5" min="1" max="100" placeholder="5" />
-          </div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Lead máximo (bps)
-              <span class="cfg-hint">Movimiento BTC máximo P0→P10 en puntos base — fuera de zona si supera esto</span>
-            </label>
-            <input id="cfg-cc-lead-max" type="number" class="cfg-input" step="1" min="5" max="500" placeholder="30" />
-          </div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              ATR mínimo (lead / ATR14)
-              <span class="cfg-hint">El lead debe ser al menos esta proporción del ATR14 de BTC</span>
-            </label>
-            <input id="cfg-cc-atr" type="number" class="cfg-input" step="0.1" min="0.1" max="10" placeholder="1.0" />
-          </div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Ventaja (edge)
-              <span class="cfg-hint">Diferencia mínima entre precio justo y precio real: fair − live ≥ edge (0.01–0.50)</span>
-            </label>
-            <input id="cfg-cc-edge" type="number" class="cfg-input" step="0.01" min="0.01" max="0.50" placeholder="0.08" />
-          </div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Cap ask 5m (≤)
-              <span class="cfg-hint">Precio máximo para la pierna 5m opuesta (0.10 – 0.90)</span>
-            </label>
-            <input id="cfg-cc-ask5" type="number" class="cfg-input" step="0.01" min="0.10" max="0.90" placeholder="0.55" />
-          </div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Cap ask 15m (≤)
-              <span class="cfg-hint">Precio máximo para la pierna 15m líder (0.10 – 0.99)</span>
-            </label>
-            <input id="cfg-cc-ask15" type="number" class="cfg-input" step="0.01" min="0.10" max="0.99" placeholder="0.93" />
-          </div>
-
-          <div class="cfg-row">
-            <label class="cfg-label">
-              Parámetros fijos
-              <span class="cfg-hint">No configurables — definidos por la estructura del mercado</span>
-            </label>
-            <div style="font-size:12px;color:var(--muted);background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:8px 12px;line-height:1.8">
-              Ventana de acción: <strong>T15+600 → T15+690</strong> (90s) ·
-              Kill switch: tasa corredor &lt; <strong>20%</strong> en 30 pares ·
-              Ambas piernas al cierre — sin TP ni stop manual
-            </div>
-          </div>
-
-          <div class="cfg-actions">
-            <button type="submit" id="btn-apply-corridor" class="btn-apply">Aplicar a BTC 15m</button>
-          </div>
-        </div>
-
-      </form>
+      {# One card per registered strategy, rendered from /state.strategies.
+         There used to be a hand-written block per form here, which is why a
+         new parameter meant editing this file too. #}
+      <div id="strategy-cards"></div>
     </div>
-  </section>
 
-  <!-- ── Checklist para modo Real ── -->
-  <section class="card wide readiness-card">
-    <div class="card-head">
-      <h2>Estado para modo Real</h2>
-      <span id="readiness-badge" class="badge warn">—</span>
+    {# ── Sizing ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-rulers"></i> Sizing</h2>
+        <span class="text-muted small">cómo crece la apuesta</span>
+      </div>
+      <div class="alert alert-info py-2 px-3 small">
+        Con el edge medido (+3,74% por operación, 53,8% de acierto) Kelly pide
+        el <strong>4% del bankroll</strong>. La martingala apuesta ~100× eso, así
+        que <strong>Fijo</strong> es el valor por defecto. Cualquier modo pasa por
+        el mismo techo del 10% del bankroll por ventana.
+      </div>
+      <div class="row g-2" id="sizing-fields"></div>
     </div>
-    <ul id="readiness-steps" class="readiness-list"></ul>
-  </section>
-</main>
 
-<footer class="footer muted">Polymarket Bot · Configuración</footer>
+    {# ── Martingale ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-dice-3"></i> Martingale</h2>
+        <span class="text-muted small">solo con sizing = Martingala</span>
+      </div>
+      <div class="row g-2 mb-2" id="martingale-fields"></div>
+      <div class="alert alert-warning py-2 px-3 small mb-0" id="martingale-preview"></div>
+    </div>
 
-<script>
-(function () {
-  const $ = (id) => document.getElementById(id);
+    {# ── Regime filters ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-funnel"></i> Filtros de régimen</h2>
+        <span class="text-muted small">cuándo NO operar</span>
+      </div>
+      <div class="alert alert-info py-2 px-3 small">
+        Todos <strong>apagados por defecto</strong>: se probaron ~20 filtros
+        contra 35 días, así que el mejor luce bien por construcción. El
+        dashboard cuenta los descartes por motivo, que es lo que permite
+        comparar «con filtro» contra «sin filtro» sobre datos nuevos.
+      </div>
+      <div class="row g-2" id="regime-fields"></div>
+    </div>
 
-  // ── market tab state ──
-  const MARKET_LABELS = { btc: "BTC", sol: "SOL", eth: "ETH", btc15: "BTC 15m" };
-  let currentMarket = "btc";
-  let isCorridor    = false;
+    {# ── Chainlink. POST /config already accepted these; there was just no UI. ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-link-45deg"></i> Chainlink TWAP</h2>
+        <span class="text-muted small">filtro anti-manipulación</span>
+      </div>
 
-  document.querySelectorAll(".market-tab").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".market-tab").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      currentMarket = btn.dataset.sym;
-      isCorridor    = btn.dataset.type === "corridor";
-      updateTabUI();
-      loadState();
-    });
-  });
+      <div class="alert alert-info py-2 px-3 small">
+        El TWAP <strong>no</strong> liquida las operaciones — los mercados resuelven
+        contra el stream <code>btc-usd</code>, que es otro feed. Aquí solo actúa
+        como filtro. Ver <code>docs/CHAINLINK_TWAP.md</code> §3.
+      </div>
 
-  function updateTabUI() {
-    $("standard-config").style.display  = isCorridor ? "none" : "";
-    $("corridor-config").style.display  = isCorridor ? "" : "none";
-  }
+      <div class="row g-2" id="chainlink-fields"></div>
+    </div>
 
-  // ── per-strategy toggles ──
-  const triggerCheck = $("cfg-trigger-enabled");
-  const triggerLabel = $("trigger-enabled-label");
-  const triggerCfg   = $("trigger-config-section");
-  const mmCheck      = $("cfg-mm-enabled");
-  const mmLabel      = $("mm-enabled-label");
-  const mmCfg        = $("mm-config-section");
+  </div>
 
-  function applyTriggerToggle(on) {
-    triggerLabel.textContent    = on ? "Activado" : "Desactivado";
-    triggerCfg.style.display    = on ? "" : "none";
-  }
-  function applyMmToggle(on) {
-    mmLabel.textContent = on ? "Activado" : "Desactivado";
-    mmCfg.style.display = on ? "" : "none";
-  }
-  triggerCheck.addEventListener("change", () => applyTriggerToggle(triggerCheck.checked));
-  mmCheck.addEventListener("change",      () => applyMmToggle(mmCheck.checked));
+  <div class="col-lg-4">
 
-  // ── mode selector ──
-  let _selectedMode = "paper";
-  function setModeUI(m) {
-    _selectedMode = m;
-    $("btn-paper").classList.toggle("active", m === "paper");
-    $("btn-real").classList.toggle("active",  m === "real");
-  }
-  $("btn-paper").addEventListener("click", () => setModeUI("paper"));
-  $("btn-real").addEventListener("click",  () => setModeUI("real"));
+    {# ── Trading mode ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head"><h2><i class="bi bi-cash-coin"></i> Modo de operación</h2></div>
+      <div class="btn-group w-100 mb-2" role="group">
+        <button type="button" class="btn btn-outline-primary btn-sm" id="btn-paper">Paper</button>
+        <button type="button" class="btn btn-outline-danger btn-sm" id="btn-real">Real</button>
+      </div>
+      <p class="ss-field-hint mb-0">
+        En modo <strong>Real</strong> el bot envía órdenes con dinero de verdad.
+      </p>
+    </div>
 
-  // ── early entry toggle ──
-  const eeCheck = $("cfg-early-entry");
-  const eeCfg   = $("early-entry-config");
-  const eeLabel = $("early-entry-label");
-  eeCheck.addEventListener("change", () => {
-    const on = eeCheck.checked;
-    eeLabel.textContent = on ? "Activado" : "Desactivado";
-    eeCfg.style.display = on ? "" : "none";
-  });
+    {# ── Real-mode readiness ── #}
+    <div class="ss-card notika-shadow mb-3">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-shield-check"></i> Preparación</h2>
+        <span id="readiness-badge" class="ss-badge warn">—</span>
+      </div>
+      <ul class="list-unstyled small mb-0" id="readiness-steps"></ul>
+    </div>
 
-  // ── corridor enabled toggle ──
-  const ccCheck = $("cfg-cc-enabled");
-  const ccLabel = $("cc-enabled-label");
-  ccCheck.addEventListener("change", () => {
-    ccLabel.textContent = ccCheck.checked ? "Activado" : "Desactivado";
-  });
+    {# ── Save / reset ── #}
+    <div class="ss-card notika-shadow">
+      <div class="ss-card-head"><h2><i class="bi bi-save"></i> Guardar</h2></div>
+      <button id="btn-apply" class="btn btn-success w-100 mb-2">
+        <i class="bi bi-check-lg"></i> Aplicar cambios
+      </button>
+      {# /config/reset existed from the start but nothing ever called it. #}
+      <button id="btn-reset" class="btn btn-outline-secondary btn-sm w-100">
+        <i class="bi bi-arrow-counterclockwise"></i> Restaurar valores del .env
+      </button>
+      <div id="cfg-save-msg" class="small mt-2"></div>
+      <p class="ss-field-hint mt-2 mb-0">
+        Lo guardado aquí sobrescribe el <code>.env</code> y sobrevive al reinicio.
+      </p>
+    </div>
 
-  // ── load state ──
-  async function loadState() {
-    try {
-      const resp = await fetch("/state", { cache: "no-store" });
-      if (!resp.ok) return;
-      const s = await resp.json();
-      const markets = s.markets || {};
+  </div>
+</div>
+{% endblock %}
 
-      // Per-market config
-      const c = (markets[currentMarket] && markets[currentMarket].config)
-                || s.config || {};
-
-      if (isCorridor) {
-        // Corridor tab
-        ccCheck.checked     = !!c.cc_enabled;
-        ccLabel.textContent = c.cc_enabled ? "Activado" : "Desactivado";
-        $("cfg-cc-shares").value   = c.cc_shares        ?? 5;
-        $("cfg-cc-lead-min").value = c.cc_zone_lead_min ?? 5;
-        $("cfg-cc-lead-max").value = c.cc_zone_lead_max ?? 30;
-        $("cfg-cc-atr").value      = c.cc_zone_min_atr  ?? 1.0;
-        $("cfg-cc-edge").value     = c.cc_edge           ?? 0.08;
-        $("cfg-cc-ask5").value     = c.cc_ask5_cap       ?? 0.55;
-        $("cfg-cc-ask15").value    = c.cc_ask15_cap      ?? 0.93;
-      } else {
-        // Standard 5m tab
-        $("cfg-trigger").value    = c.trigger_price          ?? 0.90;
-        $("cfg-buy").value        = c.buy_amount              ?? 5.0;
-        $("cfg-max-trades").value = c.max_trades_per_window   ?? 1;
-        $("cfg-hedge").value      = c.hedge_threshold         ?? 0.96;
-        $("cfg-lastmin").value    = c.last_minute_seconds     ?? 60;
-
-        $("cfg-mm-shares").value     = c.mm_shares_per_leg   ?? 5;
-        $("cfg-mm-arm-spread").value = c.mm_arm_spread_sum   ?? 1.03;
-        $("cfg-mm-bid-cap").value    = c.mm_bid_sum_cap       ?? 0.94;
-        $("cfg-mm-cutoff").value     = c.mm_quote_cutoff_sec  ?? 150;
-
-        const ee = c.early_entry_enabled || false;
-        eeCheck.checked     = ee;
-        eeLabel.textContent = ee ? "Activado" : "Desactivado";
-        eeCfg.style.display = ee ? "" : "none";
-        $("cfg-ee-shares").value    = c.ee_shares       ?? 5;
-        $("cfg-ee-tp-pct").value    = c.ee_tp_pct       ?? 3;
-        $("cfg-ee-entry-sec").value = c.ee_entry_seconds ?? 40;
-
-        // Per-strategy enable toggles
-        const tOn = (c.trigger_enabled !== undefined) ? c.trigger_enabled
-                    : (c.active_strategy !== "market_making");
-        const mOn = (c.mm_enabled !== undefined) ? c.mm_enabled
-                    : (c.active_strategy === "market_making" || c.active_strategy === "both");
-        triggerCheck.checked = tOn;
-        mmCheck.checked      = mOn;
-        applyTriggerToggle(tOn);
-        applyMmToggle(mOn);
-
-        $("cfg-bankroll").value = c.starting_bankroll ?? 1000;
-        setModeUI(c.mode || "paper");
-
-        $("btn-apply-one").textContent = `Aplicar a ${MARKET_LABELS[currentMarket]}`;
-      }
-
-      const mBadge = $("mode-badge");
-      const btcCfg = (markets.btc && markets.btc.config) || s.config || {};
-      mBadge.textContent = (btcCfg.mode || "paper").toUpperCase();
-      mBadge.className   = "badge " + (btcCfg.mode === "real" ? "real" : "paper");
-
-      // readiness checklist (use BTC state)
-      const r = s.real_mode_readiness;
-      if (r) {
-        $("readiness-badge").textContent = r.ready ? "✓ Listo para Real" : "✗ Pendiente";
-        $("readiness-badge").className   = "badge " + (r.ready ? "ok" : "warn");
-        $("readiness-steps").innerHTML = (r.steps || []).map(st => `
-          <li class="readiness-step ${st.done ? "done" : "todo"}">
-            <span class="step-icon">${st.done ? "✓" : "○"}</span>
-            <div>
-              <strong>${st.text}</strong>
-              ${st.detail ? `<p class="step-detail muted">${st.detail}</p>` : ""}
-            </div>
-          </li>`).join("");
-      }
-    } catch (_) {}
-  }
-  loadState();
-
-  // ── build payload ──
-  function buildPayload5m() {
-    const body = {
-      trigger_price:         parseFloat($("cfg-trigger").value),
-      buy_amount:            parseFloat($("cfg-buy").value),
-      max_trades_per_window: parseInt($("cfg-max-trades").value, 10),
-      hedge_threshold:       parseFloat($("cfg-hedge").value),
-      last_minute_seconds:   parseInt($("cfg-lastmin").value, 10),
-      trigger_enabled:       triggerCheck.checked,
-      mm_enabled:            mmCheck.checked,
-      mm_shares_per_leg:     parseFloat($("cfg-mm-shares").value),
-      mm_arm_spread_sum:     parseFloat($("cfg-mm-arm-spread").value),
-      mm_bid_sum_cap:        parseFloat($("cfg-mm-bid-cap").value),
-      mm_quote_cutoff_sec:   parseInt($("cfg-mm-cutoff").value, 10),
-      early_entry_enabled:   eeCheck.checked,
-      ee_shares:             parseFloat($("cfg-ee-shares").value),
-      ee_tp_pct:             parseFloat($("cfg-ee-tp-pct").value),
-      ee_entry_seconds:      parseInt($("cfg-ee-entry-sec").value, 10),
-      starting_bankroll:     parseFloat($("cfg-bankroll").value),
-      mode:                  _selectedMode,
-    };
-    Object.keys(body).forEach(k => {
-      if (typeof body[k] === "number" && isNaN(body[k])) delete body[k];
-    });
-    return body;
-  }
-
-  function buildPayloadCorridor() {
-    const body = {
-      cc_enabled:        ccCheck.checked,
-      cc_shares:         parseInt($("cfg-cc-shares").value, 10),
-      cc_zone_lead_min:  parseFloat($("cfg-cc-lead-min").value),
-      cc_zone_lead_max:  parseFloat($("cfg-cc-lead-max").value),
-      cc_zone_min_atr:   parseFloat($("cfg-cc-atr").value),
-      cc_edge:           parseFloat($("cfg-cc-edge").value),
-      cc_ask5_cap:       parseFloat($("cfg-cc-ask5").value),
-      cc_ask15_cap:      parseFloat($("cfg-cc-ask15").value),
-    };
-    Object.keys(body).forEach(k => {
-      if (typeof body[k] === "number" && isNaN(body[k])) delete body[k];
-    });
-    return body;
-  }
-
-  // ── message helpers ──
-  function showMsg(text, type) {
-    const el = $("cfg-save-msg");
-    el.textContent = text;
-    el.className   = "cfg-msg " + type;
-    setTimeout(() => { el.textContent = ""; el.className = "cfg-msg"; }, 4000);
-  }
-
-  async function postConfig(url, payload) {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      cache: "no-store",
-    });
-    const data = await resp.json();
-    if (resp.ok && data.ok) {
-      const keys = Object.keys(data.updated || {});
-      showMsg("✓ Guardado: " + (keys.length ? keys.join(", ") : "sin cambios"), "ok");
-      loadState();
-    } else {
-      showMsg("✗ " + (data.error || "Error al guardar"), "err");
-    }
-  }
-
-  // ── form submit ──
-  $("cfg-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try {
-      if (isCorridor) {
-        await postConfig("/config/btc15", buildPayloadCorridor());
-      } else {
-        await postConfig(`/config/${currentMarket}`, buildPayload5m());
-      }
-    } catch (err) {
-      showMsg("✗ Error de red: " + err.message, "err");
-    }
-  });
-
-  // ── apply to all 5m markets ──
-  $("btn-apply-all").addEventListener("click", async () => {
-    try {
-      // Apply to btc, sol, eth only (not btc15 — corridor config is separate)
-      const payload = buildPayload5m();
-      const resp = await fetch("/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        cache: "no-store",
-      });
-      const data = await resp.json();
-      if (resp.ok && data.ok) {
-        const keys = Object.keys(data.updated || {});
-        showMsg("✓ Guardado en 3 mercados: " + (keys.length ? keys.join(", ") : "sin cambios"), "ok");
-        loadState();
-      } else {
-        showMsg("✗ " + (data.error || "Error al guardar"), "err");
-      }
-    } catch (err) {
-      showMsg("✗ Error de red: " + err.message, "err");
-    }
-  });
-})();
-</script>
-</body>
-</html>
+{% block scripts %}
+<script src="{{ url_for('static', filename='settings.js') }}"></script>
+{% endblock %}

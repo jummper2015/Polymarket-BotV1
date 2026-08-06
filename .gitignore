@@ -9,6 +9,10 @@ venv/
 .env
 .env.local
 
+# Local SQLite fallback DB (historial de operaciones)
+*.db
+instance/
+
 # Replit
 .local/
 !.local/skills/
@@ -21,3 +25,18 @@ venv/
 # Node (workspace artifacts)
 node_modules/
 *.tsbuildinfo
+
+# Gamma outcome cache — regenerable, and ~20k entries of API data
+data/gamma_outcomes.json
+
+# Caches de los scripts de medición (scripts/*.py) — regenerables desde las
+# APIs públicas de Binance y Gamma, y suman ~2,4 MB de datos crudos
+data/klines_5m_cache.json
+data/preopen_prices.json
+data/price_calibration.json
+
+# Claude Code local config — settings.json holds an API key in plain text
+.claude/
+
+# Backtest output (regenerable: python -m bot.backtest)
+data/*.csv

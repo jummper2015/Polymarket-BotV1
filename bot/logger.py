@@ -30,9 +30,24 @@ def _stamp() -> str:
     return time.strftime("[%H:%M:%S]")
 
 
+def _market_tag() -> str:
+    """`[ETH] ` when more than one market is running, else empty.
+
+    Only decorates the console line — the message recorded in `log_event` stays
+    verbatim, because each market's buffer is already its own and repeating the
+    symbol inside it would be noise on the dashboard.
+    """
+    from .state import STATES
+
+    if len(STATES) < 2:
+        return ""
+    symbol = getattr(_current_state(), "symbol", "")
+    return f"[{symbol.upper()}] " if symbol else ""
+
+
 def log(level: str, icon: str, message: str, *, transient: bool = False) -> None:
     """Print a line and (unless transient) record it in the per-market log."""
-    line = f"{_stamp()} {icon} {message}"
+    line = f"{_stamp()} {icon} {_market_tag()}{message}"
     if transient:
         sys.stdout.write("\r" + line.ljust(120))
         sys.stdout.flush()
