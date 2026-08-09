@@ -96,6 +96,34 @@ class BotState:
         self.ss_trend_limit_cap: float    = 0.52
         self.ss_trend_min_strength: float = 0.008
 
+        # Fase B — Coin-Flip Dog. Buys the cheap side (underdog) in the last
+        # 30–90 s of a window when the book is near a coin flip (coa ≤ 0.20)
+        # and the underdog ask is in [0.22, 0.47]. Flat sizing, no martingale.
+        self.cfd_enabled:         bool  = False
+        self.cfd_base_bet:        float = 5.0
+        self.cfd_min_ask:         float = 0.22
+        self.cfd_max_ask:         float = 0.47
+        self.cfd_max_coa:         float = 0.20
+        self.cfd_entry_min_left:  float = 30.0
+        self.cfd_entry_max_left:  float = 90.0
+
+        # Fase B — Box Builder. Both-sided maker: rests post-only bids on UP
+        # and DOWN in the first half of the window, combined ≤ bb_bid_sum_cap.
+        # When both legs fill the pair redeems for $1.00 — direction-neutral
+        # with ≥ 6 c/pair locked. Off by default pending maker-order testing.
+        self.bb_enabled:             bool  = False
+        self.bb_shares_per_leg:      float = 5.0
+        self.bb_bid_sum_cap:         float = 0.94
+        self.bb_arm_min_spread:      float = 1.03
+        self.bb_complete_taker_cap:  float = 0.99
+        self.bb_complete_maker_cap:  float = 0.97
+        self.bb_quote_cutoff_sec:    float = 150.0
+        self.bb_bailout_sec:         float = 90.0
+        self.bb_cancel_all_sec:      float = 10.0
+        self.bb_reprice_interval:    float = 20.0
+        self.bb_reprice_behind:      float = 0.02
+        self.bb_min_coa_hold:        float = 1.0
+
         # Sizing. "flat" keeps the stake constant; "kelly" scales it to the
         # measured edge; "martingale" is the old behaviour, kept for comparison.
         self.ss_sizing: str = "flat"
@@ -116,6 +144,13 @@ class BotState:
         # point of shipping the filters off by default: it lets the dashboard
         # show what a filter *would* have skipped before anyone turns it on.
         self.skips: Dict[str, int] = {}
+
+        # Counters a strategy publishes without trading — the same idea as
+        # `skips`, for strategies shipped in observation-only mode. A maker
+        # quote cannot be simulated in paper (nobody sells into a bid that
+        # isn't there), so measuring how often its gates would open is the only
+        # honest thing it can do before it places an order.
+        self.observations: Dict[str, int] = {}
 
         # Runtime martingale state (synced with DB)
         self.ss_fade_martingale_mult: float  = 1.0
@@ -370,6 +405,11 @@ class BotState:
         with self._lock:
             self.skips[reason] = self.skips.get(reason, 0) + 1
 
+    def record_observation(self, key: str, count: int = 1) -> None:
+        """Count something a strategy saw without acting on it."""
+        with self._lock:
+            self.observations[key] = self.observations.get(key, 0) + count
+
     def current_bankroll(self) -> float:
         """Starting bankroll plus everything resolved so far.
 
@@ -465,6 +505,27 @@ class BotState:
                 "ss_trend_base_shares": self.ss_trend_base_shares,
                 "ss_trend_limit_cap": self.ss_trend_limit_cap,
                 "ss_trend_min_strength": self.ss_trend_min_strength,
+                # Coin-Flip Dog
+                "cfd_enabled":        self.cfd_enabled,
+                "cfd_base_bet":       self.cfd_base_bet,
+                "cfd_min_ask":        self.cfd_min_ask,
+                "cfd_max_ask":        self.cfd_max_ask,
+                "cfd_max_coa":        self.cfd_max_coa,
+                "cfd_entry_min_left": self.cfd_entry_min_left,
+                "cfd_entry_max_left": self.cfd_entry_max_left,
+                # Box Builder
+                "bb_enabled":             self.bb_enabled,
+                "bb_shares_per_leg":      self.bb_shares_per_leg,
+                "bb_bid_sum_cap":         self.bb_bid_sum_cap,
+                "bb_arm_min_spread":      self.bb_arm_min_spread,
+                "bb_complete_taker_cap":  self.bb_complete_taker_cap,
+                "bb_complete_maker_cap":  self.bb_complete_maker_cap,
+                "bb_quote_cutoff_sec":    self.bb_quote_cutoff_sec,
+                "bb_bailout_sec":         self.bb_bailout_sec,
+                "bb_cancel_all_sec":      self.bb_cancel_all_sec,
+                "bb_reprice_interval":    self.bb_reprice_interval,
+                "bb_reprice_behind":      self.bb_reprice_behind,
+                "bb_min_coa_hold":        self.bb_min_coa_hold,
                 "ss_sizing": self.ss_sizing,
                 "ss_kelly_fraction": self.ss_kelly_fraction,
                 "ss_martingale_mult_factor": self.ss_martingale_mult_factor,
@@ -474,6 +535,7 @@ class BotState:
                 "ss_range_max_pct": self.ss_range_max_pct,
                 "ss_max_entry_age": self.ss_max_entry_age,
                 "skips": dict(self.skips),
+                "observations": dict(self.observations),
                 # Runtime martingale
                 "ss_fade_martingale_mult": self.ss_fade_martingale_mult,
                 "ss_fade_loss_streak": self.ss_fade_loss_streak,

@@ -15,13 +15,17 @@ from typing import Any, Iterable
 
 from ..runtime_field import RuntimeField
 from .base import StrategyContext, StrategyDescriptor
-from . import ss_fade, ss_trend
+from . import ss_fade, box_builder, coin_flip_dog
+# ss_trend y spread_harvest están desactivadas (medido: trend pierde −4.22%/trade;
+# spread_harvest es solo observación). Se mantienen como módulos importables para
+# referencia histórica y para que sus trades en la DB sigan resolviendo.
 
 # Declaration order is the display order. Execution order is by descending
 # priority, so the tie-break doesn't depend on how this list is sorted.
 _REGISTERED: tuple[StrategyDescriptor, ...] = (
     ss_fade.DESCRIPTOR,
-    ss_trend.DESCRIPTOR,
+    box_builder.DESCRIPTOR,
+    coin_flip_dog.DESCRIPTOR,
 )
 
 REGISTRY: dict[str, StrategyDescriptor] = {d.id: d for d in _REGISTERED}

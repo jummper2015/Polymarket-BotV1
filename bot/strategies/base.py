@@ -28,12 +28,22 @@ class StrategyContext:
     `streak` is the `StreakSnapperStrategy` instance, which the two migrated
     forms still own their signal logic in. Fase B strategies won't need it —
     the field is here so migrating them doesn't change this signature.
+
+    `trader` is the `StreakSnapperTrader` instance. Maker strategies (e.g.
+    box_builder) need it to place and cancel orders — those calls live on
+    the trader, where the CLOB client is. It is None in tests that don't
+    exercise the CLOB path.
     """
 
     state: Any                  # BotState for this symbol
     symbol: str
     tokens: Any = None          # MarketTokens for the current window
     streak: Any = None          # StreakSnapperStrategy, for ss_fade / ss_trend
+    trader: Any = None          # StreakSnapperTrader, for maker/cancel CLOB calls
+    # Seconds left in the window. Only meaningful inside `observe`, which is
+    # called repeatedly while the window runs; `evaluate` sees it once, right
+    # after the open, and has no use for it.
+    seconds_left: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -44,6 +54,18 @@ class StrategyDescriptor:
     evaluate: Callable[[StrategyContext], list]
     is_enabled: Callable[[Any], bool]        # takes BotState
     params: tuple[RuntimeField, ...] = ()
+    # Called every few seconds *during* the window, not once at the open.
+    # `evaluate` answers "buy something now?", which is all a taker needs; a
+    # maker lives on the other timescale — it has to watch its own gates open
+    # and close while the window runs. None means the strategy has nothing to
+    # do between the open and the close, which is true of every taker.
+    observe: Callable[[StrategyContext], None] | None = None
+    # Like `evaluate`, but called repeatedly during the window instead of once
+    # at the open. Use for strategies that need the window to develop before
+    # their signal makes sense — a coin-flip-dog that enters at T-60 to T-5 is
+    # the canonical case. The trader executes any returned signals immediately
+    # and skips further calls for that descriptor once one fires.
+    evaluate_late: Callable[[StrategyContext], list] | None = None
     # Declarative mirror of `is_enabled`, for the settings page: it has to grey
     # out a card the moment the user changes the toggle, before saving, and it
     # can't evaluate a Python lambda. Shape: {"field": name, "values": [...]}.

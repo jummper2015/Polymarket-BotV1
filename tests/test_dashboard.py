@@ -219,9 +219,9 @@ class TestState:
         for field in ("cycle_side", "cycle_anchor_ts", "last_strength"):
             assert field in trend
 
-    def test_exposes_the_trend_threshold(self, client):
+    def test_exposes_bb_bid_sum_cap(self, client):
         config = client.get("/state").get_json()["config"]
-        assert "ss_trend_min_strength" in config
+        assert "bb_bid_sum_cap" in config
 
 
 class TestStateServesTheRegistry:
@@ -274,33 +274,25 @@ class TestStateServesTheRegistry:
             assert fields[name]["label"], f"{name} sin label"
 
 
-class TestTrendThresholdConfig:
-    def test_accepts_a_valid_threshold(self, client):
-        resp = client.post("/config", json={"ss_trend_min_strength": 0.012})
+class TestBoxBuilderConfig:
+    def test_accepts_a_valid_bid_sum_cap(self, client):
+        resp = client.post("/config", json={"bb_bid_sum_cap": 0.92})
         assert resp.status_code == 200
         config = client.get("/state").get_json()["config"]
-        assert config["ss_trend_min_strength"] == pytest.approx(0.012)
+        assert config["bb_bid_sum_cap"] == pytest.approx(0.92)
 
-    # Out-of-range values are dropped, not rejected — the pre-existing contract
-    # of _build_config_updates for every field. What matters here is that the
-    # bad value never reaches STATE.
-    def test_ignores_a_threshold_above_the_range(self, client):
-        # 0.10 is 10% in four hours; past that nothing would ever trade.
-        before = client.get("/state").get_json()["config"]["ss_trend_min_strength"]
-        resp = client.post("/config", json={"ss_trend_min_strength": 0.5})
-
-        assert "ss_trend_min_strength" not in resp.get_json()["updated"]
-        after = client.get("/state").get_json()["config"]["ss_trend_min_strength"]
+    def test_ignores_a_cap_above_the_range(self, client):
+        before = client.get("/state").get_json()["config"]["bb_bid_sum_cap"]
+        resp = client.post("/config", json={"bb_bid_sum_cap": 1.5})
+        assert "bb_bid_sum_cap" not in resp.get_json()["updated"]
+        after = client.get("/state").get_json()["config"]["bb_bid_sum_cap"]
         assert after == before
 
-    def test_ignores_a_negative_threshold(self, client):
-        before = client.get("/state").get_json()["config"]["ss_trend_min_strength"]
-        resp = client.post("/config", json={"ss_trend_min_strength": -0.01})
-
-        assert "ss_trend_min_strength" not in resp.get_json()["updated"]
-        assert (
-            client.get("/state").get_json()["config"]["ss_trend_min_strength"] == before
-        )
+    def test_ignores_a_negative_cap(self, client):
+        before = client.get("/state").get_json()["config"]["bb_bid_sum_cap"]
+        resp = client.post("/config", json={"bb_bid_sum_cap": -0.1})
+        assert "bb_bid_sum_cap" not in resp.get_json()["updated"]
+        assert client.get("/state").get_json()["config"]["bb_bid_sum_cap"] == before
 
 
 class TestBalance:

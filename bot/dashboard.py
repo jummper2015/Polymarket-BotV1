@@ -321,6 +321,7 @@ def create_app() -> Flask:
             "symbols": list(states),
             "symbol_stats": all_symbol_stats or db_symbol_stats,
             "skips": snap.get("skips", {}),
+            "observations": snap.get("observations", {}),
             # The registry, so /settings can render one card per strategy
             # instead of a hand-written block per strategy.
             "strategies": snap.get("strategies", []),

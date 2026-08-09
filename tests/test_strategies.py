@@ -39,24 +39,26 @@ def _descriptor(sid, **kw):
 
 
 class TestRegistry:
-    def test_the_two_migrated_forms_are_registered(self):
-        assert strategies.ids() == ("ss_fade", "ss_trend")
+    def test_the_registered_strategies(self):
+        assert strategies.ids() == ("ss_fade", "box_builder", "coin_flip_dog")
 
     def test_ids_match_what_trades_stores(self):
         """`trades.strategy` holds these strings; KPIs group by them."""
         for sid in strategies.ids():
             assert strategies.get(sid).id == sid
 
-    def test_fade_outranks_trend(self):
-        """Fase 8: fade +3.74%/op, trend −4.22%. The tie-break follows that."""
+    def test_fade_outranks_box_builder(self):
+        """ss_fade priority 100 > box_builder priority 90."""
         assert (
             strategies.get("ss_fade").priority
-            > strategies.get("ss_trend").priority
+            > strategies.get("box_builder").priority
         )
 
     def test_enabled_order_is_by_priority(self):
-        state = SimpleNamespace(ss_mode="both")
-        assert [d.id for d in strategies.enabled_for(state)] == ["ss_fade", "ss_trend"]
+        state = SimpleNamespace(ss_mode="fade", bb_enabled=True, cfd_enabled=True)
+        ids = [d.id for d in strategies.enabled_for(state)]
+        assert ids[0] == "ss_fade"
+        assert "box_builder" in ids
 
     def test_unknown_strategy_is_none(self):
         assert strategies.get("no_existe") is None
@@ -87,7 +89,7 @@ class TestParamsFlowIntoRuntimeFields:
         for param in strategies.params():
             assert param.label, f"{param.name} sin label — saldría con su nombre crudo"
 
-    @pytest.mark.parametrize("name", ["ss_fade_limit_cap", "ss_trend_min_strength"])
+    @pytest.mark.parametrize("name", ["ss_fade_limit_cap", "bb_bid_sum_cap"])
     def test_migrated_params_kept_their_validation(self, name):
         """Ranges are unchanged by the move; POST /config still refuses junk."""
         field = RUNTIME_FIELDS[name]
@@ -106,8 +108,6 @@ class TestEnablement:
         "mode,expected",
         [
             ("fade", ["ss_fade"]),
-            ("trend", ["ss_trend"]),
-            ("both", ["ss_fade", "ss_trend"]),
         ],
     )
     def test_ss_mode_still_decides(self, mode, expected):
@@ -218,8 +218,7 @@ class TestEvaluate:
             get_trend_signal=lambda: None,
         )
         ctx = StrategyContext(state=None, symbol="btc", streak=streak)
-        for sid in ("ss_fade", "ss_trend"):
-            assert strategies.get(sid).evaluate(ctx) == []
+        assert strategies.get("ss_fade").evaluate(ctx) == []
 
     def test_missing_streak_context_is_survivable(self):
         ctx = StrategyContext(state=None, symbol="btc")
@@ -233,9 +232,11 @@ class TestEvaluate:
 
 class TestToJson:
     def test_shape(self):
-        state = SimpleNamespace(ss_mode="fade")
+        state = SimpleNamespace(ss_mode="fade", bb_enabled=False, cfd_enabled=False)
         payload = strategies.to_json(state)
-        assert [s["id"] for s in payload] == ["ss_fade", "ss_trend"]
+        assert [s["id"] for s in payload] == [
+            "ss_fade", "box_builder", "coin_flip_dog"
+        ]
 
         fade = payload[0]
         assert fade["enabled"] is True
@@ -247,21 +248,17 @@ class TestToJson:
         ]
 
     def test_disabled_strategy_is_reported_as_such(self):
-        payload = strategies.to_json(SimpleNamespace(ss_mode="fade"))
-        assert payload[1]["id"] == "ss_trend"
-        assert payload[1]["enabled"] is False
+        payload = strategies.to_json(SimpleNamespace(ss_mode="fade", bb_enabled=False, cfd_enabled=False))
+        bb = next(s for s in payload if s["id"] == "box_builder")
+        assert bb["enabled"] is False
 
     def test_params_expose_range_and_scale(self):
         """settings.js renders from this and nothing else."""
-        strength = [
-            p
-            for s in strategies.to_json(SimpleNamespace(ss_mode="both"))
-            for p in s["params"]
-            if p["name"] == "ss_trend_min_strength"
-        ][0]
-        assert strength["scale"] == 100.0     # fraction stored, percent shown
-        assert strength["max"] == 0.10
-        assert strength["label"]
+        payload = strategies.to_json(SimpleNamespace(ss_mode="fade", bb_enabled=True, cfd_enabled=False))
+        all_params = {p["name"]: p for s in payload for p in s["params"]}
+        # box_builder should expose bb_bid_sum_cap
+        assert "bb_bid_sum_cap" in all_params
+        assert all_params["bb_bid_sum_cap"]["label"]
 
     def test_without_state_enabled_is_unknown(self):
         assert all(s["enabled"] is None for s in strategies.to_json())

@@ -769,3 +769,151 @@ opciones evaluadas, por si sirve al que llegue:
 
 No se ha tocado porque cambia la semántica de la estrategia, y eso es una
 decisión de producto y no de limpieza.
+
+---
+
+## 🔬 Fase B.1 — Spread-Harvest: medir antes de construir
+
+> Fecha: 6-ago-2026. Suite: **446 tests**.
+> Activar con `SH_OBSERVE_ENABLED=true` o desde `/settings`. Apagada por defecto.
+
+La primera estrategia de la Fase B entra **sin operar**. No es una entrega a
+medias: es lo único honesto que puede hacer todavía.
+
+### Por qué no opera
+
+1. **Una puja en reposo no se puede simular en paper.** Si alguien vende contra
+   ella es justo la pregunta abierta, y un modelo de llenado inventado sería
+   exactamente el defecto que quitó la Fase A.1 — paper anotando llenados que
+   nunca habrían ocurrido.
+2. **La tasa de oportunidad no está medida.** El `RESEARCH.md` de la propia
+   estrategia se apoya en 17 ventanas de libro ancho de *una sola semana de
+   junio*, y lo admite: «wide books may be a thin-week artifact». Construir el
+   ciclo de órdenes maker antes de saber si la puerta se abre dos veces al día o
+   dos veces al mes es especulativo.
+
+Así que esta etapa mide. Cada 4 s evalúa las dos puertas y publica el resultado
+en `/state`, junto a los skips de régimen y por la misma razón: comparar «con» y
+«sin» sobre datos en vivo, no sobre la muestra de la que salió la idea.
+
+| Contador | Qué significa |
+|---|---|
+| `SH_WINDOWS` | Ventanas observadas |
+| `SH_QUOTABLE` | Habrían sido cotizables: moneda al aire **y** libro ancho |
+| `SH_SKIP_COA` | El precio se fue del strike (coa > 0,40) |
+| `SH_SKIP_SPREAD` | El libro nunca llegó a 1,10 |
+| `SH_NO_DATA` | Sin strike o sin ATR |
+
+**La decisión de construir la Etapa 2 sale de `SH_QUOTABLE / SH_WINDOWS`.**
+
+### Hallazgo: hay una fuente mejor del strike que la de la referencia
+
+`GET polymarket.com/api/crypto/crypto-price?symbol=btc&eventStartTime=<iso>`
+devuelve `openPrice` **y** `closePrice` en la misma respuesta. Comprobado en
+vivo (200). Los 82 campos del objeto de Gamma **no** incluyen el strike, así que
+este endpoint es la única fuente.
+
+La referencia calcula el cushion con el mark de Hyperliquid contra este
+`openPrice` — dos feeds distintos, así que parte de la diferencia es el hueco
+entre ellos y no movimiento real. Una sola llamada lo evita.
+
+⚠️ Es una API del sitio, no la superficie documentada de Gamma/CLOB: puede
+cambiar sin aviso. Todos los caminos de fallo devuelven `None` y sin strike no
+se cotiza — con un maker, no cotizar es la dirección segura.
+
+### Lo que se añadió a la arquitectura
+
+- **`observe(ctx)` en el descriptor**, llamado cada `OBSERVE_TICK_SECONDS` (4 s)
+  *durante* la ventana. `evaluate` responde «¿compro algo ahora?», que es todo
+  lo que necesita un taker; un maker vive en la otra escala de tiempo.
+- **Sin observadores, `_wait_out_window` es exactamente la espera bloqueante
+  que sustituyó.** A propósito: todos los resultados medidos de este documento
+  salieron de ese camino, y un bucle de ticks que corre sin que nadie lo pida lo
+  perturbaría para nada.
+- `bot/polymarket_price.py` (strike + mark) y `binance_api.get_atr4()` (ATR de
+  las 4 velas de 1 min cerradas).
+
+### Trampa que costó un rato: el import circular
+
+`bot/state.py` importa el paquete `strategies` para construir sus ids, y
+`bot/logger.py` importa `bot.state`. Así que **nada en `bot/strategies/` puede
+importar `logger`, `binance_api` ni `polymarket_price` a nivel de módulo** — el
+lazo se cierra y no arranca nada. Por eso `ss_fade` sólo declara `runtime_field`
+y `base`, y por eso `spread_harvest` importa lo pesado dentro de las funciones.
+
+### Pendiente
+
+- [ ] Dejarla corriendo y leer `SH_QUOTABLE / SH_WINDOWS`. Con 288 ventanas al
+      día, una semana da muestra de sobra para decidir
+- [ ] Etapa 2 (ejecución) **sólo si la tasa lo justifica**: `post_only=True`,
+      ciclo de cotización con cancelación por `coa > 0,60` / `ask_sum < 1,05` /
+      T-30, y generalizar `_size_for`, que hoy está cableado a dos estrategias
+
+---
+
+## ✅ Fase B.2 — Coin-Flip Dog (CFD)
+
+> Fecha: 8-ago-2026. Suite: **497 tests** (447 antes de la fase).
+
+### Tesis y evidencia
+
+Análisis en vivo de dos traders de Polymarket con rentabilidad medida:
+
+- **zhengying9999** (0x5c07ef274ec004bfdd011b4041f1cfc428b4be1a): +$16.297 P&L
+  en ~1 mes, 232 predicciones. Entra en el lado barato (underdog) a 0,35–0,46
+  cuando la ventana está cerca de coin-flip; sale a ~0,96 fragmentando en decenas
+  de micro-ventas antes de la resolución.
+- **hurrican1** (0xba1c348079abd183f6c3d8bacffbab205f29e6f0): alta varianza (+$2.889
+  y +$804 de ganancias; −$1.793 y −$150 de pérdidas en un día). Entra en el
+  underdog extremo (0,155–0,22), promedia durante la ventana, aguanta hasta
+  resolución.
+
+**Tesis compartida:** cuando BTC se mueve dentro de una ventana de 5 minutos lo
+suficiente para dejar un lado a 0,22–0,47, y la ventana sigue siendo near-coin-flip
+(`coa = |cushion|/ATR4 ≤ 0,20`), el lado barato tiene valor esperado positivo
+porque el mercado sobrevalora la probabilidad de la dirección ganadora.
+
+**Evidencia estructural** (`Revisar Estrategias/flip_harvester_IDEA.md`):
+- n=10.180 (52 semanas, datos físicos BTC 1m)
+- Win rate hold-to-resolution: 42,4% @ avg entry 0,37 = **+14,6% ROI**
+- "Touch rate" (el underdog llega a paridad en algún momento): **71,3%**
+- Banda 0,40–0,50 en mid_price_continuation: 60,2% win, +30% EV (n=1.372)
+
+**Diferencia vs ss_fade**: ss_fade opera a nivel inter-ventana (espera 4+ ventanas
+seguidas para la SIGUIENTE). CFD opera a nivel intra-ventana (entra en la ventana
+actual con 30–90 s restantes cuando el precio ya se ha movido).
+
+### Arquitectura añadida
+
+- **`evaluate_late`** en `StrategyDescriptor` — hook opcional llamado cada
+  `OBSERVE_TICK_SECONDS` durante la ventana, puede retornar señales. Reemplaza
+  el modelo de "evaluar una vez al abrir" para estrategias que necesitan que el
+  precio se desarrolle antes de entrar.
+- **`_wait_out_window` retorna `list[Signal]`** — ejecuta señales tardías dentro
+  del ciclo de tick, resuelve conflictos con las señales tempranas, y devuelve la
+  lista al llamador para que el paso de resolución la incluya.
+- **`bot/strategies/coin_flip_dog.py`** — descriptor + funciones puras testables
+  (`compute_coa`, `find_underdog`, `check_gates`, `size_shares`) + `_evaluate_late`.
+  Apagada por defecto (`CFD_ENABLED=false`).
+
+### Gates de la señal
+
+1. `seconds_left ∈ [CFD_ENTRY_MIN_LEFT, CFD_ENTRY_MAX_LEFT]` — 30–90 s por defecto.
+   Demasiado pronto = BTC no ha terminado de moverse; demasiado tarde = sin tiempo.
+2. `coa = |mark − strike| / ATR4 ≤ CFD_MAX_COA` (0,20) — ventana cerca de coin-flip.
+3. Underdog ask ∈ [0,22, 0,47] — la banda con EV medido positivo.
+4. Una sola entrada por ventana. Taker GTC. Aguanta hasta resolución.
+
+### Sizing
+
+Flat: `shares = max(5, round(CFD_BASE_BET / underdog_ask))`. Sin martingale.
+
+### Pendiente
+
+- [ ] Activar en paper (`CFD_ENABLED=true`) y acumular datos durante ~2 semanas
+      (≥ 400 ventanas cotizables para t-test significativo)
+- [ ] Motor de salida anticipada (zhengying9999 style): vender a ≥ 0,90 cuando el
+      WS lo detecte; requiere una orden maker de venta + monitoreo — mismo
+      mecanismo que la Etapa 2 de spread_harvest
+- [ ] Medir si `ss_fade` y `coin_flip_dog` correlacionan (misma ventana activa
+      frecuentemente): si sí, hay que decidir si coexisten o si CFD reemplaza fade

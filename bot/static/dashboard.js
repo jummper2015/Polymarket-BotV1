@@ -633,29 +633,63 @@
     SKIP_NO_FILL: "Orden enviada sin llenar",
   };
 
+  // Contadores que una estrategia publica sin operar. Spread-Harvest sale así
+  // a propósito: una puja en reposo no se puede simular en paper, así que
+  // primero mide cuántas ventanas serían cotizables. Ver spread_harvest.py.
+  const OBS_LABELS = {
+    SH_WINDOWS: "Ventanas observadas",
+    SH_QUOTABLE: "Cotizables (moneda al aire + libro ancho)",
+    SH_SKIP_COA: "Descartadas: el precio se fue del strike",
+    SH_SKIP_SPREAD: "Descartadas: libro demasiado estrecho",
+    SH_NO_DATA: "Sin strike o sin ATR",
+  };
+
   function renderSkips(s) {
     const el = $("skip-metrics");
     if (!el) return;
-    const skips = s.skips || {};
-    const entries = Object.entries(skips).sort((a, b) => b[1] - a[1]);
+    const entries = Object.entries(s.skips || {}).sort((a, b) => b[1] - a[1]);
+    const obs = Object.entries(s.observations || {}).sort((a, b) => b[1] - a[1]);
 
-    if (!entries.length) {
+    if (!entries.length && !obs.length) {
       el.innerHTML =
         '<div class="ss-empty">Ningún filtro ha descartado ventanas' +
         '<div class="ss-field-hint mt-1">Todos vienen apagados por defecto</div></div>';
       return;
     }
 
-    const total = entries.reduce((acc, [, n]) => acc + n, 0);
-    el.innerHTML =
-      entries.map(([reason, count]) => `
-        <div class="ss-mart-row">
-          <span>${esc(SKIP_LABELS[reason] || reason)}</span>
-          <span class="ss-mart-val">${count}</span>
-        </div>`).join("") +
-      `<div class="ss-mart-row mt-1" style="border-top:1px solid var(--ss-border)">
-         <span><strong>Total</strong></span><span class="ss-mart-val">${total}</span>
-       </div>`;
+    let html = "";
+
+    if (entries.length) {
+      const total = entries.reduce((acc, [, n]) => acc + n, 0);
+      html +=
+        entries.map(([reason, count]) => `
+          <div class="ss-mart-row">
+            <span>${esc(SKIP_LABELS[reason] || reason)}</span>
+            <span class="ss-mart-val">${count}</span>
+          </div>`).join("") +
+        `<div class="ss-mart-row mt-1" style="border-top:1px solid var(--ss-border)">
+           <span><strong>Total</strong></span><span class="ss-mart-val">${total}</span>
+         </div>`;
+    }
+
+    if (obs.length) {
+      // La tasa es el número que decide si vale la pena construir la ejecución.
+      const seen = (s.observations || {}).SH_WINDOWS || 0;
+      const good = (s.observations || {}).SH_QUOTABLE || 0;
+      const pct = seen ? ((good / seen) * 100).toFixed(1) : null;
+      html +=
+        `<div class="ss-mart-row mt-2" style="border-top:1px solid var(--ss-border)">
+           <span><strong>Observación (no opera)</strong></span>
+           <span class="ss-mart-val">${pct === null ? "—" : pct + "%"}</span>
+         </div>` +
+        obs.map(([key, count]) => `
+          <div class="ss-mart-row">
+            <span>${esc(OBS_LABELS[key] || key)}</span>
+            <span class="ss-mart-val">${count}</span>
+          </div>`).join("");
+    }
+
+    el.innerHTML = html;
   }
 
   function renderLog(s) {

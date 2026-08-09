@@ -232,6 +232,32 @@ def get_5min_candles(n: int = 600, symbol: str = "btc") -> Optional[List[dict]]:
     return candles or None
 
 
+def get_atr4(symbol: str = "btc") -> Optional[float]:
+    """Mean high−low of the last 4 *completed* 1-minute candles, in dollars.
+
+    The volatility yardstick a 5-minute window needs: it answers "is a $30
+    cushion big or small right now?", which a fixed threshold cannot. Four bars
+    rather than fourteen because a 5-minute market only cares about the last few
+    minutes, and the forming bar is dropped for the usual reason — its range is
+    whatever fraction of a minute has elapsed.
+    """
+    raw = _get_klines("1m", limit=5, symbol=pair_for(symbol))
+    if raw is None or len(raw) < 2:
+        return None
+
+    closed = raw[:-1][-4:]      # drop the live bar, keep up to 4 completed ones
+    if not closed:
+        return None
+
+    try:
+        ranges = [float(k[2]) - float(k[3]) for k in closed]
+    except (TypeError, ValueError, IndexError):
+        return None
+
+    atr = sum(ranges) / len(ranges)
+    return atr if atr > 0 else None
+
+
 def get_btc_spot_price(symbol: str = "btc") -> Optional[float]:
     """Get current spot price from Binance ticker (for display only)."""
     for attempt in range(2):

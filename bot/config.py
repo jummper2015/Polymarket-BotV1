@@ -87,10 +87,10 @@ def kelly_fraction(win_prob: float, price: float) -> float:
 BASE_FIELDS: tuple[RuntimeField, ...] = (
     RuntimeField("ss_enabled", "bool", label="Bot activo"),
     RuntimeField(
-        "ss_mode", "choice", choices=("fade", "trend", "both"),
-        choice_labels=("Solo Fade", "Solo Trend", "Ambas"),
-        label="Formas activas",
-        hint="Fade por defecto: Trend pierde 4,22% por operación",
+        "ss_mode", "choice", choices=("fade",),
+        choice_labels=("Solo Fade",),
+        label="Formas activas (ss_fade)",
+        hint="Solo Fade activo. Trend desactivado: midió −4,22%/operación.",
     ),
     RuntimeField(
         "ss_martingale_mult_factor", "float", minimum=1.01, maximum=10.0,
@@ -245,6 +245,21 @@ class Config:
     ss_trend_limit_cap: float
     ss_trend_min_strength: float    # min |move| of the 4h candle to call a trend
 
+    # Fase B — Box Builder: both-sided maker, ≥ 6 c/pair when both legs fill.
+    # Off by default; requires post_only orders + cancellation support.
+    bb_enabled:             bool
+    bb_shares_per_leg:      float
+    bb_bid_sum_cap:         float
+    bb_arm_min_spread:      float
+    bb_complete_taker_cap:  float
+    bb_complete_maker_cap:  float
+    bb_quote_cutoff_sec:    float
+    bb_bailout_sec:         float
+    bb_cancel_all_sec:      float
+    bb_reprice_interval:    float
+    bb_reprice_behind:      float
+    bb_min_coa_hold:        float
+
     # Sizing
     ss_sizing: str                  # "flat" | "kelly" | "martingale"
     ss_kelly_fraction: float
@@ -366,6 +381,22 @@ def load_config() -> Config:
         # fits the default $1.000 bankroll: max drawdown −$892 and largest single
         # trade $983, versus −$36.509 and $40.163 with no threshold at all.
         ss_trend_min_strength=_env_float("SS_TREND_MIN_STRENGTH", 0.008),
+
+        # ── Fase B — Box Builder ──────────────────────────────────────────────
+        # Both-sided maker: ≥ 6 c/pair when both legs fill. Off by default
+        # until maker-order plumbing (post_only + cancel) is in production.
+        bb_enabled=_env_bool("BB_ENABLED", False),
+        bb_shares_per_leg=_env_float("BB_SHARES_PER_LEG", 5.0),
+        bb_bid_sum_cap=_env_float("BB_BID_SUM_CAP", 0.94),
+        bb_arm_min_spread=_env_float("BB_ARM_MIN_SPREAD", 1.03),
+        bb_complete_taker_cap=_env_float("BB_COMPLETE_TAKER_CAP", 0.99),
+        bb_complete_maker_cap=_env_float("BB_COMPLETE_MAKER_CAP", 0.97),
+        bb_quote_cutoff_sec=_env_float("BB_QUOTE_CUTOFF_SEC", 150.0),
+        bb_bailout_sec=_env_float("BB_BAILOUT_SEC", 90.0),
+        bb_cancel_all_sec=_env_float("BB_CANCEL_ALL_SEC", 10.0),
+        bb_reprice_interval=_env_float("BB_REPRICE_INTERVAL", 20.0),
+        bb_reprice_behind=_env_float("BB_REPRICE_BEHIND", 0.02),
+        bb_min_coa_hold=_env_float("BB_MIN_COA_HOLD", 1.0),
 
         # Sizing. `flat` by default: a martingale changes variance, never
         # expected value, and the measured edge sizes at ~4% of bankroll

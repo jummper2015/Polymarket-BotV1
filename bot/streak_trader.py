@@ -30,7 +30,7 @@ from . import regime
 from . import strategies
 from .db import TradeModel, db as _db, db_context
 from .db import MartingaleStateModel
-from .market import load_market_for_current_window
+from .market import load_market_for_current_window, fetch_market, MarketTokens
 from .price_feed import PriceFeed
 from .state import Trade, state_for
 from .strategy_streak import StreakSnapperStrategy, StreakSignal
@@ -60,6 +60,11 @@ CONFIRM_BATCH_SIZE   = 50
 # check exists to avoid leaving behind.
 FILL_WAIT_SECONDS = 5.0
 FILL_POLL_SECONDS = 0.5
+
+# How often observer strategies are ticked while a window runs. Only paid when
+# such a strategy is enabled — otherwise the window is one blocking wait, as it
+# has always been.
+OBSERVE_TICK_SECONDS = 4.0
 
 # How many past trades to keep in the in-memory dashboard cache.
 MEM_TRADE_CACHE_SIZE = 500
@@ -172,6 +177,17 @@ class StreakSnapperTrader(threading.Thread):
         # Orders the CLOB refused to cancel, retried before the window ends.
         self._pending_cancels: list[str] = []
 
+        # Pre-fetched tokens for the upcoming window. The next slug is
+        # deterministic (window_ts + 300), so we fetch it during the idle wait
+        # and skip the Gamma round-trip at the start of the next cycle.
+        self._prefetched: Optional[MarketTokens] = None
+        self._prefetch_lock = threading.Lock()
+
+        # Set by _on_price when the first price arrives from the feed. Used to
+        # replace the fixed 2s sleep with a smart wait that exits as soon as the
+        # WebSocket delivers its first book snapshot (typically < 200 ms).
+        self._ws_ready = threading.Event()
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def stop(self) -> None:
@@ -241,15 +257,24 @@ class StreakSnapperTrader(threading.Thread):
 
         # ── load tokens for the current window ────────────────────────────────
         self.state.set_status("loading", "Cargando mercado")
-        tokens = load_market_for_current_window(
-            self.cfg.gamma_host,
-            symbol=self.symbol,
-            retry_seconds=self.cfg.market_load_retry_seconds,
-            on_slug_change=lambda slug, ts: self.state.set_window(slug, ts),
-        )
-        self.state.set_window(tokens.slug, tokens.window_ts)
-        self.state.set_tokens(tokens.up_token_id, tokens.down_token_id)
-        logger.ok(f"[SS] market listo  {tokens.slug}", icon="📈")
+        tokens = self._consume_prefetched()
+        if tokens is not None:
+            # Pre-fetch landed during the previous window's idle wait — skip
+            # the Gamma round-trip entirely (typically saves 1–3 s on the
+            # critical path before the order).
+            self.state.set_window(tokens.slug, tokens.window_ts)
+            self.state.set_tokens(tokens.up_token_id, tokens.down_token_id)
+            logger.ok(f"[SS] market listo (pre-cargado)  {tokens.slug}", icon="⚡")
+        else:
+            tokens = load_market_for_current_window(
+                self.cfg.gamma_host,
+                symbol=self.symbol,
+                retry_seconds=self.cfg.market_load_retry_seconds,
+                on_slug_change=lambda slug, ts: self.state.set_window(slug, ts),
+            )
+            self.state.set_window(tokens.slug, tokens.window_ts)
+            self.state.set_tokens(tokens.up_token_id, tokens.down_token_id)
+            logger.ok(f"[SS] market listo  {tokens.slug}", icon="📈")
 
         # ── resolve previous window trades ────────────────────────────────────
         self._resolve_pending_trades()
@@ -264,8 +289,14 @@ class StreakSnapperTrader(threading.Thread):
             on_status=self.state.set_ws_connected,
             on_order_book=self._on_order_book,
         )
+        self._ws_ready.clear()
         feed.start()
-        time.sleep(2.0)  # brief warmup for first prices
+        # Wait for the first price from the feed rather than sleeping a fixed
+        # 2 s. The book snapshot arrives within ~200 ms on a healthy connection;
+        # the fallback ceiling is the original 2 s so a slow feed doesn't block
+        # longer than before.
+        if not self._ws_ready.wait(timeout=2.0):
+            logger.warn("[SS] WS sin precios en 2s — continuando")
 
         try:
             # ── late-entry gate ───────────────────────────────────────────────
@@ -287,6 +318,7 @@ class StreakSnapperTrader(threading.Thread):
                 )
                 self.state.set_status("watching", detail)
                 logger.info(f"[SS] SKIP_LATE: {detail}", icon="⏭")
+                self._start_prefetch(tokens.window_ts)
                 ttl = tokens.window_ts + WINDOW_SECONDS - time.time()
                 if ttl > 0:
                     self._stop.wait(ttl + RESOLVE_GRACE_SECONDS)
@@ -302,6 +334,7 @@ class StreakSnapperTrader(threading.Thread):
                 self.state.record_skip(verdict.reason)
                 self.state.set_status("watching", verdict.detail)
                 logger.info(f"[SS] {verdict.reason}: {verdict.detail}", icon="⏭")
+                self._start_prefetch(tokens.window_ts)
                 ttl = tokens.window_ts + WINDOW_SECONDS - time.time()
                 if ttl > 0:
                     self._stop.wait(ttl + RESOLVE_GRACE_SECONDS)
@@ -317,6 +350,7 @@ class StreakSnapperTrader(threading.Thread):
                 symbol=self.symbol,
                 tokens=tokens,
                 streak=self.strategy,
+                trader=self,
             )
 
             signals: list[StreakSignal] = []
@@ -362,10 +396,12 @@ class StreakSnapperTrader(threading.Thread):
                 self._execute_signal(tokens, sig)
 
             # ── wait until window end (WS stays alive for live prices) ────────
-            ttl = tokens.window_ts + WINDOW_SECONDS - time.time()
-            if ttl > 0:
-                logger.transient(f"[SS] esperando cierre de ventana... {int(ttl)}s")
-                self._stop.wait(ttl + RESOLVE_GRACE_SECONDS)
+            # Late-evaluation strategies (e.g. coin_flip_dog, which enters at
+            # T-60 to T-5) execute their signals inside _wait_out_window and
+            # return them here so the resolution step below knows to settle the
+            # window even when the early-signal list was empty.
+            late_signals = self._wait_out_window(tokens)
+            signals.extend(late_signals)
 
         finally:
             feed.stop()
@@ -384,6 +420,108 @@ class StreakSnapperTrader(threading.Thread):
             self._resolve_pending_trades(
                 wait_for_slug=tokens.slug, max_wait=RESOLVE_MAX_WAIT
             )
+
+    # ── waiting out the window ────────────────────────────────────────────────
+
+    def _wait_out_window(self, tokens) -> list:
+        """Sleep until the window closes; tick observers and late evaluators.
+
+        Returns any signals generated by late-evaluation strategies so the
+        caller can include them in the resolution step. With no observers and no
+        late evaluators this is exactly the single blocking wait it replaced —
+        deliberately, because every measured result in `docs/RUTA.md` was
+        produced by that path and a tick loop that runs when nobody asked for it
+        would perturb it for nothing.
+
+        The WebSocket stays connected for the whole window, so an observer reads
+        live prices and the book without spending a single request.
+        """
+        # Kick off the next window's token fetch right away. The slug is
+        # deterministic (window_ts + 300) and the wait is otherwise idle; in
+        # practice the Gamma call returns in < 500 ms and is ready long before
+        # this window closes, eliminating it from the critical path of the next
+        # cycle.
+        self._start_prefetch(tokens.window_ts)
+
+        ttl = tokens.window_ts + WINDOW_SECONDS - time.time()
+
+        enabled = strategies.enabled_for(self.state, self.symbol)
+        observers    = [d for d in enabled if d.observe        is not None]
+        late_evals   = [d for d in enabled if d.evaluate_late  is not None]
+
+        if not observers and not late_evals:
+            if ttl > 0:
+                logger.transient(f"[SS] esperando cierre de ventana... {int(ttl)}s")
+                self._stop.wait(ttl + RESOLVE_GRACE_SECONDS)
+            return []
+
+        logger.transient(
+            f"[SS] observando la ventana... {int(max(ttl, 0))}s "
+            f"({len(observers)} obs, {len(late_evals)} late)"
+        )
+        deadline = tokens.window_ts + WINDOW_SECONDS + RESOLVE_GRACE_SECONDS
+
+        # Strategies that already fired this window must not fire again.
+        late_fired: set[str] = set()
+        late_signals: list = []
+
+        while not self._stop.is_set():
+            now = time.time()
+            if now >= deadline:
+                break
+
+            ctx = strategies.StrategyContext(
+                state=self.state,
+                symbol=self.symbol,
+                tokens=tokens,
+                streak=self.strategy,
+                trader=self,
+                seconds_left=tokens.window_ts + WINDOW_SECONDS - now,
+            )
+
+            for descriptor in observers:
+                try:
+                    descriptor.observe(ctx)
+                except Exception as exc:
+                    # Same rule as `evaluate`: one broken strategy must not take
+                    # the window — or the settlement that follows it — down.
+                    logger.err(f"[SS] {descriptor.id} falló al observar: {exc}")
+
+            for descriptor in late_evals:
+                if descriptor.id in late_fired:
+                    continue  # one entry per strategy per window
+                try:
+                    sigs = descriptor.evaluate_late(ctx)
+                    if sigs:
+                        # Resolve conflicts against everything already in flight.
+                        # A late strategy pointing the wrong way is dropped, not
+                        # executed — buying both sides of the same window is a
+                        # guaranteed wash (docs/RUTA.md Fase 4.5).
+                        combined, dropped = strategies.resolve_conflicts(
+                            late_signals + list(sigs)
+                        )
+                        new_sigs = [s for s in sigs if s in combined]
+                        if dropped:
+                            lost = " ".join(
+                                f"{s.strategy}→{s.direction}" for s in dropped
+                                if s in sigs
+                            )
+                            logger.warn(
+                                f"[SS] señal tardía descartada (conflicto): "
+                                f"{lost}", icon="⚖",
+                            )
+                        for sig in new_sigs:
+                            self._execute_signal(tokens, sig)
+                        late_signals.extend(new_sigs)
+                        late_fired.add(descriptor.id)
+                except Exception as exc:
+                    logger.err(
+                        f"[SS] {descriptor.id} falló en evaluate_late: {exc}"
+                    )
+
+            self._stop.wait(min(OBSERVE_TICK_SECONDS, max(deadline - time.time(), 0.0)))
+
+        return late_signals
 
     # ── regime gate ───────────────────────────────────────────────────────────
 
@@ -866,9 +1004,281 @@ class StreakSnapperTrader(threading.Thread):
 
     def _on_price(self, side: str, bid: float, ask: float, mid: float) -> None:
         self.state.update_price(side, bid, ask, mid)
+        # Signal the smart warmup wait: the feed has live prices.
+        self._ws_ready.set()
 
     def _on_order_book(self, side: str, bids: list, asks: list) -> None:
         self.state.update_order_book(side, bids, asks)
+
+    # ── token pre-fetch ───────────────────────────────────────────────────────
+
+    def _start_prefetch(self, window_ts: int) -> None:
+        """Fetch tokens for the next window in a background thread.
+
+        The next slug is deterministic (window_ts + WINDOW_SECONDS), so we fire
+        this during the idle wait at the end of a window and have the answer
+        ready before the cycle restarts. In practice the Gamma call returns in
+        < 500 ms, removing a 1–3 s round-trip from the start of the next cycle.
+
+        Nothing breaks if the fetch fails: `_consume_prefetched` returns None
+        and the caller falls back to `load_market_for_current_window`.
+        """
+        next_ts   = window_ts + WINDOW_SECONDS
+        next_slug = f"{self.symbol}-updown-5m-{next_ts}"
+
+        def _fetch() -> None:
+            try:
+                result = fetch_market(self.cfg.gamma_host, next_slug)
+                if result:
+                    with self._prefetch_lock:
+                        self._prefetched = MarketTokens(
+                            slug=next_slug,
+                            window_ts=next_ts,
+                            up_token_id=result[0],
+                            down_token_id=result[1],
+                        )
+                    logger.info(
+                        f"[SS] tokens pre-cargados  {next_slug}", icon="⚡"
+                    )
+            except Exception as exc:
+                logger.warn(f"[SS] pre-carga falló ({next_slug}): {exc}")
+
+        threading.Thread(
+            target=_fetch, name=f"ss-prefetch-{self.symbol}", daemon=True
+        ).start()
+
+    def _consume_prefetched(self) -> Optional[MarketTokens]:
+        """Return and clear the cached tokens if they match the current window.
+
+        Always clears the cache. Stale tokens (from a window that was skipped
+        or rolled over) would silently supply the wrong token IDs, which is worse
+        than a fresh fetch — so any mismatch is discarded without a fallback.
+        """
+        from .market import current_slug as _current_slug
+        slug, _ = _current_slug(self.symbol)
+        with self._prefetch_lock:
+            cached = self._prefetched
+            self._prefetched = None   # consume regardless
+            if cached is not None and cached.slug == slug:
+                return cached
+            return None
+
+    # ── Maker / cancel helpers (used by box_builder.observe) ─────────────────
+    # Paper mode: these methods are no-ops that return a sentinel so the
+    # strategy's state machine can still run its logic without real orders.
+    # Maker orders require PRIVATE_KEY; the guard matches _place_limit_buy.
+
+    def _place_maker_bid(
+        self, token_id: str, price: float, shares: float
+    ) -> Optional[str]:
+        """POST a post-only GTC bid. Returns order_id or None on failure.
+
+        On a "crosses book" rejection the CLOB returns a 400; we retry 1 c
+        lower (same rule as box_builder.py). Paper mode returns a synthetic id
+        so the box state machine can track the leg without real CLOB calls.
+        """
+        is_paper = self.state.mode != "real"
+        if is_paper:
+            return f"paper-{token_id[:8]}-{int(price*100)}"
+
+        if self._client is None:
+            return None
+
+        try:
+            from py_clob_client_v2 import OrderArgs, OrderType
+
+            px = round(price, 2)
+            for _ in range(3):
+                if px < PRICE_TICK:
+                    return None
+                order_args = OrderArgs(
+                    token_id=str(token_id),
+                    price=float(px),
+                    size=float(shares),
+                    side="BUY",
+                )
+                try:
+                    resp = self._client.create_and_post_order(
+                        order_args, order_type=OrderType.GTC, post_only=True
+                    )
+                except Exception as exc:
+                    err = str(exc).lower()
+                    if "post-only" in err and "cross" in err:
+                        px = round(px - PRICE_TICK, 2)
+                        continue
+                    logger.warn(f"[BB] maker bid falló: {exc}")
+                    return None
+                if resp and isinstance(resp, dict):
+                    oid = resp.get("orderID") or resp.get("id")
+                    if oid:
+                        return str(oid)
+                    if "cross" in str(resp).lower():
+                        px = round(px - PRICE_TICK, 2)
+                        continue
+                return None
+        except Exception as exc:
+            logger.err(f"[BB] _place_maker_bid error: {exc}")
+        return None
+
+    def _place_taker_order(
+        self, token_id: str, side: str, price: float, shares: float
+    ) -> Optional[str]:
+        """Marketable GTC (post_only=False). Returns order_id or None.
+
+        Used by box_builder for the completion lift and the T-90 CUT sell.
+        Paper mode returns a sentinel — the strategy just needs to know the
+        order was acknowledged, not that it really traded.
+        """
+        is_paper = self.state.mode != "real"
+        if is_paper:
+            return f"paper-taker-{token_id[:8]}"
+
+        if self._client is None:
+            return None
+
+        try:
+            from py_clob_client_v2 import OrderArgs, OrderType
+
+            order_args = OrderArgs(
+                token_id=str(token_id),
+                price=float(round(price, 2)),
+                size=float(shares),
+                side=side.upper(),
+            )
+            resp = self._client.create_and_post_order(
+                order_args, order_type=OrderType.GTC, post_only=False
+            )
+            if resp and isinstance(resp, dict):
+                return str(resp.get("orderID") or resp.get("id") or "")
+        except Exception as exc:
+            logger.err(f"[BB] _place_taker_order error: {exc}")
+        return None
+
+    def _cancel_token_orders(self, token_id: str) -> bool:
+        """Cancel ALL resting orders on a token. Returns True on success.
+
+        Paper mode is a no-op success. Real mode uses cancel_market_orders
+        (same endpoint as box_builder.py cancel_token_orders).
+        """
+        is_paper = self.state.mode != "real"
+        if is_paper:
+            return True
+
+        if self._client is None:
+            return False
+
+        try:
+            from py_clob_client_v2.clob_types import OrderMarketCancelParams
+
+            self._client.cancel_market_orders(
+                OrderMarketCancelParams(asset_id=str(token_id))
+            )
+            return True
+        except Exception as exc:
+            logger.warn(f"[BB] cancel_token_orders falló para {token_id[:12]}: {exc}")
+            return False
+
+    def _get_position_size(self, token_id: str) -> float:
+        """Shares held for token_id, via the data-api positions endpoint.
+
+        Returns 0.0 on any failure. Paper mode: compare against our
+        open-trades table (fills recorded via _record_box_fill are detectable
+        there, though it's a lightweight check — the state machine tolerates
+        occasional misses on the fill poll).
+        """
+        is_paper = self.state.mode != "real"
+        if is_paper:
+            # In paper, box fills are never real; assume 0 so the state
+            # machine relies on the order-id sentinel check instead.
+            return 0.0
+
+        if not self.cfg.proxy_wallet:
+            return 0.0
+
+        try:
+            import requests as _req
+
+            r = _req.get(
+                "https://data-api.polymarket.com/positions",
+                params={
+                    "user": self.cfg.proxy_wallet,
+                    "limit": 500,
+                    "sortBy": "CURRENT",
+                    "sortDirection": "DESC",
+                },
+                timeout=8,
+            )
+            if r.status_code != 200:
+                return 0.0
+            for pos in r.json():
+                if str(pos.get("asset")) == str(token_id):
+                    return float(pos.get("size", 0) or 0)
+        except Exception:
+            pass
+        return 0.0
+
+    def _record_box_fill(
+        self,
+        tokens,
+        direction: str,
+        token_id: str,
+        fill_price: float,
+        shares: float,
+    ) -> None:
+        """Persist a box leg fill to the DB as a normal open trade.
+
+        Uses the same TradeModel as _execute_signal so the resolution step
+        settles it automatically. strategy="box_builder" in both legs so the
+        dashboard groups them correctly.
+        """
+        cost = round(shares * fill_price, 4)
+        trade_id: int = 0
+        try:
+            with db_context():
+                trade = TradeModel(
+                    strategy="box_builder",
+                    symbol=self.symbol,
+                    direction=direction,
+                    token_id=token_id,
+                    window_slug=tokens.slug,
+                    window_ts=tokens.window_ts,
+                    limit_cap=fill_price,
+                    entry_price=fill_price,
+                    shares=float(shares),
+                    cost=cost,
+                    shares_count=float(shares),
+                    multiplier=1.0,
+                    loss_streak=0,
+                    mode=self.state.mode,
+                    note="box_leg",
+                )
+                _db.session.add(trade)
+                _db.session.commit()
+                trade_id = trade.id
+            logger.info(
+                f"[BB] trade #{trade_id} guardado  {direction} @ {fill_price:.3f} "
+                f"×{shares:.0f}",
+                icon="💾",
+            )
+            from .state import Trade
+            mem_trade = Trade(
+                id=trade_id,
+                window_slug=tokens.slug,
+                window_ts=tokens.window_ts,
+                side=direction,
+                token_id=token_id,
+                price=fill_price,
+                shares=float(shares),
+                cost=cost,
+                mode=self.state.mode,
+                opened_at=time.time(),
+                strategy="box_builder",
+                multiplier=1.0,
+                limit_cap=fill_price,
+            )
+            self.state.add_trade(mem_trade)
+        except Exception as exc:
+            logger.err(f"[BB] _record_box_fill DB save failed: {exc}")
 
     # ── CLOB V2 order helper ──────────────────────────────────────────────────
 
