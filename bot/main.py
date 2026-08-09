@@ -168,6 +168,8 @@ def main() -> None:
             has_credentials=cfg.has_credentials,
             starting_bankroll=cfg.starting_bankroll,
             ss_enabled=cfg.ss_enabled,
+            # Fase B — Coin-Flip Dog
+            cfd_enabled=cfg.cfd_enabled,
             # Fase B — Box Builder
             bb_enabled=cfg.bb_enabled,
             bb_shares_per_leg=cfg.bb_shares_per_leg,
@@ -181,6 +183,22 @@ def main() -> None:
             bb_reprice_interval=cfg.bb_reprice_interval,
             bb_reprice_behind=cfg.bb_reprice_behind,
             bb_min_coa_hold=cfg.bb_min_coa_hold,
+            # Fase B — Temporal Arbitrage
+            ta_enabled=cfg.ta_enabled,
+            ta_cheap_threshold=cfg.ta_cheap_threshold,
+            ta_complete_cap=cfg.ta_complete_cap,
+            ta_shares_per_leg=cfg.ta_shares_per_leg,
+            ta_entry_cutoff_sec=cfg.ta_entry_cutoff_sec,
+            ta_bailout_sec=cfg.ta_bailout_sec,
+            ta_cancel_all_sec=cfg.ta_cancel_all_sec,
+            # Fase B — Near-Resolution Capture
+            nrc_enabled=cfg.nrc_enabled,
+            nrc_min_ask=cfg.nrc_min_ask,
+            nrc_max_ask=cfg.nrc_max_ask,
+            nrc_min_entry_left=cfg.nrc_min_entry_left,
+            nrc_max_entry_left=cfg.nrc_max_entry_left,
+            nrc_shares=cfg.nrc_shares,
+            nrc_max_book_sum=cfg.nrc_max_book_sum,
             ss_sizing=cfg.ss_sizing,
             ss_kelly_fraction=cfg.ss_kelly_fraction,
             ss_martingale_mult_factor=cfg.ss_martingale_mult_factor,

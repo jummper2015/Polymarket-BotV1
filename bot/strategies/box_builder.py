@@ -164,7 +164,16 @@ def _check_fills(
     state,
     logger,
 ) -> None:
-    """Poll the CLOB for fills on any unfilled leg."""
+    """Poll fills on any unfilled leg.
+
+    Real mode  — queries the positions endpoint (data-api.polymarket.com).
+    Paper mode — simulates a maker fill: our resting bid at order_px is hit
+    when a taker is willing to sell at ≤ that price, i.e. live ask ≤ order_px.
+    This is the standard maker fill condition on a CLOB.
+    """
+    is_paper = getattr(state, "mode", "paper") != "real"
+    ask_up, ask_dn = state.get_asks()
+
     for side in ("UP", "DOWN"):
         leg = box.legs[side]
         if leg.fill_px is not None:
@@ -175,16 +184,35 @@ def _check_fills(
         tok = leg.token_id or (
             tokens.up_token_id if side == "UP" else tokens.down_token_id
         )
-        size = trader._get_position_size(tok)
-        if size and size > 0:
-            leg.fill_px    = leg.order_px  # best approximation before GET /order
+
+        if is_paper:
+            # A maker bid at order_px fills when the ask drops to that level
+            # (a counterparty is prepared to sell for ≤ our price).
+            current_ask = ask_up if side == "UP" else ask_dn
+            if current_ask is None or leg.order_px is None:
+                continue
+            if current_ask > leg.order_px:
+                continue  # bid not yet crossed — keep waiting
+            size = float(getattr(state, "bb_shares_per_leg", 5.0))
+            leg.fill_px    = leg.order_px
             leg.fill_shares = size
             logger.ok(
-                f"[BB] ✅ {side} LLENADA @ {leg.order_px:.2f} ×{size:.0f}",
+                f"[BB] ✅ {side} LLENADA (paper) @ {leg.order_px:.2f} ×{size:.0f}"
+                f"  ask={current_ask:.2f}",
                 icon="📦",
             )
-            # Record the fill as an open trade in the DB so it resolves normally
             trader._record_box_fill(tokens, side, tok, leg.order_px or 0.0, size)
+        else:
+            size = trader._get_position_size(tok)
+            if size and size > 0:
+                leg.fill_px    = leg.order_px  # best approximation before GET /order
+                leg.fill_shares = size
+                logger.ok(
+                    f"[BB] ✅ {side} LLENADA @ {leg.order_px:.2f} ×{size:.0f}",
+                    icon="📦",
+                )
+                # Record the fill as an open trade in the DB so it resolves normally
+                trader._record_box_fill(tokens, side, tok, leg.order_px or 0.0, size)
 
 
 def _cancel_leg(leg: _Leg, trader) -> None:

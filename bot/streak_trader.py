@@ -1188,8 +1188,9 @@ class StreakSnapperTrader(threading.Thread):
         """
         is_paper = self.state.mode != "real"
         if is_paper:
-            # In paper, box fills are never real; assume 0 so the state
-            # machine relies on the order-id sentinel check instead.
+            # Paper mode fill detection is handled by _check_fills directly,
+            # which compares the live ask against the resting bid price. This
+            # method is only called by _check_fills in real mode.
             return 0.0
 
         if not self.cfg.proxy_wallet:
@@ -1224,19 +1225,21 @@ class StreakSnapperTrader(threading.Thread):
         token_id: str,
         fill_price: float,
         shares: float,
+        strategy: str = "box_builder",
     ) -> None:
-        """Persist a box leg fill to the DB as a normal open trade.
+        """Persist a maker/taker leg fill to the DB as a normal open trade.
 
         Uses the same TradeModel as _execute_signal so the resolution step
-        settles it automatically. strategy="box_builder" in both legs so the
-        dashboard groups them correctly.
+        settles it automatically. `strategy` identifies which strategy owns
+        the leg (box_builder or temporal_arb) for dashboard KPIs.
         """
+        note = f"{strategy}_leg"
         cost = round(shares * fill_price, 4)
         trade_id: int = 0
         try:
             with db_context():
                 trade = TradeModel(
-                    strategy="box_builder",
+                    strategy=strategy,
                     symbol=self.symbol,
                     direction=direction,
                     token_id=token_id,
@@ -1250,13 +1253,14 @@ class StreakSnapperTrader(threading.Thread):
                     multiplier=1.0,
                     loss_streak=0,
                     mode=self.state.mode,
-                    note="box_leg",
+                    note=note,
                 )
                 _db.session.add(trade)
                 _db.session.commit()
                 trade_id = trade.id
+            strat_tag = strategy.upper()[:2]  # "BB" or "TA"
             logger.info(
-                f"[BB] trade #{trade_id} guardado  {direction} @ {fill_price:.3f} "
+                f"[{strat_tag}] trade #{trade_id} guardado  {direction} @ {fill_price:.3f} "
                 f"×{shares:.0f}",
                 icon="💾",
             )

@@ -89,7 +89,8 @@ class BotState:
         # Fase B — Coin-Flip Dog. Buys the cheap side (underdog) in the last
         # 30–90 s of a window when the book is near a coin flip (coa ≤ 0.20)
         # and the underdog ask is in [0.22, 0.47]. Flat sizing, no martingale.
-        self.cfd_enabled:         bool  = False
+        # On by default: collects live signal data in paper mode, no credentials.
+        self.cfd_enabled:         bool  = True
         self.cfd_base_bet:        float = 5.0
         self.cfd_min_ask:         float = 0.22
         self.cfd_max_ask:         float = 0.47
@@ -100,8 +101,9 @@ class BotState:
         # Fase B — Box Builder. Both-sided maker: rests post-only bids on UP
         # and DOWN in the first half of the window, combined ≤ bb_bid_sum_cap.
         # When both legs fill the pair redeems for $1.00 — direction-neutral
-        # with ≥ 6 c/pair locked. Off by default pending maker-order testing.
-        self.bb_enabled:             bool  = False
+        # with ≥ 6 c/pair locked. On by default: paper mode runs the state
+        # machine without real orders so we get signal data immediately.
+        self.bb_enabled:             bool  = True
         self.bb_shares_per_leg:      float = 5.0
         self.bb_bid_sum_cap:         float = 0.94
         self.bb_arm_min_spread:      float = 1.03
@@ -113,6 +115,28 @@ class BotState:
         self.bb_reprice_interval:    float = 20.0
         self.bb_reprice_behind:      float = 0.02
         self.bb_min_coa_hold:        float = 1.0
+
+        # Fase B — Temporal Arbitrage. Taker-based pair: buys each leg at its
+        # price extreme, targeting pair cost ≤ 0.82¢. Off by default: directional
+        # exposure between legs requires deliberate opt-in.
+        self.ta_enabled:          bool  = False
+        self.ta_cheap_threshold:  float = 0.35
+        self.ta_complete_cap:     float = 0.82
+        self.ta_shares_per_leg:   float = 5.0
+        self.ta_entry_cutoff_sec: float = 150.0
+        self.ta_bailout_sec:      float = 60.0
+        self.ta_cancel_all_sec:   float = 10.0
+
+        # Fase B — Near-Resolution Capture. Buys the nearly-certain winner at
+        # T-5..T-20s for 1–3¢ return. Off by default: tail risk (a single wrong
+        # trade erases many sessions) requires deliberate opt-in.
+        self.nrc_enabled:         bool  = False
+        self.nrc_min_ask:         float = 0.970
+        self.nrc_max_ask:         float = 0.995
+        self.nrc_min_entry_left:  float = 5.0
+        self.nrc_max_entry_left:  float = 20.0
+        self.nrc_shares:          float = 5.0
+        self.nrc_max_book_sum:    float = 1.01
 
         # Sizing. "flat" keeps the stake constant; "kelly" scales it to the
         # measured edge; "martingale" is the old behaviour, kept for comparison.
@@ -500,6 +524,22 @@ class BotState:
                 "bb_reprice_interval":    self.bb_reprice_interval,
                 "bb_reprice_behind":      self.bb_reprice_behind,
                 "bb_min_coa_hold":        self.bb_min_coa_hold,
+                # Temporal Arbitrage
+                "ta_enabled":          self.ta_enabled,
+                "ta_cheap_threshold":  self.ta_cheap_threshold,
+                "ta_complete_cap":     self.ta_complete_cap,
+                "ta_shares_per_leg":   self.ta_shares_per_leg,
+                "ta_entry_cutoff_sec": self.ta_entry_cutoff_sec,
+                "ta_bailout_sec":      self.ta_bailout_sec,
+                "ta_cancel_all_sec":   self.ta_cancel_all_sec,
+                # Near-Resolution Capture
+                "nrc_enabled":         self.nrc_enabled,
+                "nrc_min_ask":         self.nrc_min_ask,
+                "nrc_max_ask":         self.nrc_max_ask,
+                "nrc_min_entry_left":  self.nrc_min_entry_left,
+                "nrc_max_entry_left":  self.nrc_max_entry_left,
+                "nrc_shares":          self.nrc_shares,
+                "nrc_max_book_sum":    self.nrc_max_book_sum,
                 "ss_sizing": self.ss_sizing,
                 "ss_kelly_fraction": self.ss_kelly_fraction,
                 "ss_martingale_mult_factor": self.ss_martingale_mult_factor,

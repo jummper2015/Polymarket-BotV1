@@ -94,29 +94,42 @@
   </div>
 </div>
 
-{# ── Martingale + bot status ── #}
+{# ── Estrategias activas + estado del bot ── #}
 <div class="row g-3 mt-1">
   <div class="col-lg-6">
     <div class="ss-card notika-shadow h-100">
-      <div class="ss-card-head"><h2><i class="bi bi-dice-3"></i> Estado Martingale</h2></div>
+      <div class="ss-card-head"><h2><i class="bi bi-dice-3"></i> Estrategias Activas</h2></div>
       <div class="row g-2">
         <div class="col-sm-6">
-          <div class="ss-mart fade">
-            <div class="ss-mart-head"><i class="bi bi-arrow-repeat"></i> Fade</div>
-            <div class="ss-mart-row"><span>Multiplicador</span><span id="fade-mult" class="ss-mart-val">×1.00</span></div>
-            <div class="ss-mart-row"><span>Racha pérdidas</span><span id="fade-streak" class="ss-mart-val">0</span></div>
-            <div class="ss-mart-row"><span>Próxima apuesta</span><span id="fade-next-bet" class="ss-mart-val">5.00 sh</span></div>
+          <div class="ss-mart" id="bb-card">
+            <div class="ss-mart-head"><i class="bi bi-layers"></i> Box Builder</div>
+            <div class="ss-mart-row"><span>Estado</span><span id="bb-status" class="ss-mart-val">—</span></div>
+            <div class="ss-mart-row"><span>Shares/pata</span><span id="bb-shares" class="ss-mart-val">—</span></div>
+            <div class="ss-mart-row"><span>Cap suma bids</span><span id="bb-cap" class="ss-mart-val">—</span></div>
           </div>
         </div>
         <div class="col-sm-6">
-          <div class="ss-mart trend">
-            <div class="ss-mart-head"><i class="bi bi-graph-up-arrow"></i> Trend</div>
-            <div class="ss-mart-row"><span>Multiplicador</span><span id="trend-mult" class="ss-mart-val">×1.00</span></div>
-            <div class="ss-mart-row"><span>Racha pérdidas</span><span id="trend-streak" class="ss-mart-val">0</span></div>
-            <div class="ss-mart-row"><span>Próxima apuesta</span><span id="trend-next-bet" class="ss-mart-val">5.00 sh</span></div>
-            <div class="ss-mart-row"><span>Lado del ciclo</span><span id="trend-cycle-side" class="ss-mart-val">—</span></div>
-            <div class="ss-mart-row"><span>Bloque 4h</span><span id="trend-cycle-ttl" class="ss-mart-val">—</span></div>
-            <div class="ss-mart-row"><span>Última vela 4h</span><span id="trend-strength" class="ss-mart-val">—</span></div>
+          <div class="ss-mart" id="cfd-card">
+            <div class="ss-mart-head"><i class="bi bi-activity"></i> Coin-Flip Dog</div>
+            <div class="ss-mart-row"><span>Estado</span><span id="cfd-status" class="ss-mart-val">—</span></div>
+            <div class="ss-mart-row"><span>Apuesta base</span><span id="cfd-bet" class="ss-mart-val">—</span></div>
+            <div class="ss-mart-row"><span>Ventana entrada</span><span id="cfd-window" class="ss-mart-val">—</span></div>
+          </div>
+        </div>
+        <div class="col-sm-6">
+          <div class="ss-mart" id="ta-card">
+            <div class="ss-mart-head"><i class="bi bi-arrow-left-right"></i> Temporal Arb</div>
+            <div class="ss-mart-row"><span>Estado</span><span id="ta-status" class="ss-mart-val">—</span></div>
+            <div class="ss-mart-row"><span>Threshold pata</span><span id="ta-threshold" class="ss-mart-val">—</span></div>
+            <div class="ss-mart-row"><span>Cap par</span><span id="ta-cap" class="ss-mart-val">—</span></div>
+          </div>
+        </div>
+        <div class="col-sm-6">
+          <div class="ss-mart" id="nrc-card">
+            <div class="ss-mart-head"><i class="bi bi-flag-fill"></i> Near-Res Capture</div>
+            <div class="ss-mart-row"><span>Estado</span><span id="nrc-status" class="ss-mart-val">—</span></div>
+            <div class="ss-mart-row"><span>Ventana entrada</span><span id="nrc-window" class="ss-mart-val">—</span></div>
+            <div class="ss-mart-row"><span>Shares (hard cap)</span><span id="nrc-shares" class="ss-mart-val">—</span></div>
           </div>
         </div>
       </div>

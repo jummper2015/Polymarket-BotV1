@@ -40,7 +40,7 @@ def _descriptor(sid, **kw):
 
 class TestRegistry:
     def test_the_registered_strategies(self):
-        assert strategies.ids() == ("box_builder", "coin_flip_dog")
+        assert strategies.ids() == ("box_builder", "coin_flip_dog", "temporal_arb", "near_res")
 
     def test_ids_match_what_trades_stores(self):
         """`trades.strategy` holds these strings; KPIs group by them."""
@@ -104,7 +104,8 @@ class TestParamsFlowIntoRuntimeFields:
 
 class TestEnablement:
     def test_box_builder_and_cfd_enabled_independently(self):
-        state = SimpleNamespace(bb_enabled=True, cfd_enabled=True)
+        state = SimpleNamespace(bb_enabled=True, cfd_enabled=True,
+                                ta_enabled=False, nrc_enabled=False)
         ids = [d.id for d in strategies.enabled_for(state)]
         assert set(ids) == {"box_builder", "coin_flip_dog"}
 
@@ -223,9 +224,12 @@ class TestEvaluate:
 
 class TestToJson:
     def test_shape(self):
-        state = SimpleNamespace(bb_enabled=False, cfd_enabled=False)
+        state = SimpleNamespace(bb_enabled=False, cfd_enabled=False,
+                                ta_enabled=False, nrc_enabled=False)
         payload = strategies.to_json(state)
-        assert [s["id"] for s in payload] == ["box_builder", "coin_flip_dog"]
+        assert [s["id"] for s in payload] == [
+            "box_builder", "coin_flip_dog", "temporal_arb", "near_res"
+        ]
 
         bb = payload[0]
         assert bb["enabled"] is False

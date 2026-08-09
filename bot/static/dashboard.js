@@ -256,8 +256,53 @@
   }
 
   function renderMartingale(s) {
-    // fade/trend eliminados — box_builder y coin_flip_dog no usan martingala.
-    // La sección se preserva vacía para no romper el ciclo de render.
+    // None of the active strategies use martingale. Show live enabled state
+    // and key params for all four registered strategies.
+    const cfg = s.config || {};
+    const strats = s.strategies || [];
+
+    const bbDesc  = strats.find((d) => d.id === "box_builder");
+    const cfdDesc = strats.find((d) => d.id === "coin_flip_dog");
+    const taDesc  = strats.find((d) => d.id === "temporal_arb");
+    const nrcDesc = strats.find((d) => d.id === "near_res");
+
+    const set = (id, value) => { const el = $(id); if (el) el.textContent = value; };
+
+    // Box Builder card
+    const bbOn = cfg.bb_enabled !== false && bbDesc && bbDesc.enabled;
+    set("bb-status", bbOn ? "activa ✓" : "apagada");
+    const bbCard = $("bb-card");
+    if (bbCard) bbCard.classList.toggle("ss-strategy-off", !bbOn);
+    set("bb-shares", cfg.bb_shares_per_leg != null ? cfg.bb_shares_per_leg + " sh" : "—");
+    set("bb-cap", cfg.bb_bid_sum_cap != null ? "$" + cfg.bb_bid_sum_cap : "—");
+
+    // Coin-Flip Dog card
+    const cfdOn = cfg.cfd_enabled !== false && cfdDesc && cfdDesc.enabled;
+    set("cfd-status", cfdOn ? "activa ✓" : "apagada");
+    const cfdCard = $("cfd-card");
+    if (cfdCard) cfdCard.classList.toggle("ss-strategy-off", !cfdOn);
+    set("cfd-bet", cfg.cfd_base_bet != null ? "$" + cfg.cfd_base_bet : "—");
+    const minL = cfg.cfd_entry_min_left;
+    const maxL = cfg.cfd_entry_max_left;
+    set("cfd-window", (minL != null && maxL != null) ? `T-${maxL}..T-${minL}s` : "—");
+
+    // Temporal Arb card
+    const taOn = cfg.ta_enabled !== false && taDesc && taDesc.enabled;
+    set("ta-status", taOn ? "activa ✓" : "apagada");
+    const taCard = $("ta-card");
+    if (taCard) taCard.classList.toggle("ss-strategy-off", !taOn);
+    set("ta-threshold", cfg.ta_cheap_threshold != null ? "≤ $" + cfg.ta_cheap_threshold : "—");
+    set("ta-cap", cfg.ta_complete_cap != null ? "≤ $" + cfg.ta_complete_cap : "—");
+
+    // Near-Resolution Capture card
+    const nrcOn = cfg.nrc_enabled !== false && nrcDesc && nrcDesc.enabled;
+    set("nrc-status", nrcOn ? "activa ✓" : "apagada");
+    const nrcCard = $("nrc-card");
+    if (nrcCard) nrcCard.classList.toggle("ss-strategy-off", !nrcOn);
+    const nrcMinL = cfg.nrc_min_entry_left;
+    const nrcMaxL = cfg.nrc_max_entry_left;
+    set("nrc-window", (nrcMinL != null && nrcMaxL != null) ? `T-${nrcMaxL}..T-${nrcMinL}s` : "—");
+    set("nrc-shares", cfg.nrc_shares != null ? cfg.nrc_shares + " sh" : "—");
   }
 
   function renderStatus(s) {

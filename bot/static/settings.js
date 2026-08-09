@@ -17,7 +17,6 @@
   const $ = (id) => document.getElementById(id);
 
   let selectedMode = "paper";   // paper | real
-  let ssMode = "fade";          // fade | trend | both
   let schema = {};              // name → field declaration, from /state.fields
 
   // Which base fields go in which card. Strategy parameters aren't here: they
@@ -128,7 +127,7 @@
         return `
           <div class="mb-3 ss-strategy-block" data-strategy="${esc(s.id)}">
             <h6 class="ss-field-label mb-2 d-flex align-items-center">
-              <span style="color:var(--ss-${s.id === "ss_trend" ? "trend" : "fade"})">
+              <span>
                 ${esc(s.name)}
               </span>
               <span class="ss-badge ms-2" data-role="enabled-badge">—</span>
@@ -171,28 +170,13 @@
     });
   }
 
-  // Current value of a config key, wherever its widget lives. `ss_mode` has no
-  // input of its own — it's the three cards at the top.
+  // Current value of a config key, wherever its widget lives.
   function readValue(name) {
-    if (name === "ss_mode") return ssMode;
     const el = $("cfg-" + name);
     if (!el) return null;
     if (el.type === "checkbox") return el.checked;
     return el.value;
   }
-
-  // ── strategy mode selector ───────────────────────────────────────────────
-  function selectSSMode(mode) {
-    ssMode = mode;
-    document.querySelectorAll(".ss-mode-card").forEach((card) => {
-      card.classList.toggle("active", card.dataset.mode === mode);
-    });
-    refreshEnabledState();
-  }
-
-  document.querySelectorAll(".ss-mode-card").forEach((card) => {
-    card.addEventListener("click", () => selectSSMode(card.dataset.mode));
-  });
 
   // ── enable toggle ──
   const ssCheck = $("cfg-ss-enabled");
@@ -218,12 +202,10 @@
    * left with if that bet WINS. Buying `s` shares at `p` costs `s·p` and pays
    * `s`, so a win only clears the cycle while factor > 1/(1-p). Below that the
    * accumulated losses outgrow the payout and "keep going until you win" ends
-   * in a bigger hole. The old preview showed only the progression, which made
-   * ×1.5 at a 0.52 cap look survivable — it isn't.
+   * in a bigger hole.
    *
-   * It reads the *fade* cap and base: fade is the strategy that runs by
-   * default. It used to read trend's, which described a cycle nobody was
-   * running. */
+   * Uses a 0.50 reference cap since neither BB nor CFD uses martingale — this
+   * panel is only relevant if the user switches sizing to "martingale". */
   function updateMartingalePreview() {
     const preview = $("martingale-preview");
     if (!preview) return;
@@ -232,8 +214,8 @@
       return isNaN(v) ? fallback : v;
     };
     const mult = numOr("ss_martingale_mult_factor", 2.1);
-    const base = numOr("ss_fade_base_shares", 5.0);
-    const cap = numOr("ss_fade_limit_cap", 0.52);
+    const base = 5.0;    // reference — BB and CFD use flat sizing
+    const cap  = 0.50;   // reference price for the preview
 
     const needed = cap < 1 ? 1 / (1 - cap) : Infinity;
     const rows = [];
@@ -312,7 +294,7 @@
       });
 
       // Re-bind after render: the inputs these listen to didn't exist before.
-      ["ss_martingale_mult_factor", "ss_fade_base_shares", "ss_fade_limit_cap", "ss_sizing"]
+      ["ss_martingale_mult_factor", "ss_sizing"]
         .forEach((name) => {
           const el = $("cfg-" + name);
           if (el) el.addEventListener("input", updateMartingalePreview);
@@ -325,7 +307,6 @@
         ssCheck.checked = c.ss_enabled !== false;
         ssLabel.textContent = ssCheck.checked ? "Activado" : "Desactivado";
       }
-      selectSSMode(c.ss_mode || "fade");
       setModeUI(c.mode || "paper");
       updateMartingalePreview();
 
@@ -376,13 +357,11 @@
     setTimeout(() => { el.textContent = ""; el.className = "small mt-2"; }, 5000);
   }
 
-  // Every widget on the page, whatever card it lives in, plus the three things
-  // that aren't RuntimeFields with an input: the master switch, the mode cards
-  // and paper/real.
+  // Every widget on the page, whatever card it lives in, plus the two things
+  // that aren't RuntimeFields with an input: the master switch and paper/real.
   function collect() {
     const body = {
       ss_enabled: ssCheck ? ssCheck.checked : true,
-      ss_mode: ssMode,
       mode: selectedMode,
     };
 

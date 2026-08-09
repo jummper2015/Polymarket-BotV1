@@ -230,8 +230,13 @@ class Config:
     ss_enabled: bool
     # ss_mode, ss_fade_*, ss_trend_* eliminados — fade y trend desactivados.
 
+    # Fase B — Coin-Flip Dog. On by default: buys the structural discount at the
+    # end of the window whenever the three gates pass.
+    cfd_enabled: bool
+
     # Fase B — Box Builder: both-sided maker, ≥ 6 c/pair when both legs fill.
-    # Off by default; requires post_only orders + cancellation support.
+    # On by default: runs in paper mode without maker credentials, accumulating
+    # real signal data.
     bb_enabled:             bool
     bb_shares_per_leg:      float
     bb_bid_sum_cap:         float
@@ -244,6 +249,28 @@ class Config:
     bb_reprice_interval:    float
     bb_reprice_behind:      float
     bb_min_coa_hold:        float
+
+    # Fase B — Temporal Arbitrage: buys each leg when price is at an extreme,
+    # targeting pairs at ≤ 0.82¢ instead of Box Builder's 0.94¢.
+    # Off by default: directional exposure between legs requires deliberate opt-in.
+    ta_enabled:          bool
+    ta_cheap_threshold:  float
+    ta_complete_cap:     float
+    ta_shares_per_leg:   float
+    ta_entry_cutoff_sec: float
+    ta_bailout_sec:      float
+    ta_cancel_all_sec:   float
+
+    # Fase B — Near-Resolution Capture: buys nearly-certain winner at T-5..T-20s.
+    # Off by default: tail risk (single reversal erases many sessions) requires
+    # deliberate opt-in and a feed with < 5s resolution latency.
+    nrc_enabled:         bool
+    nrc_min_ask:         float
+    nrc_max_ask:         float
+    nrc_min_entry_left:  float
+    nrc_max_entry_left:  float
+    nrc_shares:          float
+    nrc_max_book_sum:    float
 
     # Sizing
     ss_sizing: str                  # "flat" | "kelly" | "martingale"
@@ -333,10 +360,15 @@ def load_config() -> Config:
         # ── Streak Snapper ────────────────────────────────────────────────────
         ss_enabled=_env_bool("SS_ENABLED", True),
 
+        # ── Fase B — Coin-Flip Dog ────────────────────────────────────────────
+        # On by default: accumulates live signal data in paper mode with zero
+        # risk. Requires no credentials.
+        cfd_enabled=_env_bool("CFD_ENABLED", True),
+
         # ── Fase B — Box Builder ──────────────────────────────────────────────
-        # Both-sided maker: ≥ 6 c/pair when both legs fill. Off by default
-        # until maker-order plumbing (post_only + cancel) is in production.
-        bb_enabled=_env_bool("BB_ENABLED", False),
+        # On by default: runs its state machine every 4 s (observe hook);
+        # in paper mode orders are synthetic — no credentials needed.
+        bb_enabled=_env_bool("BB_ENABLED", True),
         bb_shares_per_leg=_env_float("BB_SHARES_PER_LEG", 5.0),
         bb_bid_sum_cap=_env_float("BB_BID_SUM_CAP", 0.94),
         bb_arm_min_spread=_env_float("BB_ARM_MIN_SPREAD", 1.03),
@@ -348,6 +380,26 @@ def load_config() -> Config:
         bb_reprice_interval=_env_float("BB_REPRICE_INTERVAL", 20.0),
         bb_reprice_behind=_env_float("BB_REPRICE_BEHIND", 0.02),
         bb_min_coa_hold=_env_float("BB_MIN_COA_HOLD", 1.0),
+
+        # ── Fase B — Temporal Arbitrage ──────────────────────────────────────
+        # Off by default: directional exposure between legs requires opt-in.
+        ta_enabled=_env_bool("TA_ENABLED", False),
+        ta_cheap_threshold=_env_float("TA_CHEAP_THRESHOLD", 0.35),
+        ta_complete_cap=_env_float("TA_COMPLETE_CAP", 0.82),
+        ta_shares_per_leg=_env_float("TA_SHARES_PER_LEG", 5.0),
+        ta_entry_cutoff_sec=_env_float("TA_ENTRY_CUTOFF_SEC", 150.0),
+        ta_bailout_sec=_env_float("TA_BAILOUT_SEC", 60.0),
+        ta_cancel_all_sec=_env_float("TA_CANCEL_ALL_SEC", 10.0),
+
+        # ── Fase B — Near-Resolution Capture ─────────────────────────────────
+        # Off by default: asymmetric tail risk requires deliberate opt-in.
+        nrc_enabled=_env_bool("NRC_ENABLED", False),
+        nrc_min_ask=_env_float("NRC_MIN_ASK", 0.970),
+        nrc_max_ask=_env_float("NRC_MAX_ASK", 0.995),
+        nrc_min_entry_left=_env_float("NRC_MIN_ENTRY_LEFT", 5.0),
+        nrc_max_entry_left=_env_float("NRC_MAX_ENTRY_LEFT", 20.0),
+        nrc_shares=_env_float("NRC_SHARES", 5.0),
+        nrc_max_book_sum=_env_float("NRC_MAX_BOOK_SUM", 1.01),
 
         # Sizing. `flat` by default: a martingale changes variance, never
         # expected value, and the measured edge sizes at ~4% of bankroll
