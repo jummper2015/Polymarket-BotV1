@@ -560,7 +560,7 @@ class StreakSnapperTrader(threading.Thread):
 
     def _execute_signal(self, tokens, sig: StreakSignal) -> None:
         """Execute a limit buy order for a given signal."""
-        strategy_label = "FADE" if sig.strategy == "ss_fade" else "TREND"
+        strategy_label = sig.strategy.upper().replace("_", " ")
 
         # Determine token_id
         token_id = tokens.up_token_id if sig.direction == "UP" else tokens.down_token_id
@@ -616,7 +616,7 @@ class StreakSnapperTrader(threading.Thread):
             f"{sig.direction} @ ${limit_price:.4f} ×{shares}  "
             f"cost=${cost:.2f}  mult=×{sig.multiplier:.2f}  "
             f"reason={sig.signal_reason}",
-            icon="🚀" if sig.strategy == "ss_fade" else "📈",
+            icon="🎯" if sig.strategy == "box_builder" else "🐕",
         )
 
         # ── paper or real execution ───────────────────────────────────────────
@@ -850,7 +850,7 @@ class StreakSnapperTrader(threading.Thread):
 
         # Update martingale states (these helpers handle their own DB context)
         for trade, winner, pnl, won, source in resolutions:
-            label = "FADE" if trade.strategy == "ss_fade" else "TREND"
+            label = trade.strategy.upper().replace("_", " ")
             status = "won" if won else "lost"
             via = "" if source == "gamma" else "  (vía Binance)"
 
@@ -946,7 +946,7 @@ class StreakSnapperTrader(threading.Thread):
             return
 
         for trade, winner, pnl, won in corrections:
-            label = "FADE" if trade.strategy == "ss_fade" else "TREND"
+            label = trade.strategy.upper().replace("_", " ")
             logger.err(
                 f"[SS {label}] ⚠ trade #{trade.id} CORREGIDO por Gamma: "
                 f"Binance dijo {trade.outcome}, Gamma dice {winner} → "

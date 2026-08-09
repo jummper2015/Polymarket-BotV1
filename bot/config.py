@@ -86,12 +86,7 @@ def kelly_fraction(win_prob: float, price: float) -> float:
 # made weeks ago start the bot trading with real money after a restart.
 BASE_FIELDS: tuple[RuntimeField, ...] = (
     RuntimeField("ss_enabled", "bool", label="Bot activo"),
-    RuntimeField(
-        "ss_mode", "choice", choices=("fade",),
-        choice_labels=("Solo Fade",),
-        label="Formas activas (ss_fade)",
-        hint="Solo Fade activo. Trend desactivado: midió −4,22%/operación.",
-    ),
+    # ss_mode eliminado — fade y trend desactivados en esta fase.
     RuntimeField(
         "ss_martingale_mult_factor", "float", minimum=1.01, maximum=10.0,
         label="Factor martingala", step=0.05,
@@ -233,17 +228,7 @@ class Config:
 
     # ── Streak Snapper ────────────────────────────────────────────────────────
     ss_enabled: bool
-    ss_mode: str                    # "fade" | "trend" | "both"
-
-    # Forma 1 — Fade
-    ss_fade_base_shares: float
-    ss_fade_limit_cap: float
-    ss_fade_streak_min: int
-
-    # Forma 2 — Trend
-    ss_trend_base_shares: float
-    ss_trend_limit_cap: float
-    ss_trend_min_strength: float    # min |move| of the 4h candle to call a trend
+    # ss_mode, ss_fade_*, ss_trend_* eliminados — fade y trend desactivados.
 
     # Fase B — Box Builder: both-sided maker, ≥ 6 c/pair when both legs fill.
     # Off by default; requires post_only orders + cancellation support.
@@ -308,10 +293,6 @@ def load_config() -> Config:
     if sizing not in ("flat", "kelly", "martingale"):
         sizing = "flat"
 
-    ss_mode = (os.getenv("SS_MODE") or "fade").strip().lower()
-    if ss_mode not in ("fade", "trend", "both"):
-        ss_mode = "fade"
-
     # Unknown symbols are dropped rather than defaulted: silently trading BTC
     # because "bitcoin" was typed would be worse than trading nothing. An empty
     # result falls back to BTC so the bot always has one market.
@@ -351,36 +332,6 @@ def load_config() -> Config:
 
         # ── Streak Snapper ────────────────────────────────────────────────────
         ss_enabled=_env_bool("SS_ENABLED", True),
-        # "fade", not "both": measured over 3.734 windows with a pre-open quote,
-        # ss_trend loses 4.22% per trade (7.08% once windows that also carry a
-        # streak are excluded, t=-2.61). It bets on continuation, and 5-min
-        # windows revert. See docs/RUTA.md Fase 8; the strategy stays available.
-        ss_mode=ss_mode,
-
-        # Forma 1 — Fade
-        ss_fade_base_shares=_env_float("SS_FADE_BASE_SHARES", 5.0),
-        # 0.52, not 0.60. The signal wins 53.8% of the time, so its fair price
-        # is 0.538 — paying 0.60 is a 6.2-point loss bought on purpose. The five
-        # real ss_fade trades in the DB filled at 0.558 average.
-        ss_fade_limit_cap=_env_float("SS_FADE_LIMIT_CAP", 0.52),
-        ss_fade_streak_min=_env_int("SS_FADE_STREAK_MIN", 4),
-
-        # Forma 2 — Trend
-        ss_trend_base_shares=_env_float("SS_TREND_BASE_SHARES", 5.0),
-        ss_trend_limit_cap=_env_float("SS_TREND_LIMIT_CAP", 0.52),
-        # A 4h candle that closed $1 away from its open is not a trend. Without
-        # a floor, `close >= open` calls every candle — including a flat one,
-        # which the `>=` scores as UP.
-        #
-        # 0.8% measured over 10.000 windows (34,7 días, etiquetas de Gamma;
-        # `python -m bot.backtest --mode trend --min-strength X`). It is NOT an
-        # edge-maximising choice — there wasn't one to make. Win rate came out
-        # BELOW 50% at every threshold tested (47,3%–49,1%, z entre −1,1 y −1,9),
-        # so this signal has no measurable edge and the martingale is what
-        # decides the P&L. 0.8% is the smallest threshold whose worst case still
-        # fits the default $1.000 bankroll: max drawdown −$892 and largest single
-        # trade $983, versus −$36.509 and $40.163 with no threshold at all.
-        ss_trend_min_strength=_env_float("SS_TREND_MIN_STRENGTH", 0.008),
 
         # ── Fase B — Box Builder ──────────────────────────────────────────────
         # Both-sided maker: ≥ 6 c/pair when both legs fill. Off by default
@@ -406,8 +357,8 @@ def load_config() -> Config:
         # Quarter Kelly. Full Kelly on an edge measured at t=+1.32 would size an
         # unconfirmed hypothesis as if it were certain.
         ss_kelly_fraction=_env_float("SS_KELLY_FRACTION", 0.25),
-        # Martingale. 2.1, not 1.5: see min_recovering_factor() — at the 0.52
-        # trend cap a ×1.5 cycle stops recovering on the third attempt.
+        # Martingale. 2.1, not 1.5: see min_recovering_factor() — at 0.52 cap
+        # a ×1.5 cycle stops recovering on the third attempt.
         ss_martingale_mult_factor=_env_float("SS_MARTINGALE_MULT", 2.1),
 
         # ── Regime filters ────────────────────────────────────────────────────

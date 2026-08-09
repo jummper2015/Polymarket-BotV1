@@ -21,8 +21,8 @@
     ok:    color("--ss-ok", "#00c292"),
     warn:  color("--ss-warn", "#fec107"),
     err:   color("--ss-err", "#e46a76"),
-    fade:  color("--ss-fade", "#7b68ee"),
-    trend: color("--ss-trend", "#03a9f4"),
+    box:   color("--ss-box", "#7b68ee"),
+    cfd:   color("--ss-cfd", "#03a9f4"),
     muted: color("--ss-muted", "#7b8794"),
     border: color("--ss-border", "#e4e9f0"),
   };
@@ -66,8 +66,8 @@
     String(v == null ? "" : v).replace(/[&<>"']/g,
       (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  const STRAT_LABELS = { ss_fade: "Fade", ss_trend: "Trend" };
-  const STRAT_COLORS = { ss_fade: COLORS.fade, ss_trend: COLORS.trend };
+  const STRAT_LABELS = { box_builder: "Box Builder", coin_flip_dog: "Coin Flip Dog" };
+  const STRAT_COLORS = { box_builder: COLORS.box, coin_flip_dog: COLORS.cfd };
 
   /* Which market the live panel describes. The trader runs one thread per
    * symbol in SS_SYMBOLS, so prices, order book and window countdown belong to
@@ -256,66 +256,8 @@
   }
 
   function renderMartingale(s) {
-    const config = s.config || {};
-    const mart = s.martingale || { fade: {}, trend: {} };
-
-    [["fade", "ss_fade_base_shares"], ["trend", "ss_trend_base_shares"]]
-      .forEach(([key, baseField]) => {
-        const m = mart[key] || {};
-        const mult = m.multiplier || 1.0;
-
-        const multEl = $(key + "-mult");
-        if (multEl) {
-          multEl.textContent = "×" + mult.toFixed(2);
-          // ×5 on a 1.5 martingale is already 11× the base bet.
-          multEl.className = "ss-mart-val" + (mult >= 5 ? " hot" : "");
-        }
-        const streakEl = $(key + "-streak");
-        if (streakEl) streakEl.textContent = m.loss_streak || 0;
-        const betEl = $(key + "-next-bet");
-        if (betEl) betEl.textContent = ((config[baseField] || 5) * mult).toFixed(2) + " sh";
-      });
-
-    renderTrendCycle(mart.trend || {}, config);
-  }
-
-  // The trend side is locked for the 4h block a closed candle licensed, and
-  // stays locked past it while the martingale is still recovering — so the
-  // block countdown and the lock are two different things and both are shown.
-  function renderTrendCycle(trend, config) {
-    const FOUR_HOURS = 4 * 3600;
-
-    const sideEl = $("trend-cycle-side");
-    if (sideEl) {
-      sideEl.textContent = trend.cycle_side || "sin ciclo";
-      sideEl.className =
-        "ss-mart-val" + (trend.cycle_side ? " locked" : " muted");
-    }
-
-    const ttlEl = $("trend-cycle-ttl");
-    if (ttlEl) {
-      if (!trend.cycle_side || trend.cycle_anchor_ts == null) {
-        ttlEl.textContent = "—";
-      } else {
-        const left = trend.cycle_anchor_ts + 2 * FOUR_HOURS - Date.now() / 1000;
-        ttlEl.textContent =
-          left > 0 ? fmtDuration(left) : "agotado, ciclo prorrogado";
-      }
-    }
-
-    const strengthEl = $("trend-strength");
-    if (strengthEl) {
-      const s = trend.last_strength;
-      if (s == null) {
-        strengthEl.textContent = "—";
-      } else {
-        const min = config.ss_trend_min_strength;
-        const clears = min == null || Math.abs(s) >= min;
-        strengthEl.textContent =
-          (s * 100).toFixed(3) + "%" + (clears ? "" : " (sin tendencia)");
-        strengthEl.className = "ss-mart-val" + (clears ? "" : " muted");
-      }
-    }
+    // fade/trend eliminados — box_builder y coin_flip_dog no usan martingala.
+    // La sección se preserva vacía para no romper el ciclo de render.
   }
 
   function renderStatus(s) {
@@ -326,7 +268,7 @@
     set("status-msg", st.bot_message || "");
     set("status-slug", st.current_slug || "—");
     set("status-ttl", st.seconds_remaining != null ? fmtDuration(st.seconds_remaining) : "—");
-    set("status-mode", (s.config && s.config.ss_mode) || "—");
+    set("status-mode", "box_builder + cfd");
     set("status-btc", fmtSpot(st.spot_price));
 
     const dot = $("status-dot");

@@ -59,7 +59,7 @@ class Trade:
     pnl: Optional[float] = None
     order_id: Optional[str] = None
     note: str = ""
-    strategy: str = "ss_fade"  # "ss_fade" | "ss_trend"
+    strategy: str = "box_builder"  # "box_builder" | "coin_flip_dog"
     multiplier: float = 1.0    # martingale multiplier at entry
     limit_cap: float = 0.60    # max entry price
 
@@ -84,17 +84,7 @@ class BotState:
 
         # ── Streak Snapper config ─────────────────────────────────────────────
         self.ss_enabled: bool  = True
-        self.ss_mode: str      = "fade"   # "fade" | "trend" | "both"
-
-        # Forma 1 — Fade (anti-racha)
-        self.ss_fade_base_shares: float   = 5.0
-        self.ss_fade_limit_cap: float     = 0.52
-        self.ss_fade_streak_min: int      = 4
-
-        # Forma 2 — Trend (seguir tendencia 4h)
-        self.ss_trend_base_shares: float  = 5.0
-        self.ss_trend_limit_cap: float    = 0.52
-        self.ss_trend_min_strength: float = 0.008
+        # ss_mode, ss_fade_*, ss_trend_* eliminados — estrategias desactivadas.
 
         # Fase B — Coin-Flip Dog. Buys the cheap side (underdog) in the last
         # 30–90 s of a window when the book is near a coin flip (coa ≤ 0.20)
@@ -152,20 +142,10 @@ class BotState:
         # honest thing it can do before it places an order.
         self.observations: Dict[str, int] = {}
 
-        # Runtime martingale state (synced with DB)
-        self.ss_fade_martingale_mult: float  = 1.0
-        self.ss_fade_loss_streak: int        = 0
-        self.ss_trend_martingale_mult: float = 1.0
-        self.ss_trend_loss_streak: int       = 0
-
-        # Trend cycle: the side locked in and the 4h candle that chose it.
-        # Mirrors martingale_state in the DB so the dashboard can read it
-        # without a query on every poll.
-        self.ss_trend_cycle_side: Optional[str] = None
-        self.ss_trend_cycle_anchor_ts: Optional[int] = None
-        # Last measured move of the closed 4h candle, for the dashboard to show
-        # how far a flat market is from clearing the threshold.
-        self.ss_trend_last_strength: Optional[float] = None
+        # Runtime martingale state — generic (no strategy-specific buckets)
+        # Box Builder y Coin-Flip Dog no usan martingala; se preservan los
+        # campos genéricos por si una futura estrategia los necesita.
+        # ss_fade_martingale_mult / ss_trend_* eliminados.
 
         # --- bot status ---
         self.bot_status: str = "idle"
@@ -389,7 +369,7 @@ class BotState:
                     opened_at=time.time(),  # we don't need exact opened_at in memory
                     status=db_trade.get("status", "open"),
                     pnl=db_trade.get("pnl"),
-                    strategy=db_trade.get("strategy", "ss_fade"),
+                    strategy=db_trade.get("strategy", "coin_flip_dog"),
                     multiplier=db_trade.get("multiplier", 1.0),
                     limit_cap=db_trade.get("limit_cap", 0.60),
                     note=db_trade.get("note", ""),
@@ -498,13 +478,7 @@ class BotState:
                 "has_credentials": self.has_credentials,
                 # SS config
                 "ss_enabled": self.ss_enabled,
-                "ss_mode": self.ss_mode,
-                "ss_fade_base_shares": self.ss_fade_base_shares,
-                "ss_fade_limit_cap": self.ss_fade_limit_cap,
-                "ss_fade_streak_min": self.ss_fade_streak_min,
-                "ss_trend_base_shares": self.ss_trend_base_shares,
-                "ss_trend_limit_cap": self.ss_trend_limit_cap,
-                "ss_trend_min_strength": self.ss_trend_min_strength,
+                # ss_mode, ss_fade_*, ss_trend_* eliminados
                 # Coin-Flip Dog
                 "cfd_enabled":        self.cfd_enabled,
                 "cfd_base_bet":       self.cfd_base_bet,
@@ -536,15 +510,6 @@ class BotState:
                 "ss_max_entry_age": self.ss_max_entry_age,
                 "skips": dict(self.skips),
                 "observations": dict(self.observations),
-                # Runtime martingale
-                "ss_fade_martingale_mult": self.ss_fade_martingale_mult,
-                "ss_fade_loss_streak": self.ss_fade_loss_streak,
-                "ss_trend_martingale_mult": self.ss_trend_martingale_mult,
-                "ss_trend_loss_streak": self.ss_trend_loss_streak,
-                # Trend cycle
-                "ss_trend_cycle_side": self.ss_trend_cycle_side,
-                "ss_trend_cycle_anchor_ts": self.ss_trend_cycle_anchor_ts,
-                "ss_trend_last_strength": self.ss_trend_last_strength,
                 # General
                 "starting_bankroll": self.starting_bankroll,
                 "bot_status": self.bot_status,

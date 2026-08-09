@@ -6,21 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Python bot ("Streak Snapper v2") that trades Polymarket's **up/down 5-minute** prediction markets, plus a Flask dashboard. One trader thread per asset (`SS_SYMBOLS`, `btc`/`eth`/`sol`, default `btc` only).
 
-**Two active strategies** (Fase B architecture):
+**Estrategias activas** (Fase B):
 
 | Strategy | Mode | Edge | Status |
 |---|---|---|---|
-| `ss_fade` | Taker — entra al inicio de la ventana | Inter-ventana: espera 4+ velas seguidas para la siguiente | **Activa** — +3,74%/op medido (Fase 8, t=+1,32) |
 | `box_builder` | Maker — cotiza en ambos lados en la primera mitad | Colecta el spread: par redime a $1 sin riesgo direccional | **Activa** — BB_ENABLED=true cuando haya credenciales maker |
 | `coin_flip_dog` | Taker late — entra a T-30..T-90 | Intra-ventana: underdog ask 0,22–0,47, coa ≤ 0,20 | **Activa** — CFD_ENABLED=true para acumular datos |
 
-**Desactivadas** (fuera del registro, no aparecen en dashboard ni /settings):
-- `ss_trend` — medido −4,22%/operación (Fase 8, t=−2,61). Módulo preservado en `bot/strategies/ss_trend.py` como referencia.
-- `spread_harvest` — observación pura, nunca operó. Módulo preservado en `bot/strategies/spread_harvest.py`.
+**Desactivadas** (fuera del registro, módulos preservados como referencia):
+- `ss_fade` — medida +3,74%/op (Fase 8, t=+1,32). Módulo en `bot/strategies/ss_fade.py`.
+- `ss_trend` — medida −4,22%/operación (Fase 8, t=−2,61). Módulo en `bot/strategies/ss_trend.py`.
+- `spread_harvest` — observación pura, nunca operó. Módulo en `bot/strategies/spread_harvest.py`.
 
-Defaults: `SS_MODE=fade`, `SS_SIZING=flat`, `SS_FADE_LIMIT_CAP=0.52`.
+Defaults: `SS_SIZING=flat`, `BB_ENABLED=false`, `CFD_ENABLED=false`.
 
-⚠️ **`README.md` y `replit.md` están desactualizados.** Los archivos precisos son `docs/ARCHIVOS.md`, `docs/RUTA.md`, `docs/PLAN.md` y `.env.example`.
+⚠️ **`replit.md` está desactualizado.** Los archivos precisos son `README.md`, `docs/ARCHIVOS.md`, `docs/RUTA.md`, `docs/PLAN.md` y `.env.example`.
 
 ## Commands
 
@@ -28,7 +28,7 @@ Defaults: `SS_MODE=fade`, `SS_SIZING=flat`, `SS_FADE_LIMIT_CAP=0.52`.
 python run.py                                    # arranca trader + dashboard (paper por defecto)
 PORT=5055 python run.py                          # puerto alternativo
 
-python -m pytest tests/ -q                       # suite completa (494 tests, ~7s)
+python -m pytest tests/ -q                       # suite completa (493 tests, ~7s)
 python -m pytest tests/test_db.py -q             # un archivo
 python -m pytest tests/test_db.py::test_name -q  # un test
 

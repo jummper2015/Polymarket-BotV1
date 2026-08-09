@@ -338,21 +338,7 @@ def create_app() -> Flask:
                 "mode": snap["mode"],
                 **{name: snap[name] for name in RUNTIME_FIELDS if name in snap},
             },
-            "martingale": {
-                "fade": {
-                    "multiplier": snap["ss_fade_martingale_mult"],
-                    "loss_streak": snap["ss_fade_loss_streak"],
-                },
-                "trend": {
-                    "multiplier": snap["ss_trend_martingale_mult"],
-                    "loss_streak": snap["ss_trend_loss_streak"],
-                    # The locked side and the 4h candle that chose it. Null
-                    # between cycles, which the UI shows as "sin ciclo".
-                    "cycle_side": snap["ss_trend_cycle_side"],
-                    "cycle_anchor_ts": snap["ss_trend_cycle_anchor_ts"],
-                    "last_strength": snap["ss_trend_last_strength"],
-                },
-            },
+            "martingale": {},
             "status": {
                 "bot_status": snap["bot_status"],
                 "bot_message": snap["bot_message"],

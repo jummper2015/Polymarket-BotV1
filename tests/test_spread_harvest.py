@@ -221,7 +221,7 @@ class TestObservation:
         ) is True
 
     def test_it_never_wins_a_tie_break(self):
-        """Prioridad 0: no emite señales, así que no puede desplazar a fade."""
+        """Prioridad 0: no emite señales, así que no puede desplazar a estrategias activas."""
         from bot import strategies
 
-        assert sh.DESCRIPTOR.priority < strategies.get("ss_fade").priority
+        assert sh.DESCRIPTOR.priority < strategies.get("box_builder").priority

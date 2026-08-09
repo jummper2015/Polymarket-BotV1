@@ -132,22 +132,9 @@ def _warn_if_martingale_cannot_recover() -> None:
         return
 
     factor = STATE.ss_martingale_mult_factor
-    strategies = []
-    if STATE.ss_mode in ("fade", "both"):
-        strategies.append(("Fade", STATE.ss_fade_limit_cap))
-    if STATE.ss_mode in ("trend", "both"):
-        strategies.append(("Trend", STATE.ss_trend_limit_cap))
-
-    for label, cap in strategies:
-        needed = min_recovering_factor(cap)
-        if factor > needed:
-            continue
-        logger.warn(
-            f"[SS {label}] el multiplicador ×{factor:.2f} NO recupera al precio "
-            f"máximo {cap:.2f}: hace falta más de ×{needed:.2f}. Con este ajuste, "
-            f"seguir el ciclo hasta ganar aumenta la pérdida en vez de cerrarla.",
-            icon="⚠",
-        )
+    # Con fade/trend eliminados, la martingala solo aplica a estrategias futuras.
+    # Conservamos la función para que box_builder o coin_flip_dog puedan usarla.
+    _ = factor  # no hay cap configurada para validar por ahora
 
 
 def _check_port_available(host: str, port: int) -> str | None:
@@ -181,13 +168,6 @@ def main() -> None:
             has_credentials=cfg.has_credentials,
             starting_bankroll=cfg.starting_bankroll,
             ss_enabled=cfg.ss_enabled,
-            ss_mode=cfg.ss_mode,
-            ss_fade_base_shares=cfg.ss_fade_base_shares,
-            ss_fade_limit_cap=cfg.ss_fade_limit_cap,
-            ss_fade_streak_min=cfg.ss_fade_streak_min,
-            ss_trend_base_shares=cfg.ss_trend_base_shares,
-            ss_trend_limit_cap=cfg.ss_trend_limit_cap,
-            ss_trend_min_strength=cfg.ss_trend_min_strength,
             # Fase B — Box Builder
             bb_enabled=cfg.bb_enabled,
             bb_shares_per_leg=cfg.bb_shares_per_leg,
@@ -255,9 +235,7 @@ def main() -> None:
 
     logger.ok(
         f"Streak Snapper started — markets={','.join(cfg.ss_symbols).upper()} "
-        f"mode={STATE.ss_mode} "
-        f"fade_shares={STATE.ss_fade_base_shares} fade_cap={STATE.ss_fade_limit_cap} "
-        f"trend_shares={STATE.ss_trend_base_shares} trend_cap={STATE.ss_trend_limit_cap} "
+        f"estrategias=box_builder,coin_flip_dog "
         f"sizing={sizing_detail}",
         icon="🚀",
     )

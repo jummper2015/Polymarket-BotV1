@@ -220,10 +220,10 @@ class TestDescriptor:
             state = SimpleNamespace(**{field: val})
             assert DESCRIPTOR.enabled_for(state) is True
 
-    def test_priority_between_fade_and_box_builder(self):
+    def test_priority_between_box_builder_and_cfd(self):
         from bot.strategies import get as s_get
-        # Order: ss_fade (100) > box_builder (90) > coin_flip_dog (80)
-        assert s_get("ss_fade").priority > s_get("box_builder").priority > DESCRIPTOR.priority
+        # Order: box_builder (90) > coin_flip_dog (80)
+        assert s_get("box_builder").priority > DESCRIPTOR.priority
 
     def test_params_names(self):
         names = [p.name for p in DESCRIPTOR.params]

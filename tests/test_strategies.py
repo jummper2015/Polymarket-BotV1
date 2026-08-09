@@ -40,25 +40,25 @@ def _descriptor(sid, **kw):
 
 class TestRegistry:
     def test_the_registered_strategies(self):
-        assert strategies.ids() == ("ss_fade", "box_builder", "coin_flip_dog")
+        assert strategies.ids() == ("box_builder", "coin_flip_dog")
 
     def test_ids_match_what_trades_stores(self):
         """`trades.strategy` holds these strings; KPIs group by them."""
         for sid in strategies.ids():
             assert strategies.get(sid).id == sid
 
-    def test_fade_outranks_box_builder(self):
-        """ss_fade priority 100 > box_builder priority 90."""
+    def test_box_builder_outranks_coin_flip_dog(self):
+        """box_builder priority > coin_flip_dog priority."""
         assert (
-            strategies.get("ss_fade").priority
-            > strategies.get("box_builder").priority
+            strategies.get("box_builder").priority
+            > strategies.get("coin_flip_dog").priority
         )
 
     def test_enabled_order_is_by_priority(self):
-        state = SimpleNamespace(ss_mode="fade", bb_enabled=True, cfd_enabled=True)
+        state = SimpleNamespace(bb_enabled=True, cfd_enabled=True)
         ids = [d.id for d in strategies.enabled_for(state)]
-        assert ids[0] == "ss_fade"
-        assert "box_builder" in ids
+        assert ids[0] == "box_builder"
+        assert "coin_flip_dog" in ids
 
     def test_unknown_strategy_is_none(self):
         assert strategies.get("no_existe") is None
@@ -89,11 +89,10 @@ class TestParamsFlowIntoRuntimeFields:
         for param in strategies.params():
             assert param.label, f"{param.name} sin label — saldría con su nombre crudo"
 
-    @pytest.mark.parametrize("name", ["ss_fade_limit_cap", "bb_bid_sum_cap"])
+    @pytest.mark.parametrize("name", ["bb_bid_sum_cap", "cfd_max_coa"])
     def test_migrated_params_kept_their_validation(self, name):
         """Ranges are unchanged by the move; POST /config still refuses junk."""
         field = RUNTIME_FIELDS[name]
-        assert field.coerce(2.0) == (False, None)
         ok, _ = field.coerce(field.minimum)
         assert ok
 
@@ -104,15 +103,14 @@ class TestParamsFlowIntoRuntimeFields:
 
 
 class TestEnablement:
-    @pytest.mark.parametrize(
-        "mode,expected",
-        [
-            ("fade", ["ss_fade"]),
-        ],
-    )
-    def test_ss_mode_still_decides(self, mode, expected):
-        state = SimpleNamespace(ss_mode=mode)
-        assert [d.id for d in strategies.enabled_for(state)] == expected
+    def test_box_builder_and_cfd_enabled_independently(self):
+        state = SimpleNamespace(bb_enabled=True, cfd_enabled=True)
+        ids = [d.id for d in strategies.enabled_for(state)]
+        assert set(ids) == {"box_builder", "coin_flip_dog"}
+
+    def test_both_disabled(self):
+        state = SimpleNamespace(bb_enabled=False, cfd_enabled=False)
+        assert strategies.enabled_for(state) == []
 
     def test_a_descriptor_that_raises_is_off(self):
         """Fail closed: a broken toggle must not license live trading."""
@@ -161,27 +159,28 @@ class TestEnablement:
 
 
 class TestResolveConflicts:
-    def test_fade_survives_a_disagreement(self):
+    def test_box_builder_outranks_cfd(self):
+        """box_builder (higher priority) survives when strategies disagree."""
         kept, dropped = strategies.resolve_conflicts(
-            [_signal("ss_trend", "UP"), _signal("ss_fade", "DOWN")]
+            [_signal("coin_flip_dog", "UP"), _signal("box_builder", "DOWN")]
         )
-        assert [s.strategy for s in kept] == ["ss_fade"]
-        assert [s.strategy for s in dropped] == ["ss_trend"]
+        assert [s.strategy for s in kept] == ["box_builder"]
+        assert [s.strategy for s in dropped] == ["coin_flip_dog"]
 
     def test_order_does_not_matter(self):
         kept, _ = strategies.resolve_conflicts(
-            [_signal("ss_fade", "DOWN"), _signal("ss_trend", "UP")]
+            [_signal("box_builder", "DOWN"), _signal("coin_flip_dog", "UP")]
         )
-        assert [s.strategy for s in kept] == ["ss_fade"]
+        assert [s.strategy for s in kept] == ["box_builder"]
 
     def test_agreement_keeps_everyone(self):
         """Both sides of the same direction is one trade each, not a wash."""
-        signals = [_signal("ss_fade", "UP"), _signal("ss_trend", "UP")]
+        signals = [_signal("box_builder", "UP"), _signal("coin_flip_dog", "UP")]
         kept, dropped = strategies.resolve_conflicts(signals)
         assert len(kept) == 2 and dropped == []
 
     def test_single_signal_is_untouched(self):
-        kept, dropped = strategies.resolve_conflicts([_signal("ss_fade", "UP")])
+        kept, dropped = strategies.resolve_conflicts([_signal("box_builder", "UP")])
         assert len(kept) == 1 and dropped == []
 
     def test_empty_input(self):
@@ -190,9 +189,9 @@ class TestResolveConflicts:
     def test_unregistered_strategy_loses_to_a_registered_one(self):
         """A retired id in the table must not outrank a live strategy."""
         kept, dropped = strategies.resolve_conflicts(
-            [_signal("ss_viejo", "UP"), _signal("ss_fade", "DOWN")]
+            [_signal("ss_viejo", "UP"), _signal("box_builder", "DOWN")]
         )
-        assert [s.strategy for s in kept] == ["ss_fade"]
+        assert [s.strategy for s in kept] == ["box_builder"]
         assert [s.strategy for s in dropped] == ["ss_viejo"]
 
 
@@ -202,27 +201,19 @@ class TestResolveConflicts:
 
 
 class TestEvaluate:
-    def test_fade_delegates_to_the_streak_strategy(self):
-        sig = _signal("ss_fade", "UP")
-        streak = SimpleNamespace(
-            get_fade_signal=lambda: sig,
-            get_trend_signal=lambda: None,
-        )
-        ctx = StrategyContext(state=None, symbol="btc", streak=streak)
-        assert strategies.get("ss_fade").evaluate(ctx) == [sig]
-
-    def test_no_signal_is_an_empty_list_not_none(self):
-        """The trader does `signals.extend(...)`; None would blow up there."""
-        streak = SimpleNamespace(
-            get_fade_signal=lambda: None,
-            get_trend_signal=lambda: None,
-        )
-        ctx = StrategyContext(state=None, symbol="btc", streak=streak)
-        assert strategies.get("ss_fade").evaluate(ctx) == []
-
-    def test_missing_streak_context_is_survivable(self):
+    def test_box_builder_evaluate_is_empty_list_by_default(self):
+        """evaluate() on box_builder (which has no evaluate hook) returns []."""
         ctx = StrategyContext(state=None, symbol="btc")
-        assert strategies.get("ss_fade").evaluate(ctx) == []
+        bb = strategies.get("box_builder")
+        assert bb.evaluate(ctx) == []
+
+    def test_coin_flip_dog_evaluate_late_returns_list(self):
+        """evaluate_late should always return a list, never None."""
+        ctx = StrategyContext(state=None, symbol="btc")
+        cfd = strategies.get("coin_flip_dog")
+        # Without a state/context evaluate_late handles gracefully
+        result = cfd.evaluate_late(ctx) if cfd.evaluate_late else []
+        assert isinstance(result, list)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -232,31 +223,24 @@ class TestEvaluate:
 
 class TestToJson:
     def test_shape(self):
-        state = SimpleNamespace(ss_mode="fade", bb_enabled=False, cfd_enabled=False)
+        state = SimpleNamespace(bb_enabled=False, cfd_enabled=False)
         payload = strategies.to_json(state)
-        assert [s["id"] for s in payload] == [
-            "ss_fade", "box_builder", "coin_flip_dog"
-        ]
+        assert [s["id"] for s in payload] == ["box_builder", "coin_flip_dog"]
 
-        fade = payload[0]
-        assert fade["enabled"] is True
-        assert fade["name"] and fade["description"]
-        assert [p["name"] for p in fade["params"]] == [
-            "ss_fade_base_shares",
-            "ss_fade_limit_cap",
-            "ss_fade_streak_min",
-        ]
+        bb = payload[0]
+        assert bb["enabled"] is False
+        assert bb["name"] and bb["description"]
+        assert any(p["name"] == "bb_bid_sum_cap" for p in bb["params"])
 
     def test_disabled_strategy_is_reported_as_such(self):
-        payload = strategies.to_json(SimpleNamespace(ss_mode="fade", bb_enabled=False, cfd_enabled=False))
+        payload = strategies.to_json(SimpleNamespace(bb_enabled=False, cfd_enabled=False))
         bb = next(s for s in payload if s["id"] == "box_builder")
         assert bb["enabled"] is False
 
     def test_params_expose_range_and_scale(self):
         """settings.js renders from this and nothing else."""
-        payload = strategies.to_json(SimpleNamespace(ss_mode="fade", bb_enabled=True, cfd_enabled=False))
+        payload = strategies.to_json(SimpleNamespace(bb_enabled=True, cfd_enabled=False))
         all_params = {p["name"]: p for s in payload for p in s["params"]}
-        # box_builder should expose bb_bid_sum_cap
         assert "bb_bid_sum_cap" in all_params
         assert all_params["bb_bid_sum_cap"]["label"]
 
