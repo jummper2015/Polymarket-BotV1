@@ -194,6 +194,13 @@ def main() -> None:
             ta_entry_cutoff_sec=cfg.ta_entry_cutoff_sec,
             ta_bailout_sec=cfg.ta_bailout_sec,
             ta_cancel_all_sec=cfg.ta_cancel_all_sec,
+            ta_lpt_enabled=cfg.ta_lpt_enabled,
+            ta_lpt_cap=cfg.ta_lpt_cap,
+            ta_lpt_min_left=cfg.ta_lpt_min_left,
+            ta_lpt_max_left=cfg.ta_lpt_max_left,
+            ta_hedge_enabled=cfg.ta_hedge_enabled,
+            ta_hedge_drop_pct=cfg.ta_hedge_drop_pct,
+            ta_hedge_max_sum=cfg.ta_hedge_max_sum,
             # Fase B — Near-Resolution Capture
             nrc_enabled=cfg.nrc_enabled,
             nrc_min_ask=cfg.nrc_min_ask,

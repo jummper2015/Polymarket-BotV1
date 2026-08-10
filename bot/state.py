@@ -125,10 +125,19 @@ class BotState:
         self.ta_max_ask:          float = 0.55
         self.ta_complete_cap:     float = 0.82
         self.ta_shares_per_leg:   float = 5.0
-        self.ta_order_slice:      float = 5.0   # shares per taker order; ≤ ta_shares_per_leg
+        self.ta_order_slice:      float = 5.0
         self.ta_entry_cutoff_sec: float = 150.0
         self.ta_bailout_sec:      float = 60.0
         self.ta_cancel_all_sec:   float = 10.0
+        # Late Pair Taker: buy both sides when sum ≤ ta_lpt_cap (no directional signal needed)
+        self.ta_lpt_enabled:      bool  = True
+        self.ta_lpt_cap:          float = 0.90
+        self.ta_lpt_min_left:     float = 20.0
+        self.ta_lpt_max_left:     float = 148.0
+        # Hedge Recovery: buy opposite side when first leg has dropped to limit loss
+        self.ta_hedge_enabled:    bool  = True
+        self.ta_hedge_drop_pct:   float = 0.40
+        self.ta_hedge_max_sum:    float = 0.92
 
         # Fase B — Near-Resolution Capture. Buys the nearly-certain winner at
         # T-5..T-20s for 1–3¢ return. Off by default: tail risk (a single wrong
@@ -538,6 +547,13 @@ class BotState:
                 "ta_entry_cutoff_sec": self.ta_entry_cutoff_sec,
                 "ta_bailout_sec":      self.ta_bailout_sec,
                 "ta_cancel_all_sec":   self.ta_cancel_all_sec,
+                "ta_lpt_enabled":      self.ta_lpt_enabled,
+                "ta_lpt_cap":          self.ta_lpt_cap,
+                "ta_lpt_min_left":     self.ta_lpt_min_left,
+                "ta_lpt_max_left":     self.ta_lpt_max_left,
+                "ta_hedge_enabled":    self.ta_hedge_enabled,
+                "ta_hedge_drop_pct":   self.ta_hedge_drop_pct,
+                "ta_hedge_max_sum":    self.ta_hedge_max_sum,
                 # Near-Resolution Capture
                 "nrc_enabled":         self.nrc_enabled,
                 "nrc_min_ask":         self.nrc_min_ask,

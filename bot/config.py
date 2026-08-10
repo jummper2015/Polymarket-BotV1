@@ -263,6 +263,13 @@ class Config:
     ta_entry_cutoff_sec: float
     ta_bailout_sec:      float
     ta_cancel_all_sec:   float
+    ta_lpt_enabled:      bool
+    ta_lpt_cap:          float
+    ta_lpt_min_left:     float
+    ta_lpt_max_left:     float
+    ta_hedge_enabled:    bool
+    ta_hedge_drop_pct:   float
+    ta_hedge_max_sum:    float
 
     # Fase B — Near-Resolution Capture: buys nearly-certain winner at T-5..T-20s.
     # Off by default: tail risk (single reversal erases many sessions) requires
@@ -396,6 +403,15 @@ def load_config() -> Config:
         ta_entry_cutoff_sec=_env_float("TA_ENTRY_CUTOFF_SEC", 150.0),
         ta_bailout_sec=_env_float("TA_BAILOUT_SEC", 60.0),
         ta_cancel_all_sec=_env_float("TA_CANCEL_ALL_SEC", 10.0),
+        # Late Pair Taker: buy both sides when sum ≤ cap, no directional signal needed
+        ta_lpt_enabled=_env_bool("TA_LPT_ENABLED", True),
+        ta_lpt_cap=_env_float("TA_LPT_CAP", 0.90),
+        ta_lpt_min_left=_env_float("TA_LPT_MIN_LEFT", 20.0),
+        ta_lpt_max_left=_env_float("TA_LPT_MAX_LEFT", 148.0),
+        # Hedge Recovery: buy opposite side when first leg drops to limit loss
+        ta_hedge_enabled=_env_bool("TA_HEDGE_ENABLED", True),
+        ta_hedge_drop_pct=_env_float("TA_HEDGE_DROP_PCT", 0.40),
+        ta_hedge_max_sum=_env_float("TA_HEDGE_MAX_SUM", 0.92),
 
         # ── Fase B — Near-Resolution Capture ─────────────────────────────────
         # Off by default: asymmetric tail risk requires deliberate opt-in.

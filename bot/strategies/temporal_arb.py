@@ -19,11 +19,25 @@ This avoids walking the book on thin markets.  The phase stays "accumulating"
 until the full target is reached, then transitions to "half_open" as normal.
 The average entry price stored in first_px is the VWAP of all tranches.
 
+Late Pair Taker (LPT):
+If no entry fired before ta_entry_cutoff_sec but ask_up + ask_dn ≤
+ta_lpt_cap at any point from T-ta_lpt_max_left to T-ta_lpt_min_left, buy
+BOTH sides simultaneously as takers.  No directional signal needed — the
+locked profit is 1.0 − (ask_up + ask_dn) regardless of outcome.
+
+Hedge Recovery:
+When phase=half_open and the first leg's current ask has dropped more than
+ta_hedge_drop_pct below the entry price (i.e. the position is losing), AND
+the opposite side's ask is cheap enough that entry + hedge ≤ ta_hedge_max_sum,
+buy the opposite side to lock in whatever value remains and reduce the loss
+(or reach breakeven).  Only fires once per window.
+
 State machine (per window per symbol):
 
   IDLE
-    └─ fetch strike (Binance 5m open at window_ts), wait for spot data
-    └─ |itm_pct| >= ta_min_itm_pct AND secs >= ta_entry_cutoff_sec
+    ├─ secs ∈ [ta_lpt_min_left, ta_lpt_max_left] AND ask_up+ask_dn ≤ ta_lpt_cap
+    │    → BUY both sides taker → LPT_COMPLETE   (late pair, no directional signal)
+    └─ fetch strike, |itm_pct| >= ta_min_itm_pct AND secs >= ta_entry_cutoff_sec
        AND leader_ask ∈ [ta_min_ask, ta_max_ask]
          → BUY first tranche → ACCUMULATING  (or HALF_OPEN if slice ≥ target)
 
@@ -33,10 +47,13 @@ State machine (per window per symbol):
     └─ secs ≤ ta_bailout_sec              →  HALF_OPEN  (hold what we have)
 
   HALF_OPEN  (leader leg open, waiting for BTC to reverse + cheap second leg)
-    ├─ second_ask ≤ ta_complete_cap − first_px  →  BUY taker  →  COMPLETE
+    ├─ second_ask ≤ ta_complete_cap − first_px     →  BUY taker  →  COMPLETE
+    ├─ current_ask dropped ≥ ta_hedge_drop_pct AND
+    │  first_px + hedge_ask ≤ ta_hedge_max_sum     →  BUY hedge taker  →  HEDGED
     └─ secs ≤ ta_bailout_sec  →  CLOSED  (first leg resolves normally)
 
-  COMPLETE   hold passively; both legs resolve via normal resolution path
+  HEDGED     both sides open; one wins, minimising net loss / reaching breakeven
+  LPT_COMPLETE / COMPLETE  hold passively; legs resolve via normal resolution path
   CLOSED     nothing more to do this window
 
 Bailout: first leg stays in DB as an open trade and is settled at window end.
@@ -46,7 +63,7 @@ If the directional call was right → win; otherwise → loss.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from .base import StrategyContext, StrategyDescriptor
@@ -63,12 +80,23 @@ ENTRY_CUTOFF_SEC_DEFAULT = 150.0  # don't enter this late in the window
 BAILOUT_SEC_DEFAULT      = 60.0   # stop waiting for 2nd leg when ≤ this secs left
 CANCEL_ALL_SEC_DEFAULT   = 10.0   # T-10 (no resting orders; kept for symmetry)
 
+# Late Pair Taker defaults
+LPT_ENABLED_DEFAULT      = True
+LPT_CAP_DEFAULT          = 0.90   # buy both sides if ask_up + ask_dn ≤ this
+LPT_MIN_LEFT_DEFAULT     = 20.0   # earliest T-N seconds to fire LPT
+LPT_MAX_LEFT_DEFAULT     = 148.0  # latest T-N seconds (just below entry_cutoff)
+
+# Hedge Recovery defaults
+HEDGE_ENABLED_DEFAULT    = True
+HEDGE_DROP_PCT_DEFAULT   = 0.40   # fire if current_ask ≤ entry_px * (1 - drop_pct)
+HEDGE_MAX_SUM_DEFAULT    = 0.92   # max entry_px + hedge_ask to still be worthwhile
+
 # ── per-window state ──────────────────────────────────────────────────────────
 
 @dataclass
 class _TAWindow:
     window_ts:           Optional[int]   = None
-    phase:               str             = "idle"   # idle | accumulating | half_open | complete | closed
+    phase:               str             = "idle"   # idle | accumulating | half_open | hedged | complete | lpt_complete | closed
     first_side:          Optional[str]   = None     # "UP" | "DOWN"
     first_tok:           Optional[str]   = None
     first_px:            Optional[float] = None     # VWAP of all accumulated tranches
@@ -80,6 +108,8 @@ class _TAWindow:
     strike:              Optional[float] = None
     logged_bailout:      bool            = False
     logged_complete:     bool            = False
+    hedge_fired:         bool            = False    # Hedge Recovery already executed this window
+    lpt_fired:           bool            = False    # Late Pair Taker already executed this window
 
 
 _WINDOWS: dict[str, _TAWindow] = {}
@@ -151,6 +181,33 @@ def second_leg_worthwhile(first_px: float, second_ask: float, cap: float) -> boo
     return round(first_px + second_ask, 4) <= cap
 
 
+def lpt_pair_worthwhile(ask_up: float, ask_dn: float, cap: float) -> bool:
+    """True when buying both sides simultaneously locks a profit (sum ≤ cap < 1.0)."""
+    return round(ask_up + ask_dn, 4) <= cap
+
+
+def hedge_worthwhile(
+    entry_px: float,
+    current_ask: float,
+    hedge_ask: float,
+    drop_pct: float,
+    max_sum: float,
+) -> bool:
+    """True when a hedge buy on the opposite side is justified.
+
+    Two conditions must both hold:
+    1. The first leg has dropped enough to trigger: current_ask ≤ entry_px * (1 - drop_pct)
+       e.g. entry=0.45, drop_pct=0.40 → triggers when current_ask ≤ 0.27
+    2. entry_px + hedge_ask ≤ max_sum — so we're not overpaying for the hedge.
+       The net outcome: one side pays $1, total cost is entry_px + hedge_ask,
+       locked = 1.0 − (entry_px + hedge_ask). If max_sum < 1 this is always positive.
+    """
+    drop_threshold = round(entry_px * (1.0 - drop_pct), 4)
+    if current_ask is None or current_ask > drop_threshold:
+        return False
+    return round(entry_px + hedge_ask, 4) <= max_sum
+
+
 # ── observe (state machine tick) ─────────────────────────────────────────────
 
 def _observe(ctx: StrategyContext) -> None:
@@ -176,17 +233,23 @@ def _observe(ctx: StrategyContext) -> None:
     max_ask  = float(getattr(state, "ta_max_ask",          ENTRY_MAX_ASK_DEFAULT))
     cap      = float(getattr(state, "ta_complete_cap",     COMPLETE_CAP_DEFAULT))
     shares   = float(getattr(state, "ta_shares_per_leg",   SHARES_PER_LEG_DEFAULT))
-    # slice ≤ shares: each taker order is at most this many shares.
-    # When slice < shares the strategy buys in tranches every tick (every
-    # ~4 s) rather than hitting the full size at once, reducing market impact.
     raw_slice = float(getattr(state, "ta_order_slice", ORDER_SLICE_DEFAULT))
-    slice_sz  = max(1.0, min(raw_slice, shares))   # clamp: 1 ≤ slice ≤ target
+    slice_sz  = max(1.0, min(raw_slice, shares))
     q_cut    = float(getattr(state, "ta_entry_cutoff_sec", ENTRY_CUTOFF_SEC_DEFAULT))
     bail_sec = float(getattr(state, "ta_bailout_sec",      BAILOUT_SEC_DEFAULT))
     c_all    = float(getattr(state, "ta_cancel_all_sec",   CANCEL_ALL_SEC_DEFAULT))
+    # Late Pair Taker config
+    lpt_enabled  = bool(getattr(state, "ta_lpt_enabled",   LPT_ENABLED_DEFAULT))
+    lpt_cap      = float(getattr(state, "ta_lpt_cap",      LPT_CAP_DEFAULT))
+    lpt_min_left = float(getattr(state, "ta_lpt_min_left", LPT_MIN_LEFT_DEFAULT))
+    lpt_max_left = float(getattr(state, "ta_lpt_max_left", LPT_MAX_LEFT_DEFAULT))
+    # Hedge Recovery config
+    hedge_enabled  = bool(getattr(state, "ta_hedge_enabled",  HEDGE_ENABLED_DEFAULT))
+    hedge_drop_pct = float(getattr(state, "ta_hedge_drop_pct", HEDGE_DROP_PCT_DEFAULT))
+    hedge_max_sum  = float(getattr(state, "ta_hedge_max_sum",  HEDGE_MAX_SUM_DEFAULT))
 
     # ── terminal states ───────────────────────────────────────────────────────
-    if ta.phase in ("complete", "closed"):
+    if ta.phase in ("complete", "lpt_complete", "hedged", "closed"):
         return
 
     if secs <= c_all:
@@ -243,19 +306,19 @@ def _observe(ctx: StrategyContext) -> None:
             state.record_observation("TA_TRANCHE")
         return
 
-    # ── HALF_OPEN: check for a cheap second leg (pair completion) ─────────────
+    # ── HALF_OPEN: pair completion + Hedge Recovery ───────────────────────────
     # Checked before IDLE so a reversion on the same tick isn't missed.
     if ta.phase == "half_open":
         second_side = "DOWN" if ta.first_side == "UP" else "UP"
         second_ask  = ask_dn if second_side == "DOWN" else ask_up
 
+        # Path A: normal pair completion — second leg is cheap enough
         if (
             second_ask is not None
             and ta.first_px is not None
             and second_leg_worthwhile(ta.first_px, second_ask, cap)
         ):
             tok2 = tokens.up_token_id if second_side == "UP" else tokens.down_token_id
-            # Second leg uses the same total-shares target as the first.
             leg2_shares = ta.first_shares_filled if ta.first_shares_filled > 0 else shares
             oid2 = trader._place_taker_order(tok2, "BUY", second_ask, leg2_shares)
             if oid2:
@@ -276,6 +339,49 @@ def _observe(ctx: StrategyContext) -> None:
                 state.record_observation("TA_COMPLETE")
                 return
 
+        # Path B: Hedge Recovery — first leg is losing hard, buy opposite side
+        # to reduce net loss or reach breakeven.
+        # Example: bought DOWN@0.45, now DOWN@0.18 (lost 60% of value).
+        # Buying UP@0.40 → total cost=0.85 → at expiry one side pays $1.00,
+        # net P&L = 1.0 - 0.85 = +$0.15 instead of -$0.45 (or vice versa).
+        if hedge_enabled and not ta.hedge_fired and ta.first_px is not None:
+            # current ask of the FIRST leg (the losing side)
+            current_first_ask = ask_up if ta.first_side == "UP" else ask_dn
+            # ask of the HEDGE side (opposite)
+            hedge_ask = ask_dn if second_side == "DOWN" else ask_up
+
+            if (
+                current_first_ask is not None
+                and hedge_ask is not None
+                and hedge_worthwhile(
+                    ta.first_px, current_first_ask, hedge_ask,
+                    hedge_drop_pct, hedge_max_sum,
+                )
+            ):
+                tok_hedge = tokens.up_token_id if second_side == "UP" else tokens.down_token_id
+                hedge_shares = ta.first_shares_filled if ta.first_shares_filled > 0 else shares
+                oid_h = trader._place_taker_order(tok_hedge, "BUY", hedge_ask, hedge_shares)
+                if oid_h:
+                    net_cost  = round(ta.first_px + hedge_ask, 4)
+                    net_locked = round(1.0 - net_cost, 4)
+                    logger.ok(
+                        f"[TA] 🛡 HEDGE RECOVERY  "
+                        f"primera={ta.first_side}@{ta.first_px:.3f}"
+                        f" (ahora {current_first_ask:.3f})  "
+                        f"hedge={second_side}@{hedge_ask:.3f}  "
+                        f"costo_total={net_cost:.3f}  "
+                        f"breakeven_locked={net_locked:+.4f}/share",
+                        icon="🛡",
+                    )
+                    trader._record_box_fill(
+                        tokens, second_side, tok_hedge, hedge_ask, hedge_shares,
+                        strategy="temporal_arb",
+                    )
+                    ta.hedge_fired = True
+                    ta.phase = "hedged"
+                    state.record_observation("TA_HEDGE")
+                    return
+
         # Bailout: time ran out — first leg resolves normally (win or loss)
         if secs <= bail_sec and not ta.logged_bailout:
             ta.logged_bailout = True
@@ -291,7 +397,52 @@ def _observe(ctx: StrategyContext) -> None:
 
     # ── IDLE: look for the mispriced leader ───────────────────────────────────
     if ta.phase == "idle":
-        # Gate 1: too late to open a new pair
+        # Gate 0: Late Pair Taker (LPT) — checked FIRST, before the normal cutoff.
+        # When normal entry already closed (secs < q_cut) but the pair is cheap
+        # enough to lock a guaranteed profit, buy both sides simultaneously.
+        # No directional signal needed — the profit is 1.0 − (ask_up + ask_dn).
+        if (
+            lpt_enabled
+            and not ta.lpt_fired
+            and ask_up is not None
+            and ask_dn is not None
+            and lpt_min_left <= secs <= lpt_max_left
+            and lpt_pair_worthwhile(ask_up, ask_dn, lpt_cap)
+        ):
+            tok_up = tokens.up_token_id
+            tok_dn = tokens.down_token_id
+            oid_up = trader._place_taker_order(tok_up, "BUY", ask_up, shares)
+            oid_dn = trader._place_taker_order(tok_dn, "BUY", ask_dn, shares)
+            if oid_up and oid_dn:
+                pair_sum = round(ask_up + ask_dn, 4)
+                locked   = round(1.0 - pair_sum, 4)
+                logger.ok(
+                    f"[TA] ⚡ LATE PAIR  UP={ask_up:.3f} + DOWN={ask_dn:.3f}"
+                    f"  suma={pair_sum:.3f}  locked={locked:+.4f}/share"
+                    f"  left={secs:.0f}s",
+                    icon="⚡",
+                )
+                trader._record_box_fill(
+                    tokens, "UP", tok_up, ask_up, shares, strategy="temporal_arb"
+                )
+                trader._record_box_fill(
+                    tokens, "DOWN", tok_dn, ask_dn, shares, strategy="temporal_arb"
+                )
+                ta.lpt_fired = True
+                ta.phase = "lpt_complete"
+                state.record_observation("TA_LPT")
+                return
+            # If only one side filled, log and continue (don't enter half-covered)
+            logger.warn(
+                f"[TA] LPT orden parcial — UP={'ok' if oid_up else 'fail'} "
+                f"DOWN={'ok' if oid_dn else 'fail'} — skipping",
+                icon="⚠",
+            )
+            ta.lpt_fired = True   # don't retry; avoid partial fills piling up
+            ta.phase = "closed"
+            return
+
+        # Gate 1: too late for normal directional entry
         if secs < q_cut:
             ta.phase = "closed"
             state.record_skip("TA_SKIP_LATE")
@@ -302,25 +453,22 @@ def _observe(ctx: StrategyContext) -> None:
             return
 
         # Gate 2: fetch the window's opening price (the "strike") once per window.
-        # This is BTC's price at the exact moment the 5-min market opened, which is
-        # what Polymarket's oracle will compare against at resolution.
         if ta.strike is None:
             open_px = get_current_window_open(symbol, window_ts)
             if open_px is None:
-                return  # Binance not ready yet — retry next tick
+                return
             ta.strike = open_px
 
         # Gate 3: check BTC spot vs strike to identify the leader
         spot = getattr(state, "spot_price", None)
         if ask_up is None or ask_dn is None or spot is None:
-            return  # data not ready yet
+            return
 
         side, px, itm_pct = find_leader_side(
             spot, ta.strike, ask_up, ask_dn, min_itm, min_ask, max_ask
         )
 
         if side is None:
-            # Log why we're waiting (only when there IS momentum but ask is out of band)
             if abs(itm_pct) >= min_itm:
                 leader_ask = ask_up if itm_pct > 0 else ask_dn
                 if leader_ask is not None and leader_ask > max_ask:
@@ -335,7 +483,7 @@ def _observe(ctx: StrategyContext) -> None:
                         f"leader_ask={leader_ask:.3f} < {min_ask:.2f}",
                         icon="⏭",
                     )
-            return  # nothing to do this tick
+            return
 
         tok = tokens.up_token_id if side == "UP" else tokens.down_token_id
 
@@ -363,7 +511,6 @@ def _observe(ctx: StrategyContext) -> None:
         )
         state.record_observation("TA_FIRST_LEG")
 
-        # If slice already covers the full target, skip accumulation phase.
         if slice_sz >= shares:
             ta.phase = "half_open"
         else:
@@ -378,13 +525,16 @@ DESCRIPTOR = StrategyDescriptor(
     description=(
         "Compra el lado líder cuando BTC ya atravesó el strike pero Polymarket "
         "todavía lo cotiza barato (ask 0.40–0.55). Si BTC revierte, completa el "
-        "par para cubrir. Edge: lag del libro vs movimiento real de BTC."
+        "par para cubrir. Late Pair Taker: si la suma UP+DOWN ≤ ta_lpt_cap en "
+        "T-20..T-150s, compra ambos lados a la vez. Hedge Recovery: si la primera "
+        "pata cae ≥ ta_hedge_drop_pct, compra el lado contrario para limitar la pérdida."
     ),
     notes=(
         "Señal: |itm_pct| = |spot − strike| / strike. "
         "Solo entra el lado que BTC ya favoreció, en la banda de misprice. "
         "Segunda pata si reversion + par ≤ ta_complete_cap. "
-        "Bailout = primera pata se resuelve normalmente como trade win/loss."
+        "LPT: entrada tardía sin señal, si par garantiza profit. "
+        "Hedge: mitiga pérdida cuando primera pata bajó mucho."
     ),
     evaluate=lambda ctx: [],
     observe=_observe,
@@ -440,6 +590,42 @@ DESCRIPTOR = StrategyDescriptor(
             label="Bailout segunda pata (s restantes)",
             minimum=20.0, maximum=120.0, step=5.0,
             hint="Deja de esperar la segunda pata cuando quedan ≤ este tiempo (default 60s)",
+        ),
+        # ── Late Pair Taker ───────────────────────────────────────────────────
+        RuntimeField("ta_lpt_enabled", "bool", label="Late Pair Taker activo",
+                     hint="Compra ambos lados si suma ≤ ta_lpt_cap cuando ya pasó el cutoff normal"),
+        RuntimeField(
+            "ta_lpt_cap", "float",
+            label="LPT cap suma par",
+            minimum=0.70, maximum=0.98, step=0.01,
+            hint="Entra LPT si ask_UP + ask_DN ≤ este valor (default 0.90 → profit ≥ 10¢)",
+        ),
+        RuntimeField(
+            "ta_lpt_min_left", "float",
+            label="LPT min segundos restantes",
+            minimum=10.0, maximum=60.0, step=5.0,
+            hint="LPT no entra si quedan menos de este tiempo (default 20s)",
+        ),
+        RuntimeField(
+            "ta_lpt_max_left", "float",
+            label="LPT max segundos restantes",
+            minimum=60.0, maximum=200.0, step=10.0,
+            hint="LPT solo activa por debajo del cutoff normal (default 148s)",
+        ),
+        # ── Hedge Recovery ────────────────────────────────────────────────────
+        RuntimeField("ta_hedge_enabled", "bool", label="Hedge Recovery activo",
+                     hint="Compra lado contrario si la primera pata baja mucho para limitar pérdida"),
+        RuntimeField(
+            "ta_hedge_drop_pct", "float",
+            label="Hedge drop mínimo",
+            minimum=0.10, maximum=0.80, step=0.05,
+            hint="Activa hedge si el ask cayó ≥ este % del precio de entrada (default 0.40 = 40%)",
+        ),
+        RuntimeField(
+            "ta_hedge_max_sum", "float",
+            label="Hedge max suma",
+            minimum=0.60, maximum=0.99, step=0.01,
+            hint="Solo hace hedge si entrada + hedge_ask ≤ este valor (default 0.92)",
         ),
     ),
 )
