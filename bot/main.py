@@ -185,9 +185,12 @@ def main() -> None:
             bb_min_coa_hold=cfg.bb_min_coa_hold,
             # Fase B — Temporal Arbitrage
             ta_enabled=cfg.ta_enabled,
-            ta_cheap_threshold=cfg.ta_cheap_threshold,
+            ta_min_itm_pct=cfg.ta_min_itm_pct,
+            ta_min_ask=cfg.ta_min_ask,
+            ta_max_ask=cfg.ta_max_ask,
             ta_complete_cap=cfg.ta_complete_cap,
             ta_shares_per_leg=cfg.ta_shares_per_leg,
+            ta_order_slice=cfg.ta_order_slice,
             ta_entry_cutoff_sec=cfg.ta_entry_cutoff_sec,
             ta_bailout_sec=cfg.ta_bailout_sec,
             ta_cancel_all_sec=cfg.ta_cancel_all_sec,
