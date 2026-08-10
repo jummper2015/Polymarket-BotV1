@@ -120,9 +120,12 @@ class BotState:
         # price extreme, targeting pair cost ≤ 0.82¢. Off by default: directional
         # exposure between legs requires deliberate opt-in.
         self.ta_enabled:          bool  = False
-        self.ta_cheap_threshold:  float = 0.35
+        self.ta_min_itm_pct:      float = 0.05
+        self.ta_min_ask:          float = 0.40
+        self.ta_max_ask:          float = 0.55
         self.ta_complete_cap:     float = 0.82
         self.ta_shares_per_leg:   float = 5.0
+        self.ta_order_slice:      float = 5.0   # shares per taker order; ≤ ta_shares_per_leg
         self.ta_entry_cutoff_sec: float = 150.0
         self.ta_bailout_sec:      float = 60.0
         self.ta_cancel_all_sec:   float = 10.0
@@ -526,9 +529,12 @@ class BotState:
                 "bb_min_coa_hold":        self.bb_min_coa_hold,
                 # Temporal Arbitrage
                 "ta_enabled":          self.ta_enabled,
-                "ta_cheap_threshold":  self.ta_cheap_threshold,
+                "ta_min_itm_pct":      self.ta_min_itm_pct,
+                "ta_min_ask":          self.ta_min_ask,
+                "ta_max_ask":          self.ta_max_ask,
                 "ta_complete_cap":     self.ta_complete_cap,
                 "ta_shares_per_leg":   self.ta_shares_per_leg,
+                "ta_order_slice":      self.ta_order_slice,
                 "ta_entry_cutoff_sec": self.ta_entry_cutoff_sec,
                 "ta_bailout_sec":      self.ta_bailout_sec,
                 "ta_cancel_all_sec":   self.ta_cancel_all_sec,

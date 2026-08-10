@@ -273,3 +273,30 @@ def get_btc_spot_price(symbol: str = "btc") -> Optional[float]:
             if attempt < 1:
                 time.sleep(1.0)
     return None
+
+
+def get_current_window_open(symbol: str = "btc", window_ts: Optional[int] = None) -> Optional[float]:
+    """Open price of the 5-min candle that starts at `window_ts`.
+
+    This is the Temporal Arb "strike": the BTC price Polymarket's oracle will
+    compare the close against.  We fetch the current forming candle (limit=1),
+    whose open equals the price at the exact start of the window.
+
+    If `window_ts` is supplied we validate the candle's open-time matches;
+    if it doesn't (clock drift, Binance lag) we still return None so the
+    caller can retry next tick rather than trade on a stale strike.
+    """
+    raw = _get_klines("5m", limit=1, symbol=pair_for(symbol))
+    if raw is None or len(raw) < 1:
+        return None
+
+    k = raw[0]
+    candle_open_ts = int(k[0]) // 1000   # Binance returns ms
+
+    if window_ts is not None and candle_open_ts != window_ts:
+        # The candle Binance returned doesn't match the window we're in.
+        # This can happen in the first few seconds after a boundary — retry.
+        return None
+
+    open_px = float(k[1])
+    return open_px if open_px > 0 else None

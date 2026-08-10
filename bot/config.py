@@ -250,13 +250,16 @@ class Config:
     bb_reprice_behind:      float
     bb_min_coa_hold:        float
 
-    # Fase B — Temporal Arbitrage: buys each leg when price is at an extreme,
-    # targeting pairs at ≤ 0.82¢ instead of Box Builder's 0.94¢.
+    # Fase B — Temporal Arbitrage: buys the leading side when BTC has already
+    # moved through the strike but Polymarket's book hasn't repriced yet.
     # Off by default: directional exposure between legs requires deliberate opt-in.
     ta_enabled:          bool
-    ta_cheap_threshold:  float
+    ta_min_itm_pct:      float
+    ta_min_ask:          float
+    ta_max_ask:          float
     ta_complete_cap:     float
     ta_shares_per_leg:   float
+    ta_order_slice:      float
     ta_entry_cutoff_sec: float
     ta_bailout_sec:      float
     ta_cancel_all_sec:   float
@@ -384,9 +387,12 @@ def load_config() -> Config:
         # ── Fase B — Temporal Arbitrage ──────────────────────────────────────
         # Off by default: directional exposure between legs requires opt-in.
         ta_enabled=_env_bool("TA_ENABLED", False),
-        ta_cheap_threshold=_env_float("TA_CHEAP_THRESHOLD", 0.35),
+        ta_min_itm_pct=_env_float("TA_MIN_ITM_PCT", 0.05),
+        ta_min_ask=_env_float("TA_MIN_ASK", 0.40),
+        ta_max_ask=_env_float("TA_MAX_ASK", 0.55),
         ta_complete_cap=_env_float("TA_COMPLETE_CAP", 0.82),
         ta_shares_per_leg=_env_float("TA_SHARES_PER_LEG", 5.0),
+        ta_order_slice=_env_float("TA_ORDER_SLICE", 5.0),
         ta_entry_cutoff_sec=_env_float("TA_ENTRY_CUTOFF_SEC", 150.0),
         ta_bailout_sec=_env_float("TA_BAILOUT_SEC", 60.0),
         ta_cancel_all_sec=_env_float("TA_CANCEL_ALL_SEC", 10.0),

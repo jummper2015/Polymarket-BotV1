@@ -93,22 +93,40 @@ class StreakSnapperStrategy:
         # repeating it every five minutes for as long as the cycle runs.
         self._extension_logged_for: Optional[int] = None
 
-        # Load persisted martingale states from DB
+        # Load persisted martingale states from DB.
+        # ss_fade and ss_trend are the only strategies that use martingale;
+        # the attributes written here are dynamic (not in BotState.__init__)
+        # and are only consumed by this class's own methods.
         self._load_martingale_states()
 
     def _load_martingale_states(self) -> None:
-        """Sync in-memory martingale state from DB (survives restarts)."""
+        """Sync in-memory martingale state from DB (survives restarts).
+
+        Writes ss_fade_* and ss_trend_* attrs dynamically onto BotState.
+        These attrs are NOT declared in BotState.__init__ — they are
+        private to this class and not exposed on the dashboard.
+        """
         try:
-            fade_state = get_or_create_martingale_state("ss_fade", self.symbol)
+            fade_state  = get_or_create_martingale_state("ss_fade",  self.symbol)
             trend_state = get_or_create_martingale_state("ss_trend", self.symbol)
-            self.state.ss_fade_martingale_mult = fade_state.multiplier
-            self.state.ss_fade_loss_streak = fade_state.loss_streak
-            self.state.ss_trend_martingale_mult = trend_state.multiplier
-            self.state.ss_trend_loss_streak = trend_state.loss_streak
-            self.state.ss_trend_cycle_side = trend_state.cycle_side
-            self.state.ss_trend_cycle_anchor_ts = trend_state.cycle_anchor_ts
+            self.state.ss_fade_martingale_mult    = fade_state.multiplier
+            self.state.ss_fade_loss_streak        = fade_state.loss_streak
+            self.state.ss_trend_martingale_mult   = trend_state.multiplier
+            self.state.ss_trend_loss_streak       = trend_state.loss_streak
+            self.state.ss_trend_cycle_side        = trend_state.cycle_side
+            self.state.ss_trend_cycle_anchor_ts   = trend_state.cycle_anchor_ts
         except Exception as exc:
-            logger.warn(f"[SS] could not load martingale states from DB: {exc} — using defaults")
+            logger.warn(
+                f"[SS] no se pudo cargar estado de martingala de la DB: {exc} "
+                f"— usando valores por defecto"
+            )
+            # Safe defaults so the rest of this class never sees missing attrs.
+            self.state.ss_fade_martingale_mult    = 1.0
+            self.state.ss_fade_loss_streak        = 0
+            self.state.ss_trend_martingale_mult   = 1.0
+            self.state.ss_trend_loss_streak       = 0
+            self.state.ss_trend_cycle_side        = None
+            self.state.ss_trend_cycle_anchor_ts   = None
 
     # ── Sizing ────────────────────────────────────────────────────────────────
 
@@ -336,15 +354,26 @@ class StreakSnapperStrategy:
         self._open_trend_cycle(sig.direction, sig.pending_cycle_anchor_ts)
 
     # ── Martingale hooks ──────────────────────────────────────────────────────
+    # ss_fade and ss_trend are the only strategies that carry martingale state.
+    # Box Builder, Coin-Flip Dog, Temporal Arb and Near-Resolution Capture use
+    # flat sizing: calling these hooks for them is a no-op except for the
+    # unnecessary DB call, so we guard the live state writes with an explicit
+    # check.  The DB helper still runs (no harm in a reset on an untracked
+    # strategy — it creates a row with multiplier=1 and loss_streak=0).
+
+    _FADE_TREND = frozenset({"ss_fade", "ss_trend"})
 
     def on_win(self, strategy: str) -> None:
         """Reset martingale multiplier to 1.0 after a winning trade.
 
-        For ss_trend this also releases the locked side: with nothing left to
-        recover the cycle is over.  If the 4h block hasn't expired yet the next
-        window simply re-opens it on the same side at ×1.0, so a mid-block win
-        doesn't interrupt the trend.
+        Only ss_fade and ss_trend carry martingale state.  All other active
+        strategies (box_builder, coin_flip_dog, temporal_arb, near_res) use
+        flat sizing — calling this for them is a no-op beyond the log line.
         """
+        if strategy not in self._FADE_TREND:
+            # Non-martingale strategy: nothing to update, no log noise.
+            return
+
         try:
             reset_martingale_state(strategy, self.symbol)
         except Exception as exc:
@@ -366,7 +395,14 @@ class StreakSnapperStrategy:
             )
 
     def on_loss(self, strategy: str) -> None:
-        """Multiply the martingale by the configured factor after a loss."""
+        """Multiply the martingale by the configured factor after a loss.
+
+        Only ss_fade and ss_trend carry martingale state; all other strategies
+        use flat sizing and are silently ignored here.
+        """
+        if strategy not in self._FADE_TREND:
+            return
+
         factor = self.state.ss_martingale_mult_factor
         try:
             advance_martingale_state(strategy, factor, self.symbol)

@@ -12,13 +12,15 @@ A Python bot ("Streak Snapper v2") that trades Polymarket's **up/down 5-minute**
 |---|---|---|---|
 | `box_builder` | Maker — cotiza en ambos lados en la primera mitad | Colecta el spread: par redime a $1 sin riesgo direccional | **Activa** — BB_ENABLED=true cuando haya credenciales maker |
 | `coin_flip_dog` | Taker late — entra a T-30..T-90 | Intra-ventana: underdog ask 0,22–0,47, coa ≤ 0,20 | **Activa** — CFD_ENABLED=true para acumular datos |
+| `temporal_arb` | Taker observe — compra el líder cuando BTC cruzó el strike pero el libro no repriceó | itm_pct ≥ 0,05 %; ask líder 0,40–0,55; segunda pata si par ≤ 0,82; compra en tranches de `ta_order_slice` shares para reducir impacto | **Activa** — TA_ENABLED=true |
+| `near_res` | Taker late — entra a T-5..T-20 s en el casi-ganador seguro | ask ∈ [0,97, 0,995]; recauda 1–3 ¢/share al settlement | **Activa** — NRC_ENABLED=true; riesgo de cola alto |
 
 **Desactivadas** (fuera del registro, módulos preservados como referencia):
 - `ss_fade` — medida +3,74%/op (Fase 8, t=+1,32). Módulo en `bot/strategies/ss_fade.py`.
 - `ss_trend` — medida −4,22%/operación (Fase 8, t=−2,61). Módulo en `bot/strategies/ss_trend.py`.
 - `spread_harvest` — observación pura, nunca operó. Módulo en `bot/strategies/spread_harvest.py`.
 
-Defaults: `SS_SIZING=flat`, `BB_ENABLED=false`, `CFD_ENABLED=false`.
+Defaults: `SS_SIZING=flat`, `BB_ENABLED=false`, `CFD_ENABLED=false`, `TA_ENABLED=false`, `NRC_ENABLED=false`.
 
 ⚠️ **`replit.md` está desactualizado.** Los archivos precisos son `README.md`, `docs/ARCHIVOS.md`, `docs/RUTA.md`, `docs/PLAN.md` y `.env.example`.
 
