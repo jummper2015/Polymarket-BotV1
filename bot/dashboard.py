@@ -29,7 +29,7 @@ from .trade_queries import (
 )
 
 
-_PRICE_FETCH_INTERVAL = 10  # seconds between CoinGecko polls
+_PRICE_FETCH_INTERVAL = 10  # seconds between spot price polls
 
 # Column order for the CSV export. Fixed rather than derived from to_dict() so
 # adding a DB field doesn't silently reshuffle everyone's saved spreadsheets.
@@ -43,15 +43,17 @@ CSV_COLUMNS = [
 
 
 def _prices_loop() -> None:
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
+    # Use Binance as the spot price source so that spot_price and the
+    # Temporal Arb strike (which also comes from Binance candle data) are
+    # on the same exchange reference.  CoinGecko aggregates across exchanges
+    # and quotes ~$50-60 below Binance, which made itm_pct always negative
+    # and caused Temporal Arb to pick DOWN on every window.
+    from .binance_api import get_btc_spot_price
     while True:
         try:
-            r = _requests.get(url, timeout=8)
-            if r.ok:
-                data = r.json()
-                if "bitcoin" in data:
-                    price = float(data["bitcoin"]["usd"])
-                    STATE.update_spot_price(price)
+            price = get_btc_spot_price("btc")
+            if price:
+                STATE.update_spot_price(price)
         except Exception:
             pass
         time.sleep(_PRICE_FETCH_INTERVAL)

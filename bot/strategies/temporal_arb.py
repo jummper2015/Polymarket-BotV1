@@ -108,6 +108,7 @@ class _TAWindow:
     strike:              Optional[float] = None
     logged_bailout:      bool            = False
     logged_complete:     bool            = False
+    logged_flat:         bool            = False    # "mercado plano" already logged this window
     hedge_fired:         bool            = False    # Hedge Recovery already executed this window
     lpt_fired:           bool            = False    # Late Pair Taker already executed this window
 
@@ -446,10 +447,17 @@ def _observe(ctx: StrategyContext) -> None:
         if secs < q_cut:
             ta.phase = "closed"
             state.record_skip("TA_SKIP_LATE")
-            logger.info(
-                f"[TA] SKIP_LATE — ventana ya en curso ({300 - secs:.0f}s transcurridos)",
-                icon="⏭",
-            )
+            # Distinguish two cases: either the bot started into an already-running
+            # window (strike never fetched), or the window ran normally but BTC
+            # never crossed the min-itm threshold before the cutoff.
+            if ta.strike is None:
+                reason = f"ventana ya en curso al arrancar ({300 - secs:.0f}s transcurridos)"
+            else:
+                reason = (
+                    f"sin señal antes del cutoff ({300 - secs:.0f}s transcurridos)"
+                    f"  strike={ta.strike:,.2f}"
+                )
+            logger.info(f"[TA] SKIP_LATE — {reason}", icon="⏭")
             return
 
         # Gate 2: fetch the window's opening price (the "strike") once per window.
@@ -481,6 +489,18 @@ def _observe(ctx: StrategyContext) -> None:
                     logger.info(
                         f"[TA] SKIP_ASK_LOW  itm={itm_pct:+.3f}%  "
                         f"leader_ask={leader_ask:.3f} < {min_ask:.2f}",
+                        icon="⏭",
+                    )
+            else:
+                # BTC has not moved far enough from the strike — log once per window
+                # so the operator can confirm TA is alive even in flat markets.
+                if not ta.logged_flat:
+                    ta.logged_flat = True
+                    pair_sum = round((ask_up or 0) + (ask_dn or 0), 3)
+                    logger.info(
+                        f"[TA] mercado plano  itm={itm_pct:+.4f}% < {min_itm:.2f}%  "
+                        f"strike={ta.strike:,.2f}  spot={spot:,.2f}  "
+                        f"sum={pair_sum:.3f}  left={secs:.0f}s",
                         icon="⏭",
                     )
             return

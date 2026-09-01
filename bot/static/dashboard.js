@@ -313,7 +313,12 @@
     set("status-msg", st.bot_message || "");
     set("status-slug", st.current_slug || "—");
     set("status-ttl", st.seconds_remaining != null ? fmtDuration(st.seconds_remaining) : "—");
-    set("status-mode", "box_builder + cfd");
+    // Build active-strategy label from the live registry instead of a hardcoded string.
+    const activeStrats = (s.strategies || [])
+      .filter(d => d.enabled)
+      .map(d => d.id)
+      .join(" + ");
+    set("status-mode", activeStrats || "ninguna");
     set("status-btc", fmtSpot(st.spot_price));
 
     const dot = $("status-dot");

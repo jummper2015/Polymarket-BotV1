@@ -261,9 +261,14 @@ def main() -> None:
     else:
         sizing_detail = "flat"
 
+    from . import strategies as _strats
+    active_strat_ids = ",".join(
+        d.id for d in _strats.all_descriptors()
+        if d.is_enabled(STATE)
+    )
     logger.ok(
         f"Streak Snapper started — markets={','.join(cfg.ss_symbols).upper()} "
-        f"estrategias=box_builder,coin_flip_dog "
+        f"estrategias={active_strat_ids or 'ninguna'} "
         f"sizing={sizing_detail}",
         icon="🚀",
     )

@@ -40,3 +40,6 @@ data/price_calibration.json
 
 # Backtest output (regenerable: python -m bot.backtest)
 data/*.csv
+
+# Documentación externa y notas de revisión
+revisar*.md
