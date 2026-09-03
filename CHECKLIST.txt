@@ -1,0 +1,213 @@
+████████████████████████████████████████████████████████████████████████████████
+█                                                                              █
+█   POLYMARKET BOT - CHECKLIST DE DESPLIEGUE VPS                              █
+█                                                                              █
+████████████████████████████████████████████████████████████████████████████████
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ INFORMACIÓN DEL VPS                                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+IP del VPS:        _____________________________________________________
+Dominio:           _____________________________________________________
+Usuario SSH:       polymarket
+Password bot:      _____________________________________________________
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FASE 1: PREPARACIÓN DEL VPS (5 min)                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+[ ] Conectar como root: ssh root@IP_VPS
+[ ] Actualizar sistema: apt update && apt upgrade -y
+[ ] Instalar dependencias:
+    apt install -y python3 python3-pip python3-venv git nginx certbot python3-certbot-nginx
+[ ] Crear usuario: adduser --disabled-password --gecos "" polymarket
+[ ] Cambiar a usuario: su - polymarket
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FASE 2: INSTALACIÓN DEL BOT (3 min)                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+[ ] Clonar repositorio:
+    cd ~
+    git clone https://github.com/TU_USUARIO/Polymarket-BotV1.git
+    cd Polymarket-BotV1
+[ ] Ejecutar instalación: bash scripts/vps_setup.sh
+[ ] Esperar a que termine (instalará Python venv y dependencias)
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FASE 3: CONFIGURACIÓN (2 min)                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+[ ] Editar .env: nano .env
+[ ] Cambiar DASHBOARD_PASSWORD=TuPasswordSeguro
+[ ] Verificar DASHBOARD_SECRET_KEY (ya debe estar generado)
+[ ] Guardar: Ctrl+O, Enter, Ctrl+X
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FASE 4: SERVICIO SYSTEMD (2 min)                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+[ ] Salir del usuario polymarket: exit
+[ ] Crear servicio (como root):
+    sudo bash /home/polymarket/Polymarket-BotV1/scripts/create_systemd_service.sh
+[ ] Arrancar bot: sudo systemctl start polymarket-bot
+[ ] Verificar estado: sudo systemctl status polymarket-bot
+    (Debe decir "active (running)" en verde)
+[ ] Ver logs: tail -f /home/polymarket/Polymarket-BotV1/logs/bot.log
+    (Ctrl+C para salir)
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FASE 5: NGINX + SSL (5 min)                                                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+[ ] Verificar que el dominio apunta al VPS: ping tudominio.com
+[ ] Configurar Nginx (como root):
+    sudo bash /home/polymarket/Polymarket-BotV1/scripts/setup_nginx.sh tudominio.com
+[ ] Seguir instrucciones del script para SSL (certbot)
+[ ] Ingresar email cuando lo pida: _______________________________________
+[ ] Esperar a que obtenga certificado SSL
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FASE 6: VALIDACIÓN (2 min)                                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+[ ] Cambiar a usuario polymarket: su - polymarket
+[ ] Ir al directorio: cd ~/Polymarket-BotV1
+[ ] Ejecutar validación: bash scripts/validate_deployment.sh
+[ ] Todos los checks deben estar en ✅ verde
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FASE 7: VERIFICACIÓN FINAL                                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+[ ] Acceder al dashboard: https://tudominio.com
+[ ] Login con el password configurado en .env
+[ ] Verificar que aparece el dashboard con métricas
+[ ] Verificar que aparecen trades (puede tardar hasta 5 min)
+[ ] Ver logs en tiempo real: tail -f logs/bot.log
+[ ] Verificar que no hay errores en rojo
+
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ CONFIGURACIÓN SSH REMOTA (OPCIONAL)                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+[ ] En tu PC local, instalar VS Code extensión "Remote - SSH"
+[ ] Conectar: Ctrl+Shift+P → "Remote-SSH: Connect to Host"
+[ ] Ingresar: polymarket@IP_VPS
+[ ] Abrir carpeta: /home/polymarket/Polymarket-BotV1
+[ ] Verificar que puedes editar archivos
+
+
+████████████████████████████████████████████████████████████████████████████████
+█                                                                              █
+█   COMANDOS ÚTILES - GUARDAR ESTA SECCIÓN                                    █
+█                                                                              █
+████████████████████████████████████████████████████████████████████████████████
+
+┌─ CONTROL DEL BOT ────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Arrancar:    sudo systemctl start polymarket-bot                           │
+│  Detener:     sudo systemctl stop polymarket-bot                            │
+│  Reiniciar:   sudo systemctl restart polymarket-bot                         │
+│  Estado:      sudo systemctl status polymarket-bot                          │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ VER LOGS ───────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Tiempo real:     tail -f ~/Polymarket-BotV1/logs/bot.log                   │
+│  Últimas 50:      tail -50 ~/Polymarket-BotV1/logs/bot.log                  │
+│  Systemd:         journalctl -u polymarket-bot -f                           │
+│  Última hora:     journalctl -u polymarket-bot --since "1 hour ago"         │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ EDITAR CONFIGURACIÓN ───────────────────────────────────────────────────────┐
+│                                                                              │
+│  1. nano ~/Polymarket-BotV1/.env                                            │
+│  2. Hacer cambios                                                           │
+│  3. Ctrl+O, Enter, Ctrl+X                                                   │
+│  4. sudo systemctl restart polymarket-bot                                   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ BASE DE DATOS ──────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Entrar:    sqlite3 ~/Polymarket-BotV1/data/streak_snapper.db              │
+│  Trades:    SELECT COUNT(*) FROM trades;                                    │
+│  P&L:       SELECT SUM(pnl) FROM trades WHERE won IS NOT NULL;              │
+│  Reciente:  SELECT * FROM trades ORDER BY id DESC LIMIT 5;                  │
+│  Salir:     .exit                                                           │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ ACTUALIZAR CÓDIGO ──────────────────────────────────────────────────────────┐
+│                                                                              │
+│  1. cd ~/Polymarket-BotV1                                                   │
+│  2. sudo systemctl stop polymarket-bot                                      │
+│  3. cp .env .env.backup                                                     │
+│  4. git pull origin main                                                    │
+│  5. source venv/bin/activate                                                │
+│  6. pip install -r requirements.txt                                         │
+│  7. sudo systemctl start polymarket-bot                                     │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ TROUBLESHOOTING ────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Diagnóstico completo:                                                      │
+│    cd ~/Polymarket-BotV1                                                    │
+│    bash scripts/validate_deployment.sh                                      │
+│                                                                              │
+│  Ver error específico:                                                      │
+│    journalctl -u polymarket-bot -n 50                                       │
+│                                                                              │
+│  Verificar puerto:                                                          │
+│    sudo netstat -tulpn | grep 5000                                          │
+│                                                                              │
+│  Logs de Nginx:                                                             │
+│    sudo tail -f /var/log/nginx/polymarket_error.log                        │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+
+████████████████████████████████████████████████████████████████████████████████
+█                                                                              █
+█   INFORMACIÓN DE MONITOREO                                                  █
+█                                                                              █
+████████████████████████████████████████████████████████████████████████████████
+
+Dashboard web:     https://tudominio.com
+Health check:      https://tudominio.com/healthz
+Logs en vivo:      ssh polymarket@IP_VPS → tail -f logs/bot.log
+
+
+████████████████████████████████████████████████████████████████████████████████
+█                                                                              █
+█   SIGUIENTE: DEJAR CORRER 2-4 SEMANAS EN PAPER                              █
+█                                                                              █
+█   Objetivo: 200+ trades para validar estrategias                            █
+█   Monitoreo: Dashboard diariamente                                          █
+█   Revisión: Win rate, P&L, estabilidad                                      █
+█                                                                              █
+████████████████████████████████████████████████████████████████████████████████
+
+
+DOCUMENTACIÓN COMPLETA:
+• START_HERE.md                      - Empieza por aquí
+• DEPLOY_QUICK.md                    - Guía rápida de 5 pasos
+• docs/DEPLOY_VPS_HOSTINGER.md       - Guía detallada completa
+• docs/REMOTE_SSH_GUIDE.md           - Trabajo remoto diario
+• DEPLOYMENT_SUMMARY.md              - Resumen ejecutivo
+
+Tiempo total estimado: 15-20 minutos
+Fecha de despliegue: _______________

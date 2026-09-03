@@ -140,6 +140,53 @@ Disponible en `http://localhost:5000`.
 
 ---
 
+## 🚀 Despliegue en VPS
+
+### Guía rápida (10 minutos)
+
+El bot incluye scripts automatizados para desplegarlo en un VPS (Hostinger, DigitalOcean, etc.) con systemd + Nginx + SSL.
+
+**📖 Lee primero:** [`START_HERE.md`](START_HERE.md)
+
+**🎯 Guía rápida:** [`DEPLOY_QUICK.md`](DEPLOY_QUICK.md)
+
+**📋 Checklist imprimible:** [`CHECKLIST.txt`](CHECKLIST.txt)
+
+**📚 Guía detallada:** [`docs/DEPLOY_VPS_HOSTINGER.md`](docs/DEPLOY_VPS_HOSTINGER.md)
+
+**🔌 Trabajo remoto:** [`docs/REMOTE_SSH_GUIDE.md`](docs/REMOTE_SSH_GUIDE.md)
+
+### Scripts incluidos
+
+```bash
+# Instalación automática
+bash scripts/vps_setup.sh
+
+# Crear servicio systemd (como root)
+sudo bash scripts/create_systemd_service.sh
+
+# Configurar Nginx + SSL (como root)
+sudo bash scripts/setup_nginx.sh tudominio.com
+
+# Validar despliegue
+bash scripts/validate_deployment.sh
+```
+
+### Comandos post-despliegue
+
+```bash
+# Control del bot
+sudo systemctl start|stop|restart|status polymarket-bot
+
+# Ver logs
+tail -f ~/Polymarket-BotV1/logs/bot.log
+
+# Acceder al dashboard
+https://tudominio.com
+```
+
+---
+
 ## Pasar a modo real
 
 1. Crear cuenta en [Polymarket](https://polymarket.com) y depositar USDC en Polygon.

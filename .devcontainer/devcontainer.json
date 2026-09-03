@@ -1,0 +1,11 @@
+{
+  "name": "Polymarket Bot",
+  "forwardPorts": [5000],
+  "portsAttributes": {
+    "5000": {
+      "label": "Dashboard",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    }
+  }
+}
