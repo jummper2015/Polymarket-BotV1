@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}ME$IRVE — Métricas{% endblock %}
+
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mt-2 mb-3">
+  <h1><i class="bi bi-graph-up"></i> Métricas Detalladas</h1>
+  <a href="/" class="btn btn-outline-secondary">
+    <i class="bi bi-house"></i> Volver al Dashboard
+  </a>
+</div>
+
+{# ── Resumen de KPIs Expandido ── #}
+<div class="row g-3 mt-1">
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">P&amp;L Total</span>
+      <span id="kpi-pnl" class="ss-kpi-value">—</span>
+      <span id="kpi-roi" class="ss-kpi-sub">ROI —</span>
+    </div>
+  </div>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Win Rate</span>
+      <span id="kpi-winrate" class="ss-kpi-value">—</span>
+      <span id="kpi-wl" class="ss-kpi-sub">—</span>
+    </div>
+  </div>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Avg Win</span>
+      <span id="kpi-avg-win" class="ss-kpi-value">—</span>
+      <span class="ss-kpi-sub">Promedio +</span>
+    </div>
+  </div>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Avg Loss</span>
+      <span id="kpi-avg-loss" class="ss-kpi-value">—</span>
+      <span class="ss-kpi-sub">Promedio -</span>
+    </div>
+  </div>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Profit Factor</span>
+      <span id="kpi-profit-factor" class="ss-kpi-value">—</span>
+      <span class="ss-kpi-sub">Ratio</span>
+    </div>
+  </div>
+  <div class="col-xl-2 col-md-4 col-6">
+    <div class="ss-kpi notika-shadow h-100">
+      <span class="ss-kpi-label">Sharpe Ratio</span>
+      <span id="kpi-sharpe" class="ss-kpi-value">—</span>
+      <span class="ss-kpi-sub">Riesgo ajustado</span>
+    </div>
+  </div>
+</div>
+
+{# ── Charts de performance ── #}
+<div class="row g-3 mt-1">
+  <div class="col-lg-8">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-graph-up"></i> Curva de Capital</h2>
+        <div class="btn-group btn-group-sm" role="group">
+          <button type="button" class="btn btn-outline-secondary active" data-equity-mode="global">Global</button>
+          <button type="button" class="btn btn-outline-secondary" data-equity-mode="strategy">Por estrategia</button>
+        </div>
+      </div>
+      <div class="ss-chart-box"><canvas id="equity-chart"></canvas></div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-pie-chart"></i> P&L por Estrategia</h2></div>
+      <div class="ss-chart-box"><canvas id="strategy-pie"></canvas></div>
+    </div>
+  </div>
+</div>
+
+{# ── Métricas por Estrategia ── #}
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="ss-card notika-shadow">
+      <div class="ss-card-head"><h2><i class="bi bi-list-check"></i> Rendimiento por Estrategia</h2></div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover" id="strategy-metrics">
+          <thead>
+            <tr>
+              <th>Estrategia</th>
+              <th class="text-end">Trades</th>
+              <th class="text-end">Win Rate</th>
+              <th class="text-end">P&L Total</th>
+              <th class="text-end">Avg Win</th>
+              <th class="text-end">Avg Loss</th>
+              <th class="text-end">Best</th>
+              <th class="text-end">Worst</th>
+              <th class="text-end">Profit Factor</th>
+            </tr>
+          </thead>
+          <tbody id="strategy-tbody">
+            <tr><td colspan="9" class="text-center text-muted">Cargando métricas...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Métricas de Riesgo ── #}
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-shield-check"></i> Métricas de Riesgo</h2></div>
+      <table class="table table-sm table-borderless ss-info-table">
+        <tr><td>Max Drawdown</td><td id="risk-max-dd" class="text-end">—</td></tr>
+        <tr><td>Max Drawdown %</td><td id="risk-max-dd-pct" class="text-end">—</td></tr>
+        <tr><td>Racha Perdedora Máx</td><td id="risk-max-losing-streak" class="text-end">—</td></tr>
+        <tr><td>Volatilidad P&L</td><td id="risk-volatility" class="text-end">—</td></tr>
+        <tr><td>Sharpe Ratio</td><td id="risk-sharpe" class="text-end">—</td></tr>
+        <tr><td>Calmar Ratio</td><td id="risk-calmar" class="text-end">—</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-clock-history"></i> Métricas Temporales</h2></div>
+      <table class="table table-sm table-borderless ss-info-table">
+        <tr><td>Trades Hoy</td><td id="time-today" class="text-end">—</td></tr>
+        <tr><td>Trades Esta Semana</td><td id="time-week" class="text-end">—</td></tr>
+        <tr><td>Trades Este Mes</td><td id="time-month" class="text-end">—</td></tr>
+        <tr><td>Mejor Día</td><td id="time-best-day" class="text-end">—</td></tr>
+        <tr><td>Peor Día</td><td id="time-worst-day" class="text-end">—</td></tr>
+        <tr><td>Promedio Diario</td><td id="time-avg-daily" class="text-end">—</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# ── Distribución de Trades ── #}
+<div class="row g-3 mt-1">
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-bar-chart"></i> Distribución de P&L</h2></div>
+      <div class="ss-chart-box"><canvas id="pnl-histogram"></canvas></div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="ss-card notika-shadow h-100">
+      <div class="ss-card-head"><h2><i class="bi bi-graph-up-arrow"></i> Rachas</h2></div>
+      <div class="ss-chart-box"><canvas id="streak-chart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+{# ── Análisis de Horas del Día ── #}
+<div class="row g-3 mt-1 mb-3">
+  <div class="col-12">
+    <div class="ss-card notika-shadow">
+      <div class="ss-card-head"><h2><i class="bi bi-calendar3"></i> Performance por Hora del Día (UTC)</h2></div>
+      <div class="ss-chart-box"><canvas id="hourly-chart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<footer class="text-muted small text-center pb-3">
+  Datos actualizados en tiempo real
+</footer>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js') }}"></script>
+<script>
+// Placeholder - actualizar con datos reales del API
+function updateMetrics() {
+  fetch('/api/state')
+    .then(r => r.json())
+    .then(state => {
+      // Actualizar KPIs básicos
+      updateBasicKPIs(state);
+
+      // Actualizar métricas avanzadas
+      updateAdvancedMetrics(state);
+    })
+    .catch(err => console.error('Error fetching metrics:', err));
+}
+
+function updateBasicKPIs(state) {
+  const pnl = state.total_pnl || 0;
+  const roi = state.roi || 0;
+  const winrate = state.win_rate || 0;
+  const wl = `${state.wins || 0}W / ${state.losses || 0}L`;
+
+  document.getElementById('kpi-pnl').textContent = `$${pnl.toFixed(2)}`;
+  document.getElementById('kpi-pnl').className = 'ss-kpi-value ' + (pnl >= 0 ? 'positive' : 'negative');
+  document.getElementById('kpi-roi').textContent = `ROI ${roi.toFixed(1)}%`;
+  document.getElementById('kpi-winrate').textContent = `${winrate.toFixed(1)}%`;
+  document.getElementById('kpi-wl').textContent = wl;
+}
+
+function updateAdvancedMetrics(state) {
+  // Implementar métricas avanzadas
+  // Esto requiere calcular desde los trades
+
+  // Placeholder values
+  document.getElementById('kpi-avg-win').textContent = '—';
+  document.getElementById('kpi-avg-loss').textContent = '—';
+  document.getElementById('kpi-profit-factor').textContent = '—';
+  document.getElementById('kpi-sharpe').textContent = '—';
+
+  document.getElementById('risk-max-dd').textContent = '—';
+  document.getElementById('risk-max-dd-pct').textContent = '—';
+  document.getElementById('risk-max-losing-streak').textContent = '—';
+  document.getElementById('risk-volatility').textContent = '—';
+  document.getElementById('risk-sharpe').textContent = '—';
+  document.getElementById('risk-calmar').textContent = '—';
+
+  document.getElementById('time-today').textContent = '—';
+  document.getElementById('time-week').textContent = '—';
+  document.getElementById('time-month').textContent = '—';
+  document.getElementById('time-best-day').textContent = '—';
+  document.getElementById('time-worst-day').textContent = '—';
+  document.getElementById('time-avg-daily').textContent = '—';
+}
+
+// Auto-refresh cada 5 segundos
+setInterval(updateMetrics, 5000);
+updateMetrics();
+</script>
+{% endblock %}

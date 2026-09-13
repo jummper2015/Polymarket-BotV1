@@ -277,7 +277,7 @@ class TestEvaluateLate:
         # The imports are lazy (inside the function body) to avoid circular
         # imports at module level, so we patch the source modules directly.
         with (
-            patch("bot.binance_api.get_atr4", return_value=atr4),
+            patch("bot.coinbase_api.get_atr4", return_value=atr4),
             patch(
                 "bot.polymarket_price.get_strike_and_mark",
                 return_value=(strike, mark),

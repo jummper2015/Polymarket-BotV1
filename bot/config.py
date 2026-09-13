@@ -270,6 +270,22 @@ class Config:
     ta_hedge_enabled:    bool
     ta_hedge_drop_pct:   float
     ta_hedge_max_sum:    float
+    # TA — Stop-loss / Trailing-stop (added 2026-09-13 cutover so /settings
+    # and .env can override the module defaults in temporal_arb.py).
+    ta_stop_loss_enabled:    bool
+    ta_stop_loss_time_sec:   float
+    ta_stop_loss_threshold:  float
+    ta_catastrophic_loss_pct: float
+    ta_trailing_stop_enabled: bool
+    ta_trailing_stop_pct:    float
+    # TA — Technical indicator filters
+    ta_use_atr:              bool
+    ta_min_normalized_impulse: float
+    ta_use_rsi:              bool
+    ta_rsi_overbought:       float
+    ta_rsi_oversold:         float
+    ta_use_volume:           bool
+    ta_min_volume_ratio:     float
 
     # Fase B — Near-Resolution Capture: buys nearly-certain winner at T-5..T-20s.
     # Off by default: tail risk (single reversal erases many sessions) requires
@@ -333,7 +349,7 @@ def load_config() -> Config:
     # Unknown symbols are dropped rather than defaulted: silently trading BTC
     # because "bitcoin" was typed would be worse than trading nothing. An empty
     # result falls back to BTC so the bot always has one market.
-    from .binance_api import SUPPORTED_SYMBOLS
+    from .coinbase_api import SUPPORTED_SYMBOLS
 
     requested = [
         s.strip().lower()
@@ -412,6 +428,21 @@ def load_config() -> Config:
         ta_hedge_enabled=_env_bool("TA_HEDGE_ENABLED", True),
         ta_hedge_drop_pct=_env_float("TA_HEDGE_DROP_PCT", 0.40),
         ta_hedge_max_sum=_env_float("TA_HEDGE_MAX_SUM", 0.92),
+        # Stop-loss + Trailing-stop (wire-up so .env and /settings can override)
+        ta_stop_loss_enabled=_env_bool("TA_STOP_LOSS_ENABLED", True),
+        ta_stop_loss_time_sec=_env_float("TA_STOP_LOSS_TIME_SEC", 60.0),
+        ta_stop_loss_threshold=_env_float("TA_STOP_LOSS_THRESHOLD", 0.25),
+        ta_catastrophic_loss_pct=_env_float("TA_CATASTROPHIC_LOSS_PCT", 0.50),
+        ta_trailing_stop_enabled=_env_bool("TA_TRAILING_STOP_ENABLED", True),
+        ta_trailing_stop_pct=_env_float("TA_TRAILING_STOP_PCT", 0.30),
+        # Technical indicator filters
+        ta_use_atr=_env_bool("TA_USE_ATR", True),
+        ta_min_normalized_impulse=_env_float("TA_MIN_NORMALIZED_IMPULSE", 0.8),
+        ta_use_rsi=_env_bool("TA_USE_RSI", True),
+        ta_rsi_overbought=_env_float("TA_RSI_OVERBOUGHT", 75.0),
+        ta_rsi_oversold=_env_float("TA_RSI_OVERSOLD", 25.0),
+        ta_use_volume=_env_bool("TA_USE_VOLUME", False),
+        ta_min_volume_ratio=_env_float("TA_MIN_VOLUME_RATIO", 1.5),
 
         # ── Fase B — Near-Resolution Capture ─────────────────────────────────
         # Off by default: asymmetric tail risk requires deliberate opt-in.

@@ -1,0 +1,15 @@
+# Fail2ban jail — Polymarket dashboard (Flask bot logs).
+#
+# Reads /opt/polymarket-bot/logs/bot.log looking for the login-failure warning
+# emitted by bot/dashboard.py on a wrong password.
+
+[polymarket-dashboard]
+enabled  = true
+filter   = polymarket-dashboard
+logpath  = /opt/polymarket-bot/logs/bot.log
+# Tight: 4 wrong passwords in 10 minutes → 1 hour ban.
+maxretry = 4
+findtime = 600
+bantime  = 3600
+# Don't ban the operator's own IP. Replace with your home/office static IP.
+ignoreip = 127.0.0.1/8

@@ -1,4 +1,4 @@
-"""Streak Snapper Trader — main 5-min window cycle for both strategy forms.
+"""ME$IRVE Trader — main 5-min window cycle for both strategy forms.
 
 Runs as a daemon thread. Each 5-min window:
   1. Fetch Binance data (5m windows + 4h trend)
@@ -24,7 +24,7 @@ from typing import Optional
 import requests
 
 from . import logger
-from .binance_api import get_5min_candles, get_window_direction
+from .coinbase_api import get_5min_candles, get_window_direction
 from .config import Config
 from . import regime
 from . import strategies
@@ -154,7 +154,7 @@ def _floor_to_tick(price: float) -> float:
 
 
 class StreakSnapperTrader(threading.Thread):
-    """Thread that drives the Streak Snapper 5-min window cycle."""
+    """Thread that drives the ME$IRVE 5-min window cycle."""
 
     def __init__(self, cfg: Config, symbol: str = "btc") -> None:
         super().__init__(name=f"ss-trader-{symbol}", daemon=True)
@@ -195,7 +195,7 @@ class StreakSnapperTrader(threading.Thread):
 
     def run(self) -> None:
         logger.set_context(self.state)
-        logger.info(f"[SS {self.symbol.upper()}] Streak Snapper Trader iniciado", icon="🚀")
+        logger.info(f"[M$ {self.symbol.upper()}] ME$IRVE Trader iniciado", icon="🚀")
 
         # Load past trades from DB into memory (survives restarts → correct PNL)
         self._load_state_from_db()
@@ -204,7 +204,7 @@ class StreakSnapperTrader(threading.Thread):
             try:
                 self._run_one_window()
             except Exception as exc:
-                logger.err(f"[SS] window error: {exc}")
+                logger.err(f"[M$] window error: {exc}")
                 self.state.set_status("error", str(exc))
                 if not self._stop.is_set():
                     time.sleep(5.0)
@@ -224,16 +224,16 @@ class StreakSnapperTrader(threading.Thread):
                 db_trades = [t.to_dict() for t in reversed(trades)]
                 count = self.state.load_trades_from_db(db_trades)
                 if count:
-                    logger.info(f"[SS] {count} trades cargados de DB", icon="📂")
+                    logger.info(f"[M$] {count} trades cargados de DB", icon="📂")
         except Exception as exc:
-            logger.warn(f"[SS] could not load trades from DB: {exc}")
+            logger.warn(f"[M$] could not load trades from DB: {exc}")
 
     # ── window cycle ──────────────────────────────────────────────────────────
 
     def _run_one_window(self) -> None:
         if not self.state.ss_enabled:
-            self.state.set_status("idle", "Streak Snapper desactivado")
-            logger.transient("[SS] desactivado — esperando 15s")
+            self.state.set_status("idle", "ME$IRVE desactivado")
+            logger.transient("[M$] desactivado — esperando 15s")
             time.sleep(15.0)
             return
 
@@ -249,7 +249,7 @@ class StreakSnapperTrader(threading.Thread):
             self.state.set_status("waiting",
                 f"Esperando próximo evento en {int(wait_s)}s")
             logger.info(
-                f"[SS] esperando próximo boundary 5m  "
+                f"[M$] esperando próximo boundary 5m  "
                 f"(actual={seconds_into_window:.0f}s → esperando {wait_s:.0f}s)",
                 icon="⏳",
             )
@@ -264,7 +264,7 @@ class StreakSnapperTrader(threading.Thread):
             # critical path before the order).
             self.state.set_window(tokens.slug, tokens.window_ts)
             self.state.set_tokens(tokens.up_token_id, tokens.down_token_id)
-            logger.ok(f"[SS] market listo (pre-cargado)  {tokens.slug}", icon="⚡")
+            logger.ok(f"[M$] market listo (pre-cargado)  {tokens.slug}", icon="⚡")
         else:
             tokens = load_market_for_current_window(
                 self.cfg.gamma_host,
@@ -274,7 +274,7 @@ class StreakSnapperTrader(threading.Thread):
             )
             self.state.set_window(tokens.slug, tokens.window_ts)
             self.state.set_tokens(tokens.up_token_id, tokens.down_token_id)
-            logger.ok(f"[SS] market listo  {tokens.slug}", icon="📈")
+            logger.ok(f"[M$] market listo  {tokens.slug}", icon="📈")
 
         # ── resolve previous window trades ────────────────────────────────────
         self._resolve_pending_trades()
@@ -296,7 +296,7 @@ class StreakSnapperTrader(threading.Thread):
         # the fallback ceiling is the original 2 s so a slow feed doesn't block
         # longer than before.
         if not self._ws_ready.wait(timeout=2.0):
-            logger.warn("[SS] WS sin precios en 2s — continuando")
+            logger.warn("[M$] WS sin precios en 2s — continuando")
 
         try:
             # ── late-entry gate ───────────────────────────────────────────────
@@ -317,7 +317,7 @@ class StreakSnapperTrader(threading.Thread):
                     f"(máximo {self.state.ss_max_entry_age}s)"
                 )
                 self.state.set_status("watching", detail)
-                logger.info(f"[SS] SKIP_LATE: {detail}", icon="⏭")
+                logger.info(f"[M$] SKIP_LATE: {detail}", icon="⏭")
                 self._start_prefetch(tokens.window_ts)
                 ttl = tokens.window_ts + WINDOW_SECONDS - time.time()
                 if ttl > 0:
@@ -333,7 +333,7 @@ class StreakSnapperTrader(threading.Thread):
             if not verdict.allowed:
                 self.state.record_skip(verdict.reason)
                 self.state.set_status("watching", verdict.detail)
-                logger.info(f"[SS] {verdict.reason}: {verdict.detail}", icon="⏭")
+                logger.info(f"[M$] {verdict.reason}: {verdict.detail}", icon="⏭")
                 self._start_prefetch(tokens.window_ts)
                 ttl = tokens.window_ts + WINDOW_SECONDS - time.time()
                 if ttl > 0:
@@ -360,7 +360,7 @@ class StreakSnapperTrader(threading.Thread):
                 except Exception as exc:
                     # One broken strategy must not take the window down with it.
                     logger.error(
-                        f"[SS] {descriptor.id} falló al evaluar: {exc}", icon="💥"
+                        f"[M$] {descriptor.id} falló al evaluar: {exc}", icon="💥"
                     )
 
             # Two strategies can point at opposite sides of the same window.
@@ -379,7 +379,7 @@ class StreakSnapperTrader(threading.Thread):
                 kept_detail = " ".join(f"{s.strategy}→{s.direction}" for s in signals)
                 lost_detail = " ".join(f"{s.strategy}→{s.direction}" for s in dropped)
                 logger.warn(
-                    f"[SS] señales contradictorias ({kept_detail}  vs  "
+                    f"[M$] señales contradictorias ({kept_detail}  vs  "
                     f"{lost_detail}) — se descarta {lost_detail} en {tokens.slug}",
                     icon="⚖",
                 )
@@ -387,7 +387,7 @@ class StreakSnapperTrader(threading.Thread):
             if not signals:
                 self.state.set_status("watching", "Sin señal — observando")
                 logger.transient(
-                    f"[SS] {tokens.slug}  sin señal  "
+                    f"[M$] {tokens.slug}  sin señal  "
                     f"ttl={int(tokens.window_ts + WINDOW_SECONDS - time.time())}s"
                 )
 
@@ -451,12 +451,12 @@ class StreakSnapperTrader(threading.Thread):
 
         if not observers and not late_evals:
             if ttl > 0:
-                logger.transient(f"[SS] esperando cierre de ventana... {int(ttl)}s")
+                logger.transient(f"[M$] esperando cierre de ventana... {int(ttl)}s")
                 self._stop.wait(ttl + RESOLVE_GRACE_SECONDS)
             return []
 
         logger.transient(
-            f"[SS] observando la ventana... {int(max(ttl, 0))}s "
+            f"[M$] observando la ventana... {int(max(ttl, 0))}s "
             f"({len(observers)} obs, {len(late_evals)} late)"
         )
         deadline = tokens.window_ts + WINDOW_SECONDS + RESOLVE_GRACE_SECONDS
@@ -485,7 +485,7 @@ class StreakSnapperTrader(threading.Thread):
                 except Exception as exc:
                     # Same rule as `evaluate`: one broken strategy must not take
                     # the window — or the settlement that follows it — down.
-                    logger.err(f"[SS] {descriptor.id} falló al observar: {exc}")
+                    logger.err(f"[M$] {descriptor.id} falló al observar: {exc}")
 
             for descriptor in late_evals:
                 if descriptor.id in late_fired:
@@ -507,7 +507,7 @@ class StreakSnapperTrader(threading.Thread):
                                 if s in sigs
                             )
                             logger.warn(
-                                f"[SS] señal tardía descartada (conflicto): "
+                                f"[M$] señal tardía descartada (conflicto): "
                                 f"{lost}", icon="⚖",
                             )
                         for sig in new_sigs:
@@ -516,7 +516,7 @@ class StreakSnapperTrader(threading.Thread):
                         late_fired.add(descriptor.id)
                 except Exception as exc:
                     logger.err(
-                        f"[SS] {descriptor.id} falló en evaluate_late: {exc}"
+                        f"[M$] {descriptor.id} falló en evaluate_late: {exc}"
                     )
 
             self._stop.wait(min(OBSERVE_TICK_SECONDS, max(deadline - time.time(), 0.0)))
@@ -545,7 +545,7 @@ class StreakSnapperTrader(threading.Thread):
             if not candles:
                 # No history means no basis to refuse. Blocking here would turn
                 # a Binance hiccup into a silent trading halt.
-                logger.warn("[SS] sin velas para el filtro de régimen — no se filtra")
+                logger.warn("[M$] sin velas para el filtro de régimen — no se filtra")
                 return regime.hours_filter(hours)
 
         return regime.evaluate(
@@ -595,7 +595,7 @@ class StreakSnapperTrader(threading.Thread):
                 f"({sig.direction})"
             )
             self.state.set_status("watching", detail)
-            logger.info(f"[SS {strategy_label}] SKIP_ASK_ABOVE_CAP: {detail}", icon="⏭")
+            logger.info(f"[M$ {strategy_label}] SKIP_ASK_ABOVE_CAP: {detail}", icon="⏭")
             return
 
         # Determine limit price: min(cap, current_ask)
@@ -603,7 +603,7 @@ class StreakSnapperTrader(threading.Thread):
             limit_price = round(min(sig.limit_cap, current_ask), 4)
         else:
             limit_price = sig.limit_cap
-            logger.warn(f"[SS {strategy_label}] sin ask del WS — usando cap {limit_price:.4f}")
+            logger.warn(f"[M$ {strategy_label}] sin ask del WS — usando cap {limit_price:.4f}")
 
         limit_price = _floor_to_tick(limit_price)
 
@@ -612,7 +612,7 @@ class StreakSnapperTrader(threading.Thread):
         cost   = round(shares * limit_price, 4)
 
         logger.ok(
-            f"[SS {strategy_label}] 🎯 SEÑAL  "
+            f"[M$ {strategy_label}] 🎯 SEÑAL  "
             f"{sig.direction} @ ${limit_price:.4f} ×{shares}  "
             f"cost=${cost:.2f}  mult=×{sig.multiplier:.2f}  "
             f"reason={sig.signal_reason}",
@@ -625,19 +625,19 @@ class StreakSnapperTrader(threading.Thread):
 
         if is_paper:
             logger.info(
-                f"[SS {strategy_label}] PAPER  {sig.direction} @ {limit_price:.4f} "
+                f"[M$ {strategy_label}] PAPER  {sig.direction} @ {limit_price:.4f} "
                 f"×{shares}  cost=${cost:.4f}",
                 icon="📄",
             )
         else:
             if self._client is None:
-                logger.err(f"[SS {strategy_label}] real mode: CLOB client no inicializado")
+                logger.err(f"[M$ {strategy_label}] real mode: CLOB client no inicializado")
                 return
 
             try:
                 order_id, placed = self._place_limit_buy(token_id, limit_price, shares)
             except Exception as exc:
-                logger.err(f"[SS {strategy_label}] order failed: {exc}")
+                logger.err(f"[M$ {strategy_label}] order failed: {exc}")
                 return
 
             # `_place_limit_buy` swallows its own exceptions and returns None,
@@ -648,7 +648,7 @@ class StreakSnapperTrader(threading.Thread):
             # missing a window.
             if not order_id:
                 logger.err(
-                    f"[SS {strategy_label}] la orden no se pudo enviar — "
+                    f"[M$ {strategy_label}] la orden no se pudo enviar — "
                     f"ventana {tokens.slug} descartada, no se registra posición"
                 )
                 self.state.record_skip("SKIP_ORDER_FAILED")
@@ -664,7 +664,7 @@ class StreakSnapperTrader(threading.Thread):
 
             if filled <= 0:
                 logger.warn(
-                    f"[SS {strategy_label}] la orden no se llenó en "
+                    f"[M$ {strategy_label}] la orden no se llenó en "
                     f"{FILL_WAIT_SECONDS:.0f}s — cancelada, sin posición en "
                     f"{tokens.slug}",
                     icon="⏭",
@@ -678,7 +678,7 @@ class StreakSnapperTrader(threading.Thread):
                 # requested size would overstate the stake and, with martingale
                 # sizing, compound that error into the next entry.
                 logger.warn(
-                    f"[SS {strategy_label}] llenado parcial "
+                    f"[M$ {strategy_label}] llenado parcial "
                     f"{filled:g}/{shares:g} shares — resto cancelado",
                     icon="◐",
                 )
@@ -713,7 +713,7 @@ class StreakSnapperTrader(threading.Thread):
                 _db.session.commit()
                 trade_id = trade.id
             logger.info(
-                f"[SS {strategy_label}] trade #{trade_id} guardado en DB",
+                f"[M$ {strategy_label}] trade #{trade_id} guardado en DB",
                 icon="💾",
             )
 
@@ -742,7 +742,7 @@ class StreakSnapperTrader(threading.Thread):
             # behind with nothing bought against it.
             self.strategy.on_entry(sig)
         except Exception as exc:
-            logger.err(f"[SS {strategy_label}] DB save failed: {exc}")
+            logger.err(f"[M$ {strategy_label}] DB save failed: {exc}")
 
     # ── resolution ────────────────────────────────────────────────────────────
 
@@ -767,7 +767,7 @@ class StreakSnapperTrader(threading.Thread):
                 return
 
             logger.transient(
-                f"[SS] esperando resolución de {wait_for_slug}... "
+                f"[M$] esperando resolución de {wait_for_slug}... "
                 f"{int(deadline - time.time())}s"
             )
             time.sleep(RESOLVE_POLL_SECONDS)
@@ -805,9 +805,9 @@ class StreakSnapperTrader(threading.Thread):
             if time.time() < trade.window_ts + WINDOW_SECONDS + RESOLVE_GRACE_SECONDS:
                 continue
 
-            # Binance settles the moment the candle closes; Gamma needs ~3 min,
+            # Coinbase settles the moment the candle closes; Gamma needs ~3 min,
             # which is longer than the window itself.
-            source = "binance"
+            source = "coinbase"
             winner = get_window_direction(trade.window_ts, symbol=self.symbol)
             if winner is None:
                 winner = self._get_window_outcome(trade.window_slug)
@@ -840,7 +840,7 @@ class StreakSnapperTrader(threading.Thread):
                     merged.resolution_source = source
                 _db.session.commit()
         except Exception as exc:
-            logger.err(f"[SS] DB commit failed: {exc}")
+            logger.err(f"[M$] DB commit failed: {exc}")
             try:
                 with db_context():
                     _db.session.rollback()
@@ -852,19 +852,19 @@ class StreakSnapperTrader(threading.Thread):
         for trade, winner, pnl, won, source in resolutions:
             label = trade.strategy.upper().replace("_", " ")
             status = "won" if won else "lost"
-            via = "" if source == "gamma" else "  (vía Binance)"
+            via = "" if source == "gamma" else "  (vía Coinbase)"
 
             if won:
                 self.strategy.on_win(trade.strategy)
                 logger.ok(
-                    f"[SS {label}] ✅ trade #{trade.id} GANÓ  "
+                    f"[M$ {label}] ✅ trade #{trade.id} GANÓ  "
                     f"side={trade.direction}  pnl=${pnl:+.4f}{via}",
                     icon="🎯",
                 )
             else:
                 self.strategy.on_loss(trade.strategy)
                 logger.warn(
-                    f"[SS {label}] ❌ trade #{trade.id} PERDIÓ  "
+                    f"[M$ {label}] ❌ trade #{trade.id} PERDIÓ  "
                     f"side={trade.direction}  pnl=${pnl:+.4f}{via}",
                 )
 
@@ -874,7 +874,7 @@ class StreakSnapperTrader(threading.Thread):
                 self.state.resolve_trade(trade.id, status, final_price, pnl,
                                          note=f"resolved: {trade.direction} vs {winner}")
             except Exception as exc:
-                logger.warn(f"[SS] in-memory sync failed for trade #{trade.id}: {exc}")
+                logger.warn(f"[M$] in-memory sync failed for trade #{trade.id}: {exc}")
 
         self.state.set_status("watching", f"{len(resolutions)} trades resueltos")
         return len(resolutions)
@@ -937,7 +937,7 @@ class StreakSnapperTrader(threading.Thread):
                         obj.resolution_source = "gamma"
                 _db.session.commit()
         except Exception as exc:
-            logger.err(f"[SS] confirmación Gamma: commit falló: {exc}")
+            logger.err(f"[M$] confirmación Gamma: commit falló: {exc}")
             try:
                 with db_context():
                     _db.session.rollback()
@@ -948,7 +948,7 @@ class StreakSnapperTrader(threading.Thread):
         for trade, winner, pnl, won in corrections:
             label = trade.strategy.upper().replace("_", " ")
             logger.err(
-                f"[SS {label}] ⚠ trade #{trade.id} CORREGIDO por Gamma: "
+                f"[M$ {label}] ⚠ trade #{trade.id} CORREGIDO por Gamma: "
                 f"Binance dijo {trade.outcome}, Gamma dice {winner} → "
                 f"{'GANÓ' if won else 'PERDIÓ'}  pnl=${pnl:+.4f}"
             )
@@ -1038,10 +1038,10 @@ class StreakSnapperTrader(threading.Thread):
                             down_token_id=result[1],
                         )
                     logger.info(
-                        f"[SS] tokens pre-cargados  {next_slug}", icon="⚡"
+                        f"[M$] tokens pre-cargados  {next_slug}", icon="⚡"
                     )
             except Exception as exc:
-                logger.warn(f"[SS] pre-carga falló ({next_slug}): {exc}")
+                logger.warn(f"[M$] pre-carga falló ({next_slug}): {exc}")
 
         threading.Thread(
             target=_fetch, name=f"ss-prefetch-{self.symbol}", daemon=True
@@ -1310,7 +1310,7 @@ class StreakSnapperTrader(threading.Thread):
             if resp and isinstance(resp, dict):
                 return (resp.get("orderID") or resp.get("id"), resp)
         except Exception as exc:
-            logger.err(f"[SS] CLOB order failed: {exc}")
+            logger.err(f"[M$] CLOB order failed: {exc}")
         return (None, None)
 
     def _fetch_order(self, order_id: str) -> Optional[dict]:
@@ -1325,7 +1325,7 @@ class StreakSnapperTrader(threading.Thread):
             resp = self._client.get_order(str(order_id))
             return resp if isinstance(resp, dict) else None
         except Exception as exc:
-            logger.warn(f"[SS] no se pudo consultar la orden {order_id}: {exc}")
+            logger.warn(f"[M$] no se pudo consultar la orden {order_id}: {exc}")
             return None
 
     def _cancel_order(self, order_id: str) -> bool:
@@ -1341,7 +1341,7 @@ class StreakSnapperTrader(threading.Thread):
             self._client.cancel_order(OrderPayload(orderID=str(order_id)))
             return True
         except Exception as exc:
-            logger.err(f"[SS] no se pudo cancelar la orden {order_id}: {exc}")
+            logger.err(f"[M$] no se pudo cancelar la orden {order_id}: {exc}")
             return False
 
     def _settle_order(
@@ -1386,7 +1386,7 @@ class StreakSnapperTrader(threading.Thread):
         # P&L as a wrong number, while an unrecorded real one is money spent
         # that never resolves and never appears anywhere.
         logger.err(
-            f"[SS {label}] estado de llenado desconocido para {order_id} — "
+            f"[M$ {label}] estado de llenado desconocido para {order_id} — "
             f"se registra como llenado ({requested}) para no perder la posición"
         )
         return requested
@@ -1401,7 +1401,7 @@ class StreakSnapperTrader(threading.Thread):
                 still.append(order_id)
         if still:
             logger.err(
-                f"[SS] {len(still)} orden(es) siguen vivas tras reintentar "
+                f"[M$] {len(still)} orden(es) siguen vivas tras reintentar "
                 f"la cancelación: {', '.join(still)}"
             )
         self._pending_cancels = still
@@ -1424,8 +1424,8 @@ class StreakSnapperTrader(threading.Thread):
                 key=self.cfg.private_key,
                 creds=creds,
             )
-            logger.ok("[SS] CLOB V2 autenticado", icon="🔑")
+            logger.ok("[M$] CLOB V2 autenticado", icon="🔑")
             return client
         except Exception as exc:
-            logger.err(f"[SS] CLOB V2 auth error: {exc}")
+            logger.err(f"[M$] CLOB V2 auth error: {exc}")
             return None

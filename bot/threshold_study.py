@@ -1,12 +1,12 @@
 """Calibration study for NEAR_FLAT_THRESHOLD — measured cost, in dollars.
 
-The bot settles a window the moment it closes using the Binance candle, because
+The bot settles a window the moment it closes using the exchange candle, because
 Gamma needs ~200 s and waiting would leave the martingale a window behind. When
 the candle is too flat to call, `get_window_direction()` returns None and the
 trade defers to Gamma. `NEAR_FLAT_THRESHOLD` is where that line sits, and it
 trades one error off against another:
 
-  - Threshold too LOW  → Binance calls windows it shouldn't, and sometimes calls
+  - Threshold too LOW  → the exchange calls windows it shouldn't, and sometimes calls
     them wrong. A wrong call moves the martingale in the wrong direction and the
     multiplier can't be reconstructed once later windows have used it.
   - Threshold too HIGH → more windows defer. A deferred window isn't resolved
@@ -50,7 +50,7 @@ THRESHOLDS = [0.0, 1e-5, 2e-5, 5e-5, 1e-4, 1.5e-4, 2e-4, 3e-4]
 def binance_call(candle: dict, threshold: float) -> Optional[str]:
     """What `get_window_direction()` would return for this candle.
 
-    Mirrors bot/binance_api.py: below the threshold we don't guess, we defer.
+    Mirrors bot/coinbase_api.py: below the threshold we don't guess, we defer.
     """
     open_px, close_px = candle["open"], candle["close"]
     if open_px <= 0:
@@ -71,10 +71,10 @@ def simulate(
     Two truths are tracked separately, which is the whole point of the study:
 
       - P&L is always computed from Gamma, because that is what Polymarket
-        actually pays. A wrong Binance call doesn't change what the trade earned,
+        actually pays. A wrong exchange call doesn't change what the trade earned,
         it changes what the bot *believed* it earned.
       - The martingale advances on what the bot believed and when it believed it
-        — Binance's call if it made one, otherwise Gamma one entry late.
+        — the exchange's call if it made one, otherwise Gamma one entry late.
 
     `threshold=None` is the oracle case: perfect labels, applied instantly. The
     gap between each threshold and the oracle is the cost of settling imperfectly.
@@ -97,7 +97,7 @@ def simulate(
     }
 
     # Every entry's size, keyed by (window, strategy). The signals themselves
-    # depend only on the Binance candles and the 4h trend — never on the
+    # depend only on the exchange candles and the 4h trend — never on the
     # martingale — so the *set* of entries is identical across thresholds and
     # only the size differs. That makes sizes comparable entry-by-entry against
     # the oracle, which is the noise-free way to price a threshold.
@@ -148,7 +148,7 @@ def simulate(
             cost = round(shares * cap, 4)
             sizes[(ts, strat)] = shares
 
-            # P&L is settled by Gamma — always, regardless of what Binance said.
+            # P&L is settled by Gamma — always, regardless of what the exchange said.
             really_won = direction == truth
             pnl = round(shares - cost, 4) if really_won else round(-cost, 4)
 
@@ -226,7 +226,7 @@ def main() -> None:
     ap.add_argument("--windows", type=int, default=3000)
     args = ap.parse_args()
 
-    print(f"\n📡 Binance: descargando {args.windows + HISTORY_WINDOWS} velas 5m...")
+    print(f"\n📡 Coinbase: descargando {args.windows + HISTORY_WINDOWS} velas 5m...")
     candles = fetch_klines("5m", args.windows + HISTORY_WINDOWS + 2)
     if not candles:
         raise SystemExit("❌ no se pudieron descargar klines")

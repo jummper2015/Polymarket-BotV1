@@ -156,6 +156,8 @@ El bot incluye scripts automatizados para desplegarlo en un VPS (Hostinger, Digi
 
 **🔌 Trabajo remoto:** [`docs/REMOTE_SSH_GUIDE.md`](docs/REMOTE_SSH_GUIDE.md)
 
+**🌍 Ubicación del VPS:** [`docs/VPS_LOCATION_SUMMARY.md`](docs/VPS_LOCATION_SUMMARY.md) ⚠️ **Importante para latencia**
+
 ### Scripts incluidos
 
 ```bash
@@ -170,6 +172,10 @@ sudo bash scripts/setup_nginx.sh tudominio.com
 
 # Validar despliegue
 bash scripts/validate_deployment.sh
+
+# Test de latencia (ejecutar desde tu VPS)
+bash scripts/test_latency.sh
+python3 scripts/test_latency_detailed.py
 ```
 
 ### Comandos post-despliegue

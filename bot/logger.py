@@ -46,7 +46,16 @@ def _market_tag() -> str:
 
 
 def log(level: str, icon: str, message: str, *, transient: bool = False) -> None:
-    """Print a line and (unless transient) record it in the per-market log."""
+    """Print a line and (unless transient) record it in the per-market log.
+
+    Daemon threads (WS feeds, status publisher) call this during shutdown.
+    When CPython is finalizing, stdout's BufferedWriter is already locked
+    closed; calling .flush() raises `_enter_buffered_busy` and clogs
+    /opt/polymarket-bot/logs/bot.error.log. sys.is_finalizing() (Python 3.7+)
+    lets us bail out before touching the writer.
+    """
+    if sys.is_finalizing():
+        return
     line = f"{_stamp()} {icon} {_market_tag()}{message}"
     if transient:
         sys.stdout.write("\r" + line.ljust(120))

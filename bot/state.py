@@ -1,10 +1,10 @@
-"""Thread-safe shared state for Streak Snapper bot.
+"""Thread-safe shared state for ME$IRVE bot.
 
-Simplified from the original multi-strategy state. Keeps only what Streak Snapper needs:
+Simplified from the original multi-strategy state. Keeps only what ME$IRVE needs:
   - Trade data (in-memory + DB)
   - Price tracking (bid/ask/mid via WebSocket)
   - Live order book (from WS book events)
-  - Streak Snapper configuration
+  - ME$IRVE configuration
   - Dashboard snapshot
 """
 
@@ -82,7 +82,7 @@ class BotState:
         self.has_credentials: bool = False
         self.starting_bankroll: float = 1000.0
 
-        # ── Streak Snapper config ─────────────────────────────────────────────
+        # ── ME$IRVE config ─────────────────────────────────────────────
         self.ss_enabled: bool  = True
         # ss_mode, ss_fade_*, ss_trend_* eliminados — estrategias desactivadas.
 
@@ -138,6 +138,22 @@ class BotState:
         self.ta_hedge_enabled:    bool  = True
         self.ta_hedge_drop_pct:   float = 0.40
         self.ta_hedge_max_sum:    float = 0.92
+        # Stop-loss / Trailing-stop (wired 2026-09-13 cutover so /settings can
+        # expose them — temporal_arb.py uses getattr fallbacks if absent).
+        self.ta_stop_loss_enabled:    bool  = True
+        self.ta_stop_loss_time_sec:   float = 60.0
+        self.ta_stop_loss_threshold:  float = 0.25
+        self.ta_catastrophic_loss_pct: float = 0.50
+        self.ta_trailing_stop_enabled: bool  = True
+        self.ta_trailing_stop_pct:    float = 0.30
+        # Technical indicator filters
+        self.ta_use_atr:              bool  = True
+        self.ta_min_normalized_impulse: float = 0.8
+        self.ta_use_rsi:              bool  = True
+        self.ta_rsi_overbought:       float = 75.0
+        self.ta_rsi_oversold:         float = 25.0
+        self.ta_use_volume:           bool  = False
+        self.ta_min_volume_ratio:     float = 1.5
 
         # Fase B — Near-Resolution Capture. Buys the nearly-certain winner at
         # T-5..T-20s for 1–3¢ return. Off by default: tail risk (a single wrong
@@ -199,6 +215,29 @@ class BotState:
         self.last_down_ask: Optional[float] = None
         self.last_price_update: Optional[float] = None
         self.ws_connected: bool = False
+
+        # --- price-feed health (diagnostic counters) ---
+        # Incremented by the WebSocket callbacks. `disconnects_recent` is a
+        # sliding window (last hour) so /state can answer "how flaky is it
+        # right now" without a DB query. Persistent across reconnects but
+        # cleared on restart.
+        from collections import deque as _dq
+        self.price_feed_disconnects_total: int = 0
+        self.price_feed_disconnects_recent: _dq = _dq(maxlen=256)
+        self.price_feed_last_error: str = ""
+        self.price_feed_last_disconnect_at: Optional[float] = None
+        self.price_feed_reconnect_attempts: int = 0
+
+        # --- Gamma reconciliation (informational, not an error) ---
+        # The exchange candle resolves at T+0s; Gamma (official Polymarket
+        # source via Chainlink) publishes at T+~180s. ~16% of windows
+        # disagree on the direction. Every disagreement is logged here so the
+        # dashboard can show a tally and /api/metrics/series can break it
+        # down by outcome (won vs lost after correction).
+        self.gamma_corrections_total: int = 0
+        self.gamma_corrections_to_wins: int = 0
+        self.gamma_corrections_to_losses: int = 0
+        self.gamma_corrections_session: int = 0
 
         # --- spot price (BTC) ---
         self.spot_price: Optional[float] = None
@@ -333,6 +372,51 @@ class BotState:
     def set_ws_connected(self, connected: bool) -> None:
         with self._lock:
             self.ws_connected = connected
+            if connected:
+                # Feed is back up — clear the backoff counter so the next
+                # disconnect starts from the initial delay again.
+                self.price_feed_reconnect_attempts = 0
+
+    def record_price_feed_disconnect(self, reason: str) -> None:
+        """Called by PriceFeed on every unexpected disconnect or error.
+
+        Keeps a total counter, a sliding 1-hour window for the dashboard, and
+        the most recent reason for diagnosis.
+        """
+        now = time.time()
+        with self._lock:
+            self.price_feed_disconnects_total += 1
+            self.price_feed_disconnects_recent.append(now)
+            self.price_feed_last_error = reason
+            self.price_feed_last_disconnect_at = now
+            self.price_feed_reconnect_attempts += 1
+
+    def record_price_feed_reconnect(self) -> None:
+        """Called when the WebSocket comes back up — resets the attempt counter."""
+        with self._lock:
+            self.price_feed_reconnect_attempts = 0
+
+    def price_feed_disconnects_last_hour(self) -> int:
+        """How many disconnects in the last 3600 s. O(n) over a maxlen=256 deque."""
+        cutoff = time.time() - 3600.0
+        with self._lock:
+            return sum(1 for t in self.price_feed_disconnects_recent if t >= cutoff)
+
+    def record_gamma_correction(self, won_after: bool) -> None:
+        """Called when Gamma flips a trade's outcome relative to the exchange.
+
+        `won_after` is the outcome Gamma published — i.e. what the trade
+        *actually* is. Tallying both directions lets the dashboard show
+        whether corrections bias the result one way or the other (they don't;
+        the split is ~50/50 by construction).
+        """
+        with self._lock:
+            self.gamma_corrections_total += 1
+            self.gamma_corrections_session += 1
+            if won_after:
+                self.gamma_corrections_to_wins += 1
+            else:
+                self.gamma_corrections_to_losses += 1
 
     # ── order book ────────────────────────────────────────────────────────────
 
@@ -554,6 +638,19 @@ class BotState:
                 "ta_hedge_enabled":    self.ta_hedge_enabled,
                 "ta_hedge_drop_pct":   self.ta_hedge_drop_pct,
                 "ta_hedge_max_sum":    self.ta_hedge_max_sum,
+                "ta_stop_loss_enabled":    self.ta_stop_loss_enabled,
+                "ta_stop_loss_time_sec":   self.ta_stop_loss_time_sec,
+                "ta_stop_loss_threshold":  self.ta_stop_loss_threshold,
+                "ta_catastrophic_loss_pct": self.ta_catastrophic_loss_pct,
+                "ta_trailing_stop_enabled": self.ta_trailing_stop_enabled,
+                "ta_trailing_stop_pct":    self.ta_trailing_stop_pct,
+                "ta_use_atr":              self.ta_use_atr,
+                "ta_min_normalized_impulse": self.ta_min_normalized_impulse,
+                "ta_use_rsi":              self.ta_use_rsi,
+                "ta_rsi_overbought":       self.ta_rsi_overbought,
+                "ta_rsi_oversold":         self.ta_rsi_oversold,
+                "ta_use_volume":           self.ta_use_volume,
+                "ta_min_volume_ratio":     self.ta_min_volume_ratio,
                 # Near-Resolution Capture
                 "nrc_enabled":         self.nrc_enabled,
                 "nrc_min_ask":         self.nrc_min_ask,
@@ -577,6 +674,19 @@ class BotState:
                 "bot_status": self.bot_status,
                 "bot_message": self.bot_message,
                 "ws_connected": self.ws_connected,
+                "price_feed_health": {
+                    "disconnects_total": self.price_feed_disconnects_total,
+                    "disconnects_last_hour": self.price_feed_disconnects_last_hour(),
+                    "reconnect_attempts": self.price_feed_reconnect_attempts,
+                    "last_error": self.price_feed_last_error,
+                    "last_disconnect_at": self.price_feed_last_disconnect_at,
+                },
+                "gamma_corrections": {
+                    "total": self.gamma_corrections_total,
+                    "to_wins": self.gamma_corrections_to_wins,
+                    "to_losses": self.gamma_corrections_to_losses,
+                    "session": self.gamma_corrections_session,
+                },
                 "current_slug": self.current_slug,
                 "current_window_ts": self.current_window_ts,
                 "current_window_ends_at": self.current_window_ends_at,

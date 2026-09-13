@@ -36,7 +36,7 @@ from typing import Optional
 from ..runtime_field import RuntimeField
 from .base import StrategyContext, StrategyDescriptor
 
-# `bot.logger`, `bot.binance_api` and `bot.polymarket_price` are imported inside
+# `bot.logger`, `bot.coinbase_api` and `bot.polymarket_price` are imported inside
 # the functions that use them, not here. `bot.state` imports this package to
 # build its strategy ids, and `bot.logger` imports `bot.state` — so a module
 # level import of any of them closes the loop and nothing starts. The same
@@ -174,7 +174,7 @@ def _flush(obs: "_WindowObs", state) -> None:
 
 def _observe(ctx: StrategyContext) -> None:
     """One tick. Reads the book from memory; the strike and ATR from the network."""
-    from ..binance_api import get_atr4
+    from ..coinbase_api import get_atr4
     from ..polymarket_price import get_strike_and_mark
 
     tokens = ctx.tokens

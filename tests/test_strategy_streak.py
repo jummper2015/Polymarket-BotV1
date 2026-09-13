@@ -372,6 +372,7 @@ class TestTrendCycle:
         assert sig.multiplier == 1.0
         assert sig.shares == 5
 
+    @pytest.mark.skip(reason="ss_trend desactivada en Fase 8 (ver bot/strategies/__init__.py); el ciclo martingale ya no se carga en arranque")
     def test_cycle_survives_a_restart(self, strategy):
         """The locked side is reloaded from the DB, not re-derived."""
         anchor = int(time.time()) - FOUR_HOURS

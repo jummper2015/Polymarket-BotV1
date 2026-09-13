@@ -1,12 +1,12 @@
-"""Streak Snapper strategy — signal detection + martingale sizing for both forms.
+"""ME$IRVE strategy — signal detection + martingale sizing for both forms.
 
 Forma 1 (Fade / Anti-racha):
-  - Detect 4+ consecutive same-direction 5-min windows via Binance
+  - Detect 4+ consecutive same-direction 5-min windows via Coinbase
   - Signal: bet AGAINST the streak (fade) at limit ≤ ss_fade_limit_cap
   - Martingale ×1.5 on loss, reset on win
 
 Forma 2 (Trend / Seguir tendencia):
-  - Measure the last *closed* 4h candle via Binance
+  - Measure the last *closed* 4h candle via Coinbase
   - If it moved at least `ss_trend_min_strength`, lock that side and bet it on
     every 5-min window of the following 4h block
   - The lock outlives the block while the martingale is still recovering: the
@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import logger
-from .binance_api import FOUR_HOURS, get_5min_windows, get_last_closed_4h_candle
+from .coinbase_api import FOUR_HOURS, get_5min_windows, get_last_closed_4h_candle
 from .config import kelly_fraction
 from .db import (
     close_cycle,
@@ -81,7 +81,7 @@ class StreakSignal:
 
 
 class StreakSnapperStrategy:
-    """Signal generator and martingale manager for both Streak Snapper forms."""
+    """Signal generator and martingale manager for both ME$IRVE forms."""
 
     def __init__(self, state) -> None:
         self.state = state
@@ -106,27 +106,14 @@ class StreakSnapperStrategy:
         These attrs are NOT declared in BotState.__init__ — they are
         private to this class and not exposed on the dashboard.
         """
-        try:
-            fade_state  = get_or_create_martingale_state("ss_fade",  self.symbol)
-            trend_state = get_or_create_martingale_state("ss_trend", self.symbol)
-            self.state.ss_fade_martingale_mult    = fade_state.multiplier
-            self.state.ss_fade_loss_streak        = fade_state.loss_streak
-            self.state.ss_trend_martingale_mult   = trend_state.multiplier
-            self.state.ss_trend_loss_streak       = trend_state.loss_streak
-            self.state.ss_trend_cycle_side        = trend_state.cycle_side
-            self.state.ss_trend_cycle_anchor_ts   = trend_state.cycle_anchor_ts
-        except Exception as exc:
-            logger.warn(
-                f"[SS] no se pudo cargar estado de martingala de la DB: {exc} "
-                f"— usando valores por defecto"
-            )
-            # Safe defaults so the rest of this class never sees missing attrs.
-            self.state.ss_fade_martingale_mult    = 1.0
-            self.state.ss_fade_loss_streak        = 0
-            self.state.ss_trend_martingale_mult   = 1.0
-            self.state.ss_trend_loss_streak       = 0
-            self.state.ss_trend_cycle_side        = None
-            self.state.ss_trend_cycle_anchor_ts   = None
+        # ss_fade / ss_trend están descontinuadas (Fase 8). Antes este bloque
+        # llamaba get_or_create_martingale_state(...) para ambas — eso recreaba
+        # filas huérfanas en cada arranque. Sólo dejamos la tupla como
+        # referencia; los atributos ss_fade_*/ss_trend_* se mantienen en 0/N/None
+        # por los defaults de BotState.
+        _ = ("ss_fade_martingale_mult", "ss_fade_loss_streak",
+             "ss_trend_martingale_mult", "ss_trend_loss_streak",
+             "ss_trend_cycle_side", "ss_trend_cycle_anchor_ts")
 
     # ── Sizing ────────────────────────────────────────────────────────────────
 
@@ -158,7 +145,7 @@ class StreakSnapperStrategy:
             edge = kelly_fraction(MEASURED_WIN_PROB.get(strategy, 0.0), limit_cap)
             if edge <= 0:
                 logger.transient(
-                    f"[SS] {strategy}: Kelly no ve ventaja a {limit_cap:.2f} — sin operar"
+                    f"[M$] {strategy}: Kelly no ve ventaja a {limit_cap:.2f} — sin operar"
                 )
                 return 0.0, 0.0
             shares = bankroll * edge * self.state.ss_kelly_fraction / limit_cap
@@ -170,7 +157,7 @@ class StreakSnapperStrategy:
         max_shares = bankroll * MAX_BANKROLL_FRACTION / limit_cap
         if max_shares < MIN_SHARES:
             logger.warn(
-                f"[SS] {strategy}: el mínimo de {MIN_SHARES:.0f} shares a "
+                f"[M$] {strategy}: el mínimo de {MIN_SHARES:.0f} shares a "
                 f"{limit_cap:.2f} supera el {MAX_BANKROLL_FRACTION:.0%} del "
                 f"bankroll (${bankroll:.2f}) — sin operar"
             )
@@ -191,7 +178,7 @@ class StreakSnapperStrategy:
         """
         windows = get_5min_windows(n=16, symbol=self.symbol)
         if windows is None:
-            logger.warn("[SS Fade] sin datos de Binance — omitiendo señal")
+            logger.warn("[M$ Fade] sin datos de Coinbase — omitiendo señal")
             return None
 
         # Count consecutive same-direction windows from most recent backward
@@ -204,7 +191,7 @@ class StreakSnapperStrategy:
                 break
 
         logger.info(
-            f"[SS Fade] streak={streak_len}x {streak_dir}  "
+            f"[M$ Fade] streak={streak_len}x {streak_dir}  "
             f"min={self.state.ss_fade_streak_min}"
         )
 
@@ -250,7 +237,7 @@ class StreakSnapperStrategy:
         try:
             open_cycle("ss_trend", side, anchor_ts, self.symbol)
         except Exception as exc:
-            logger.warn(f"[SS Trend] no se pudo guardar el ciclo en DB: {exc}")
+            logger.warn(f"[M$ Trend] no se pudo guardar el ciclo en DB: {exc}")
         self.state.ss_trend_cycle_side = side
         self.state.ss_trend_cycle_anchor_ts = anchor_ts
         self._extension_logged_for = None
@@ -259,7 +246,7 @@ class StreakSnapperStrategy:
         try:
             close_cycle("ss_trend", self.symbol)
         except Exception as exc:
-            logger.warn(f"[SS Trend] no se pudo cerrar el ciclo en DB: {exc}")
+            logger.warn(f"[M$ Trend] no se pudo cerrar el ciclo en DB: {exc}")
         self.state.ss_trend_cycle_side = None
         self.state.ss_trend_cycle_anchor_ts = None
         self._extension_logged_for = None
@@ -275,7 +262,7 @@ class StreakSnapperStrategy:
         """
         candle = get_last_closed_4h_candle(self.symbol)
         if candle is None:
-            logger.warn("[SS Trend] sin datos de vela 4h — omitiendo señal")
+            logger.warn("[M$ Trend] sin datos de vela 4h — omitiendo señal")
             return None
 
         self.state.ss_trend_last_strength = candle["strength"]
@@ -296,7 +283,7 @@ class StreakSnapperStrategy:
             if self.state.ss_trend_martingale_mult > 1.0:
                 if self._extension_logged_for != anchor:
                     logger.warn(
-                        f"[SS Trend] bloque de la vela {anchor} agotado con "
+                        f"[M$ Trend] bloque de la vela {anchor} agotado con "
                         f"×{self.state.ss_trend_martingale_mult:.2f} sin recuperar "
                         f"— se prorroga el ciclo {side} hasta ganar",
                         icon="🔁",
@@ -307,7 +294,7 @@ class StreakSnapperStrategy:
                 )
 
             logger.info(
-                f"[SS Trend] bloque de la vela {anchor} completado sin pérdidas "
+                f"[M$ Trend] bloque de la vela {anchor} completado sin pérdidas "
                 f"pendientes — se reevalúa la tendencia",
                 icon="✅",
             )
@@ -319,14 +306,14 @@ class StreakSnapperStrategy:
 
         if abs(strength) < min_strength:
             logger.transient(
-                f"[SS Trend] vela 4h {candle['ts']} sin tendencia clara: "
+                f"[M$ Trend] vela 4h {candle['ts']} sin tendencia clara: "
                 f"{strength * 100:+.3f}% < {min_strength * 100:.3f}% — sin operar"
             )
             return None
 
         trend_dir = candle["direction"]
         logger.info(
-            f"[SS Trend] tendencia clara en la vela 4h {candle['ts']}: "
+            f"[M$ Trend] tendencia clara en la vela 4h {candle['ts']}: "
             f"{candle['open']:.2f} → {candle['close']:.2f} "
             f"({strength * 100:+.3f}%) → se opera {trend_dir} durante 4h",
             icon="📈",
@@ -377,12 +364,12 @@ class StreakSnapperStrategy:
         try:
             reset_martingale_state(strategy, self.symbol)
         except Exception as exc:
-            logger.warn(f"[SS] DB reset martingale ({strategy}) failed: {exc}")
+            logger.warn(f"[M$] DB reset martingale ({strategy}) failed: {exc}")
 
         if strategy == "ss_fade":
             self.state.ss_fade_martingale_mult = 1.0
             self.state.ss_fade_loss_streak = 0
-            logger.ok(f"[SS Fade] 🎯 GANÓ → multiplicador reseteado a 1.0", icon="💰")
+            logger.ok(f"[M$ Fade] 🎯 GANÓ → multiplicador reseteado a 1.0", icon="💰")
         else:
             self.state.ss_trend_martingale_mult = 1.0
             self.state.ss_trend_loss_streak = 0
@@ -390,7 +377,7 @@ class StreakSnapperStrategy:
             self.state.ss_trend_cycle_anchor_ts = None
             self._extension_logged_for = None
             logger.ok(
-                f"[SS Trend] 🎯 GANÓ → ciclo cerrado, multiplicador a 1.0",
+                f"[M$ Trend] 🎯 GANÓ → ciclo cerrado, multiplicador a 1.0",
                 icon="💰",
             )
 
@@ -407,7 +394,7 @@ class StreakSnapperStrategy:
         try:
             advance_martingale_state(strategy, factor, self.symbol)
         except Exception as exc:
-            logger.warn(f"[SS] DB advance martingale ({strategy}) failed: {exc}")
+            logger.warn(f"[M$] DB advance martingale ({strategy}) failed: {exc}")
 
         if strategy == "ss_fade":
             self.state.ss_fade_martingale_mult = round(
@@ -415,7 +402,7 @@ class StreakSnapperStrategy:
             )
             self.state.ss_fade_loss_streak += 1
             logger.warn(
-                f"[SS Fade] ❌ PERDIÓ → nuevo multiplicador: "
+                f"[M$ Fade] ❌ PERDIÓ → nuevo multiplicador: "
                 f"×{self.state.ss_fade_martingale_mult:.2f}  "
                 f"(racha {self.state.ss_fade_loss_streak} pérdidas)",
                 icon="📉",
@@ -426,7 +413,7 @@ class StreakSnapperStrategy:
             )
             self.state.ss_trend_loss_streak += 1
             logger.warn(
-                f"[SS Trend] ❌ PERDIÓ → nuevo multiplicador: "
+                f"[M$ Trend] ❌ PERDIÓ → nuevo multiplicador: "
                 f"×{self.state.ss_trend_martingale_mult:.2f}  "
                 f"(racha {self.state.ss_trend_loss_streak} pérdidas)",
                 icon="📉",

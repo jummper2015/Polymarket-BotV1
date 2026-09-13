@@ -48,7 +48,7 @@ def _prices_loop() -> None:
     # on the same exchange reference.  CoinGecko aggregates across exchanges
     # and quotes ~$50-60 below Binance, which made itm_pct always negative
     # and caused Temporal Arb to pick DOWN on every window.
-    from .binance_api import get_btc_spot_price
+    from .coinbase_api import get_btc_spot_price
     while True:
         try:
             price = get_btc_spot_price("btc")
@@ -264,6 +264,10 @@ def create_app() -> Flask:
     @app.get("/settings")
     def settings():
         return render_template("settings.html", active_page="settings")
+
+    @app.get("/metrics")
+    def metrics():
+        return render_template("metrics.html", active_page="metrics")
 
     @app.get("/state")
     def get_state():

@@ -231,7 +231,7 @@ def evaluate(
     """Run every configured filter. First rejection wins.
 
     Hours is checked first because it needs no candles — a window outside the
-    permitted session is skipped even if Binance is unreachable.
+    permitted session is skipped even if Coinbase is unreachable.
     """
     verdict = hours_filter(hours_spec, now=now)
     if not verdict.allowed:

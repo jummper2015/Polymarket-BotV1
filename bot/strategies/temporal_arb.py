@@ -63,6 +63,7 @@ If the directional call was right → win; otherwise → loss.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -91,6 +92,23 @@ HEDGE_ENABLED_DEFAULT    = True
 HEDGE_DROP_PCT_DEFAULT   = 0.40   # fire if current_ask ≤ entry_px * (1 - drop_pct)
 HEDGE_MAX_SUM_DEFAULT    = 0.92   # max entry_px + hedge_ask to still be worthwhile
 
+# Stop-loss defaults
+STOP_LOSS_ENABLED_DEFAULT    = True
+STOP_LOSS_TIME_SEC_DEFAULT   = 60.0   # wait at least this long before considering stop-loss
+STOP_LOSS_THRESHOLD_DEFAULT  = 0.25   # 25% loss triggers stop
+CATASTROPHIC_LOSS_PCT_DEFAULT = 0.50  # 50% loss triggers immediate stop, no time gate
+TRAILING_STOP_ENABLED_DEFAULT = True
+TRAILING_STOP_PCT_DEFAULT    = 0.30   # 30% drawdown from peak triggers trailing stop
+
+# Technical indicators defaults
+USE_ATR_DEFAULT              = True
+MIN_NORMALIZED_IMPULSE_DEFAULT = 0.8   # impulse must be ≥ 80% of ATR(14)
+USE_RSI_DEFAULT              = True
+RSI_OVERBOUGHT_DEFAULT       = 75.0    # don't buy UP if RSI > this
+RSI_OVERSOLD_DEFAULT         = 25.0    # don't buy DOWN if RSI < this
+USE_VOLUME_DEFAULT           = False   # volume filter (future enhancement)
+MIN_VOLUME_RATIO_DEFAULT     = 1.5     # current volume must be ≥ 1.5x average
+
 # ── per-window state ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -111,6 +129,16 @@ class _TAWindow:
     logged_flat:         bool            = False    # "mercado plano" already logged this window
     hedge_fired:         bool            = False    # Hedge Recovery already executed this window
     lpt_fired:           bool            = False    # Late Pair Taker already executed this window
+    # Stop-loss tracking
+    entry_timestamp:     Optional[float] = None     # time.time() when first leg entered
+    first_leg_peak_ask:  Optional[float] = None     # highest ask seen for first leg (trailing stop)
+    stop_loss_fired:     bool            = False    # stop-loss already executed this window
+    # ──── Hold Winner tracking ───────────────────────────────────────────
+    logged_hold_winner:  bool            = False  # Hold winner zone ≥0.96
+    reached_winner_zone: bool            = False  # Flag: alguna vez llegó a ≥0.96
+    absolute_peak:       Optional[float] = None   # Peak máximo alcanzado
+    logged_winner_reversal: bool         = False  # Log de reversión desde winner
+
 
 
 _WINDOWS: dict[str, _TAWindow] = {}
@@ -209,12 +237,97 @@ def hedge_worthwhile(
     return round(entry_px + hedge_ask, 4) <= max_sum
 
 
+def _execute_stop_loss(
+    ctx: StrategyContext,
+    ta: _TAWindow,
+    current_ask: float,
+    reason: str,
+) -> bool:
+    """Execute stop-loss by attempting to sell or hedging the losing position.
+
+    Args:
+        ctx: Strategy context
+        ta: Temporal arb window state
+        current_ask: Current ask price of the first leg
+        reason: Human-readable reason for stop (e.g., "TIME_THRESHOLD", "TRAILING_STOP")
+
+    Returns:
+        True if stop-loss was executed successfully, False otherwise
+    """
+    from .. import logger
+
+    state  = ctx.state
+    tokens = ctx.tokens
+    trader = ctx.trader
+
+    if tokens is None or trader is None:
+        return False
+
+    # Calculate loss percentage
+    loss_pct = (ta.first_px - current_ask) / ta.first_px if ta.first_px else 0.0
+    loss_dollars = (ta.first_px - current_ask) * ta.first_shares_filled
+
+    # Strategy 1: Try to sell the losing position if there's a bid
+    # (In most cases there won't be enough liquidity, so we'll hedge instead)
+    bid_up, bid_dn = state.get_bids() if hasattr(state, 'get_bids') else (None, None)
+    first_bid = bid_up if ta.first_side == "UP" else bid_dn
+
+    # Strategy 2: Hedge immediately (more reliable)
+    # Buy the opposite side to lock in remaining value
+    second_side = "DOWN" if ta.first_side == "UP" else "UP"
+    second_ask  = ctx.state.get_asks()[1] if ta.first_side == "UP" else ctx.state.get_asks()[0]
+
+    if second_ask is None:
+        logger.warn(
+            f"[M$] ⚠ STOP_LOSS failed — no ask available for hedge side {second_side}",
+            icon="⚠",
+        )
+        return False
+
+    # Execute hedge to minimize loss
+    tok_hedge = tokens.up_token_id if second_side == "UP" else tokens.down_token_id
+    hedge_shares = ta.first_shares_filled if ta.first_shares_filled > 0 else 5.0
+
+    oid = trader._place_taker_order(tok_hedge, "BUY", second_ask, hedge_shares)
+    if not oid:
+        logger.warn(
+            f"[M$] ⚠ STOP_LOSS hedge order failed for {second_side}",
+            icon="⚠",
+        )
+        return False
+
+    # Calculate net outcome
+    net_cost = round(ta.first_px + second_ask, 4)
+    net_locked = round(1.0 - net_cost, 4)
+
+    logger.ok(
+        f"[M$] 🛑 STOP-LOSS EXECUTED ({reason})  "
+        f"primera={ta.first_side}@{ta.first_px:.3f} (ahora {current_ask:.3f})  "
+        f"pérdida={loss_pct:+.1%} (${loss_dollars:+.2f})  "
+        f"hedge={second_side}@{second_ask:.3f}  "
+        f"costo_total={net_cost:.3f}  "
+        f"resultado_neto={net_locked:+.4f}/share",
+        icon="🛑",
+    )
+
+    trader._record_box_fill(
+        tokens, second_side, tok_hedge, second_ask, hedge_shares,
+        strategy="temporal_arb",
+    )
+
+    ta.stop_loss_fired = True
+    ta.phase = "hedged"  # Mark as hedged (same as hedge recovery)
+    state.record_observation(f"TA_STOP_LOSS_{reason}")
+
+    return True
+
+
 # ── observe (state machine tick) ─────────────────────────────────────────────
 
 def _observe(ctx: StrategyContext) -> None:
     """Temporal-Arb tick, called every OBSERVE_TICK_SECONDS during the window."""
     from .. import logger
-    from ..binance_api import get_current_window_open
+    from ..polymarket_price import get_strike
 
     state  = ctx.state
     symbol = ctx.symbol
@@ -248,6 +361,21 @@ def _observe(ctx: StrategyContext) -> None:
     hedge_enabled  = bool(getattr(state, "ta_hedge_enabled",  HEDGE_ENABLED_DEFAULT))
     hedge_drop_pct = float(getattr(state, "ta_hedge_drop_pct", HEDGE_DROP_PCT_DEFAULT))
     hedge_max_sum  = float(getattr(state, "ta_hedge_max_sum",  HEDGE_MAX_SUM_DEFAULT))
+    # Stop-loss config
+    stop_loss_enabled    = bool(getattr(state, "ta_stop_loss_enabled",    STOP_LOSS_ENABLED_DEFAULT))
+    stop_loss_time_sec   = float(getattr(state, "ta_stop_loss_time_sec",  STOP_LOSS_TIME_SEC_DEFAULT))
+    stop_loss_threshold  = float(getattr(state, "ta_stop_loss_threshold", STOP_LOSS_THRESHOLD_DEFAULT))
+    catastrophic_loss_pct = float(getattr(state, "ta_catastrophic_loss_pct", CATASTROPHIC_LOSS_PCT_DEFAULT))
+    trailing_stop_enabled = bool(getattr(state, "ta_trailing_stop_enabled", TRAILING_STOP_ENABLED_DEFAULT))
+    trailing_stop_pct    = float(getattr(state, "ta_trailing_stop_pct",   TRAILING_STOP_PCT_DEFAULT))
+    # Technical indicators config
+    use_atr              = bool(getattr(state, "ta_use_atr",              USE_ATR_DEFAULT))
+    min_norm_impulse     = float(getattr(state, "ta_min_normalized_impulse", MIN_NORMALIZED_IMPULSE_DEFAULT))
+    use_rsi              = bool(getattr(state, "ta_use_rsi",              USE_RSI_DEFAULT))
+    rsi_overbought       = float(getattr(state, "ta_rsi_overbought",      RSI_OVERBOUGHT_DEFAULT))
+    rsi_oversold         = float(getattr(state, "ta_rsi_oversold",        RSI_OVERSOLD_DEFAULT))
+    use_volume           = bool(getattr(state, "ta_use_volume",           USE_VOLUME_DEFAULT))
+    min_volume_ratio     = float(getattr(state, "ta_min_volume_ratio",    MIN_VOLUME_RATIO_DEFAULT))
 
     # ── terminal states ───────────────────────────────────────────────────────
     if ta.phase in ("complete", "lpt_complete", "hedged", "closed"):
@@ -312,6 +440,150 @@ def _observe(ctx: StrategyContext) -> None:
     if ta.phase == "half_open":
         second_side = "DOWN" if ta.first_side == "UP" else "UP"
         second_ask  = ask_dn if second_side == "DOWN" else ask_up
+
+        # Get current ask of the first leg for stop-loss tracking
+        current_first_ask = ask_up if ta.first_side == "UP" else ask_dn
+
+        # ══════════════════════════════════════════════════════════════════════════
+        # NUEVA LÓGICA: HOLD WINNER & REVERSIÓN DESDE WINNER ZONE
+        # ══════════════════════════════════════════════════════════════════════════
+        
+        # Track del peak absoluto (máximo histórico)
+        if ta.absolute_peak is None:
+            ta.absolute_peak = ta.first_px if ta.first_px else 0.0
+        if current_first_ask is not None and current_first_ask > ta.absolute_peak:
+            ta.absolute_peak = current_first_ask
+        
+        # Track si alguna vez llegó a winner zone (≥0.96)
+        if current_first_ask is not None and current_first_ask >= 0.96:
+            ta.reached_winner_zone = True
+        
+        # ─────────────────────────────────────────────────────────────────────────
+        # REGLA 1: Si AHORA está ≥0.96 → HOLD (mantener, no buscar segunda pata)
+        # ─────────────────────────────────────────────────────────────────────────
+        if current_first_ask is not None and current_first_ask >= 0.96:
+            if not ta.logged_hold_winner:
+                ta.logged_hold_winner = True
+                logger.ok(
+                    f"[TA] 🏆 HOLD WINNER  {ta.first_side}@{ta.first_px:.3f} "
+                    f"ahora {current_first_ask:.3f} (≥0.96)  "
+                    f"→ mantener hasta resolución (ganancia casi segura)",
+                    icon="🏆"
+                )
+                state.record_observation("TA_HOLD_WINNER")
+            return  # NO buscar segunda pata mientras esté ≥0.96
+        
+        # ─────────────────────────────────────────────────────────────────────────
+        # REGLA 2: Si ESTUVO en ≥0.96 pero ahora bajó a <0.90 → BUSCAR EDGE
+        # ─────────────────────────────────────────────────────────────────────────
+        if (
+            ta.reached_winner_zone
+            and current_first_ask is not None
+            and current_first_ask < 0.90
+            and not ta.logged_winner_reversal
+            and not ta.logged_complete
+        ):
+            # Reversión desde winner zone → intentar completar par con cap normal
+            if second_ask is not None and ta.first_px is not None:
+                pair_sum = round(ta.first_px + second_ask, 4)
+                
+                if pair_sum <= cap:  # Cap configurado (0.88 por defecto)
+                    ta.logged_winner_reversal = True
+                    tok2 = tokens.up_token_id if second_side == "UP" else tokens.down_token_id
+                    leg2_shares = ta.first_shares_filled if ta.first_shares_filled > 0 else shares
+                    oid2 = trader._place_taker_order(tok2, "BUY", second_ask, leg2_shares)
+                    
+                    if oid2:
+                        locked = round(1.0 - pair_sum, 4)
+                        logger.ok(
+                            f"[TA] 💰 EDGE LOCKED (reversión desde winner zone)  "
+                            f"peak={ta.absolute_peak:.3f} → ahora={current_first_ask:.3f}  "
+                            f"{ta.first_side}={ta.first_px:.3f} + {second_side}={second_ask:.3f}  "
+                            f"costo={pair_sum:.3f}  locked={locked:+.4f}/share",
+                            icon="💰"
+                        )
+                        trader._record_box_fill(
+                            tokens, second_side, tok2, second_ask, leg2_shares,
+                            strategy="temporal_arb"
+                        )
+                        ta.logged_complete = True
+                        ta.phase = "complete"
+                        state.record_observation("TA_EDGE_LOCKED_REVERSAL")
+                        return
+
+
+        # ── Stop-loss logic: three independent triggers, evaluated every tick ──
+        # Outer guard only checks that we have a position and a current ask.
+        # Each path has its own enabled flag and condition so a momentary
+        # ask=None or a slow time_since_entry doesn't suppress the others:
+        #   - CATASTROPHIC:   loss ≥ catastrophic_loss_pct (default 50%) — fires
+        #                     immediately, no time gate. Caps the worst case.
+        #   - TIME_THRESHOLD: held ≥ stop_loss_time_sec AND loss ≥ threshold.
+        #                     Original behavior — let the position breathe.
+        #   - TRAILING_STOP:  drawdown from peak ≥ trailing_stop_pct. No time
+        #                     gate; can fire on the first tick after entry if
+        #                     the price never rallied.
+        # Peak tracking happens inside the same guard so we never compare
+        # against a stale peak that was set before a price feed gap.
+        if (
+            not ta.stop_loss_fired
+            and ta.first_px is not None
+            and current_first_ask is not None
+            and ta.entry_timestamp is not None
+        ):
+            # Always update peak when we have a fresh ask — used by trailing.
+            if trailing_stop_enabled:
+                if ta.first_leg_peak_ask is None:
+                    ta.first_leg_peak_ask = current_first_ask
+                else:
+                    ta.first_leg_peak_ask = max(ta.first_leg_peak_ask, current_first_ask)
+
+            time_since_entry = time.time() - ta.entry_timestamp
+            loss_pct = (ta.first_px - current_first_ask) / ta.first_px
+            drawdown = (
+                (ta.first_leg_peak_ask - current_first_ask) / ta.first_leg_peak_ask
+                if ta.first_leg_peak_ask else 0.0
+            )
+
+            # Path C: catastrophic loss — fire first, no time gate
+            if (
+                stop_loss_enabled
+                and loss_pct >= catastrophic_loss_pct
+                and _execute_stop_loss(ctx, ta, current_first_ask, "CATASTROPHIC_LOSS")
+            ):
+                return
+
+            # Path 1: time-based stop — sustained loss after a minimum hold
+            if (
+                stop_loss_enabled
+                and time_since_entry >= stop_loss_time_sec
+                and loss_pct >= stop_loss_threshold
+                and _execute_stop_loss(ctx, ta, current_first_ask, "TIME_THRESHOLD")
+            ):
+                return
+
+            # Path 2: trailing stop — drawdown from peak, no time gate
+            if (
+                trailing_stop_enabled
+                and drawdown >= trailing_stop_pct
+                and _execute_stop_loss(ctx, ta, current_first_ask, "TRAILING_STOP")
+            ):
+                return
+
+            # Diagnostic — log every ~20s so we can see what the eval sees
+            # without spamming the log every 4s tick. Throttled per-window.
+            last_log = getattr(ta, "_last_stop_eval_log", 0.0)
+            if time.time() - last_log >= 20.0:
+                ta._last_stop_eval_log = time.time()
+                logger.info(
+                    f"[TA] 🩺 STOP_EVAL  "
+                    f"t+{time_since_entry:.1f}s  "
+                    f"loss={loss_pct:+.1%}  "
+                    f"drawdown={drawdown:+.1%}  "
+                    f"px={ta.first_px:.3f}→{current_first_ask:.3f}  "
+                    f"peak={ta.first_leg_peak_ask:.3f}",
+                    icon="🩺",
+                )
 
         # Path A: normal pair completion — second leg is cheap enough
         if (
@@ -444,7 +716,7 @@ def _observe(ctx: StrategyContext) -> None:
             return
 
         # Gate 1: too late for normal directional entry
-        if secs < q_cut:
+        if secs < 30:
             ta.phase = "closed"
             state.record_skip("TA_SKIP_LATE")
             # Distinguish two cases: either the bot started into an already-running
@@ -462,10 +734,11 @@ def _observe(ctx: StrategyContext) -> None:
 
         # Gate 2: fetch the window's opening price (the "strike") once per window.
         if ta.strike is None:
-            open_px = get_current_window_open(symbol, window_ts)
+            open_px = get_strike(window_ts, symbol)
             if open_px is None:
                 return
             ta.strike = open_px
+            logger.info(f"[TA] ✅ Strike obtenido: ${ta.strike:,.2f}", icon="⚡")
 
         # Gate 3: check BTC spot vs strike to identify the leader
         spot = getattr(state, "spot_price", None)
@@ -476,12 +749,87 @@ def _observe(ctx: StrategyContext) -> None:
             spot, ta.strike, ask_up, ask_dn, min_itm, min_ask, max_ask
         )
 
+        # ── Technical indicator filters (applied BEFORE entry) ────────────────────
+        # Only check if we have a valid side candidate
+        if side is not None:
+            from ..indicators import get_atr, get_rsi, get_volume_ratio
+
+            # Filter 1: ATR normalized impulse
+            if use_atr:
+                atr = get_atr(symbol, 14)
+                if atr and atr > 0 and ta.strike:
+                    impulse_dollars = abs(spot - ta.strike) if spot else 0
+                    norm_impulse = impulse_dollars / atr
+                    if norm_impulse < min_norm_impulse:
+                        logger.info(
+                            f"[M$] ⏭ SKIP_WEAK_IMPULSE  "
+                            f"impulse=${impulse_dollars:.2f}  atr=${atr:.2f}  "
+                            f"norm={norm_impulse:.2f}ATR < {min_norm_impulse:.2f}ATR",
+                            icon="⏭",
+                        )
+                        state.record_skip("TA_SKIP_WEAK_IMPULSE")
+                        return
+
+            # Filter 2: RSI overbought/oversold
+            if use_rsi:
+                rsi = get_rsi(symbol, 14)
+                if rsi is not None:
+                    if side == "UP" and rsi > rsi_overbought:
+                        logger.info(
+                            f"[M$] ⏭ SKIP_RSI_OVERBOUGHT  "
+                            f"side=UP  rsi={rsi:.1f} > {rsi_overbought:.1f}  "
+                            f"(posible corrección bajista)",
+                            icon="⏭",
+                        )
+                        state.record_skip("TA_SKIP_RSI_OVERBOUGHT")
+                        return
+                    elif side == "DOWN" and rsi < rsi_oversold:
+                        logger.info(
+                            f"[M$] ⏭ SKIP_RSI_OVERSOLD  "
+                            f"side=DOWN  rsi={rsi:.1f} < {rsi_oversold:.1f}  "
+                            f"(posible rebote alcista)",
+                            icon="⏭",
+                        )
+                        state.record_skip("TA_SKIP_RSI_OVERSOLD")
+                        return
+
+            # Filter 3: Volume ratio (optional, disabled by default)
+            if use_volume:
+                vol_ratio = get_volume_ratio(symbol, 10)
+                if vol_ratio is not None and vol_ratio < min_volume_ratio:
+                    logger.info(
+                        f"[M$] ⏭ SKIP_LOW_VOLUME  "
+                        f"vol_ratio={vol_ratio:.2f}x < {min_volume_ratio:.2f}x  "
+                        f"(impulso sin volumen)",
+                        icon="⏭",
+                    )
+                    state.record_skip("TA_SKIP_LOW_VOLUME")
+                    return
+
+        # Log cada 20 segundos para ver evaluación
+        if int(secs) % 20 < 4:
+            strike_str = f"{ta.strike:.2f}" if ta.strike else "0.00"
+            spot_str = f"{spot:.2f}" if spot else "0.00"
+            ask_up_str = f"{ask_up:.3f}" if ask_up is not None else "None"
+            ask_dn_str = f"{ask_dn:.3f}" if ask_dn is not None else "None"
+            logger.info(
+                f"[TA] 🔍 eval  "
+                f"strike=${strike_str}  "
+                f"spot=${spot_str}  "
+                f"itm={itm_pct:+.3f}% (min={min_itm:.3f}%)  "
+                f"ask_up={ask_up_str}  "
+                f"ask_dn={ask_dn_str}  "
+                f"side={side or 'NONE'}  "
+                f"left={secs:.0f}s",
+                icon="🔍"
+            )
+
         if side is None:
             if abs(itm_pct) >= min_itm:
                 leader_ask = ask_up if itm_pct > 0 else ask_dn
                 if leader_ask is not None and leader_ask > max_ask:
                     logger.info(
-                        f"[TA] SKIP_ASK_HIGH  itm={itm_pct:+.3f}%  "
+                        f"[TA] ⏭ SKIP_ASK_HIGH  itm={itm_pct:+.3f}%  "
                         f"leader_ask={leader_ask:.3f} > {max_ask:.2f}  (mercado ya repriced)",
                         icon="⏭",
                     )
@@ -525,6 +873,8 @@ def _observe(ctx: StrategyContext) -> None:
         ta.first_shares_filled  = slice_sz
         ta.first_cost_sum       = round(px * slice_sz, 4)
         ta.first_px             = px
+        ta.entry_timestamp      = time.time()  # Track entry time for stop-loss
+        ta.first_leg_peak_ask   = px           # Initialize peak at entry price
 
         trader._record_box_fill(
             tokens, side, tok, px, slice_sz, strategy="temporal_arb"
@@ -646,6 +996,66 @@ DESCRIPTOR = StrategyDescriptor(
             label="Hedge max suma",
             minimum=0.60, maximum=0.99, step=0.01,
             hint="Solo hace hedge si entrada + hedge_ask ≤ este valor (default 0.92)",
+        ),
+        # ── Stop-loss ──────────────────────────────────────────────────────────
+        RuntimeField("ta_stop_loss_enabled", "bool", label="Stop-loss activo",
+                     hint="Corta pérdidas cuando la posición cae por debajo del umbral configurado"),
+        RuntimeField(
+            "ta_stop_loss_time_sec", "float",
+            label="Stop-loss tiempo mínimo (s)",
+            minimum=30.0, maximum=180.0, step=10.0,
+            hint="Esperar al menos este tiempo antes de evaluar stop-loss (default 60s)",
+        ),
+        RuntimeField(
+            "ta_catastrophic_loss_pct", "float",
+            label="Stop-loss catastrófico (sin gate de tiempo)",
+            minimum=0.30, maximum=0.80, step=0.05,
+            hint="Ejecutar stop INMEDIATO si pérdida ≥ este % (default 0.50 = 50%). Sin gate de tiempo.",
+        ),
+        RuntimeField(
+            "ta_stop_loss_threshold", "float",
+            label="Stop-loss umbral pérdida",
+            minimum=0.15, maximum=0.50, step=0.05,
+            hint="Ejecutar stop si pérdida ≥ este % del precio de entrada (default 0.25 = 25%)",
+        ),
+        RuntimeField("ta_trailing_stop_enabled", "bool", label="Trailing stop activo",
+                     hint="Corta cuando el precio cae X% desde su máximo alcanzado post-entrada"),
+        RuntimeField(
+            "ta_trailing_stop_pct", "float",
+            label="Trailing stop drawdown",
+            minimum=0.20, maximum=0.50, step=0.05,
+            hint="Ejecutar trailing stop si cae ≥ este % desde el peak (default 0.30 = 30%)",
+        ),
+        # ── Technical Indicators ───────────────────────────────────────────────
+        RuntimeField("ta_use_atr", "bool", label="Usar filtro ATR",
+                     hint="Normalizar impulso por ATR — rechaza señales débiles vs volatilidad"),
+        RuntimeField(
+            "ta_min_normalized_impulse", "float",
+            label="Impulso mínimo (ATR)",
+            minimum=0.3, maximum=2.0, step=0.1,
+            hint="Impulso debe ser ≥ este múltiplo del ATR(14) — default 0.8 = 80%",
+        ),
+        RuntimeField("ta_use_rsi", "bool", label="Usar filtro RSI",
+                     hint="Evitar comprar UP en sobrecompra o DOWN en sobreventa"),
+        RuntimeField(
+            "ta_rsi_overbought", "float",
+            label="RSI sobrecompra",
+            minimum=60.0, maximum=85.0, step=5.0,
+            hint="No comprar UP si RSI > este valor (default 75)",
+        ),
+        RuntimeField(
+            "ta_rsi_oversold", "float",
+            label="RSI sobreventa",
+            minimum=15.0, maximum=40.0, step=5.0,
+            hint="No comprar DOWN si RSI < este valor (default 25)",
+        ),
+        RuntimeField("ta_use_volume", "bool", label="Usar filtro volumen",
+                     hint="Confirmar impulso con volumen elevado (experimental)"),
+        RuntimeField(
+            "ta_min_volume_ratio", "float",
+            label="Ratio volumen mínimo",
+            minimum=1.0, maximum=3.0, step=0.1,
+            hint="Volumen actual debe ser ≥ X veces el promedio (default 1.5)",
         ),
     ),
 )

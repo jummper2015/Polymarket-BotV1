@@ -1,4 +1,4 @@
-"""SQLAlchemy models and DB initialization for Streak Snapper.
+"""SQLAlchemy models and DB initialization for ME$IRVE.
 
 Uses flask_sqlalchemy (already in requirements.txt) with PostgreSQL via psycopg2-binary.
 Shares DATABASE_URL with the TypeScript side (lib/db/).
@@ -47,7 +47,7 @@ def db_context() -> Generator[None, None, None]:
 
 
 class TradeModel(db.Model):
-    """Persisted trade record for both Streak Snapper strategies."""
+    """Persisted trade record for both ME$IRVE strategies."""
 
     __tablename__ = "trades"
 
@@ -81,10 +81,10 @@ class TradeModel(db.Model):
     won         = db.Column(Boolean, nullable=True)                    # True if our direction == outcome
     pnl         = db.Column(Float, nullable=True)                       # profit/loss in USD
 
-    # Who decided the outcome. Binance settles instantly at window close so the
-    # martingale is correct for the next window; Gamma confirms ~3 min later.
-    # 16, not 8: "chainlink" is 9 characters and would be truncated or rejected.
-    resolution_source = db.Column(String(16), nullable=True)   # "binance" | "gamma" | "chainlink"
+    # Who decided the outcome. Coinbase settles instantly at window close so
+    # the martingale is correct for the next window; Gamma confirms ~3 min
+    # later. 16, not 8: "chainlink" is 9 characters and would be truncated.
+    resolution_source = db.Column(String(16), nullable=True)   # "coinbase" | "gamma" | "chainlink"
 
     # Timestamps
     opened_at   = db.Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

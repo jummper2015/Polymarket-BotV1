@@ -201,6 +201,21 @@ def main() -> None:
             ta_hedge_enabled=cfg.ta_hedge_enabled,
             ta_hedge_drop_pct=cfg.ta_hedge_drop_pct,
             ta_hedge_max_sum=cfg.ta_hedge_max_sum,
+            # TA — Stop-loss / Trailing-stop (wire-up 2026-09-13)
+            ta_stop_loss_enabled=cfg.ta_stop_loss_enabled,
+            ta_stop_loss_time_sec=cfg.ta_stop_loss_time_sec,
+            ta_stop_loss_threshold=cfg.ta_stop_loss_threshold,
+            ta_catastrophic_loss_pct=cfg.ta_catastrophic_loss_pct,
+            ta_trailing_stop_enabled=cfg.ta_trailing_stop_enabled,
+            ta_trailing_stop_pct=cfg.ta_trailing_stop_pct,
+            # TA — Technical indicator filters
+            ta_use_atr=cfg.ta_use_atr,
+            ta_min_normalized_impulse=cfg.ta_min_normalized_impulse,
+            ta_use_rsi=cfg.ta_use_rsi,
+            ta_rsi_overbought=cfg.ta_rsi_overbought,
+            ta_rsi_oversold=cfg.ta_rsi_oversold,
+            ta_use_volume=cfg.ta_use_volume,
+            ta_min_volume_ratio=cfg.ta_min_volume_ratio,
             # Fase B — Near-Resolution Capture
             nrc_enabled=cfg.nrc_enabled,
             nrc_min_ask=cfg.nrc_min_ask,

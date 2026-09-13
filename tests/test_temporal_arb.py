@@ -237,8 +237,10 @@ class TestObserveIdle:
     def _call(self, state, tokens, trader, secs=200.0, strike=STRIKE):
         with (
             patch("bot.strategies.temporal_arb._get_window") as gw,
-            patch("bot.binance_api.get_current_window_open",
-                  return_value=strike),
+            patch("bot.polymarket_price.get_strike", return_value=strike),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.indicators.get_volume_ratio", return_value=None),
             patch("bot.logger.info"),
             patch("bot.logger.ok"),
             patch("bot.logger.warn"),
@@ -294,11 +296,14 @@ class TestObserveIdle:
         trader._place_taker_order.assert_not_called()
 
     def test_skip_late_when_cutoff_passed(self):
+        # The directional entry gate closes at secs < 30 only (Gate 1 in
+        # _observe's IDLE phase). Earlier in the window the bot still buys
+        # if a signal fires — even when there's less than q_cut time left.
         skips = []
         state = _make_state(ask_up=0.48, ask_dn=0.54, spot_price=60060.0, skips=skips)
         tokens = _make_tokens()
         trader = _make_trader()
-        win = self._call(state, tokens, trader, secs=100.0)  # < 150 cutoff
+        win = self._call(state, tokens, trader, secs=20.0)  # < 30 cutoff
         assert win.phase == "closed"
         assert "TA_SKIP_LATE" in skips
         trader._place_taker_order.assert_not_called()
@@ -312,11 +317,12 @@ class TestObserveIdle:
         assert win.phase == "idle"
 
     def test_strike_fetch_failure_stays_idle(self):
-        # Binance returns None for window open — retry next tick
+        # Polymarket price API returns None — retry next tick
         with (
             patch("bot.strategies.temporal_arb._get_window") as gw,
-            patch("bot.binance_api.get_current_window_open",
-                  return_value=None),
+            patch("bot.polymarket_price.get_strike", return_value=None),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
             patch("bot.logger.info"),
             patch("bot.logger.warn"),
         ):
@@ -330,18 +336,20 @@ class TestObserveIdle:
         trader._place_taker_order.assert_not_called()
 
     def test_strike_cached_after_first_fetch(self):
-        """Second tick should NOT call get_current_window_open again."""
+        """Second tick should NOT call get_strike again."""
         with (
             patch("bot.strategies.temporal_arb._get_window") as gw,
-            patch("bot.binance_api.get_current_window_open",
+            patch("bot.polymarket_price.get_strike",
                   return_value=None) as mock_fetch,
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
             patch("bot.logger.info"),
             patch("bot.logger.warn"),
         ):
             tokens = _make_tokens()
             state = _make_state(ask_up=0.62, ask_dn=0.40, spot_price=60060.0)
             trader = _make_trader()
-            # Pre-load the strike so get_current_window_open shouldn't be called
+            # Pre-load the strike so get_strike shouldn't be called
             win = _TAWindow(window_ts=tokens.window_ts, strike=STRIKE)
             gw.return_value = win
             _observe(_ctx(state, tokens, trader))
@@ -350,8 +358,9 @@ class TestObserveIdle:
     def test_taker_order_failure_stays_idle(self):
         with (
             patch("bot.strategies.temporal_arb._get_window") as gw,
-            patch("bot.binance_api.get_current_window_open",
-                  return_value=STRIKE),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
             patch("bot.logger.info"),
             patch("bot.logger.warn"),
         ):
@@ -369,8 +378,9 @@ class TestObserveHalfOpen:
     def _call(self, state, tokens, trader, win, secs=200.0):
         with (
             patch("bot.strategies.temporal_arb._get_window", return_value=win),
-            patch("bot.binance_api.get_current_window_open",
-                  return_value=STRIKE),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
             patch("bot.logger.info"),
             patch("bot.logger.ok"),
             patch("bot.logger.warn"),

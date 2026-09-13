@@ -429,7 +429,7 @@ def _run_bailout(
     coa_hold: float, symbol: str,
 ) -> None:
     """T-90 bailout: hold the naked leg only if COA strongly favors it."""
-    from ..binance_api import get_atr4
+    from ..coinbase_api import get_atr4
     from ..polymarket_price import get_strike_and_mark
 
     other_side = "DOWN" if filled_side == "UP" else "UP"

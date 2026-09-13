@@ -40,7 +40,7 @@ from typing import Optional
 from ..runtime_field import RuntimeField
 from .base import StrategyContext, StrategyDescriptor
 
-# Imports of binance_api and polymarket_price are inside the function body.
+# Imports of coinbase_api and polymarket_price are inside the function body.
 # bot.state imports this package (to collect strategy ids), and bot.logger
 # imports bot.state — closing the loop at module level makes nothing start.
 
@@ -120,7 +120,7 @@ def size_shares(base_bet: float, ask: float) -> float:
 
 def _evaluate_late(ctx: StrategyContext) -> list:
     """One tick. Returns a StreakSignal if all gates pass, else []."""
-    from ..binance_api import get_atr4
+    from ..coinbase_api import get_atr4
     from ..polymarket_price import get_strike_and_mark
     from ..strategy_streak import StreakSignal
     from .. import logger
