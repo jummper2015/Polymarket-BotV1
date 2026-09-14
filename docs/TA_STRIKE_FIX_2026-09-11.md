@@ -160,3 +160,96 @@ sqlite3 /opt/polymarket-bot/data/streak_snapper.db "SELECT key, value FROM bot_c
 1. **`_get_candles` y `list(reversed(data))` en coinbase_api.py** — el comentario dice "newest first, reverse" pero la API actual de Coinbase devuelve oldest first. El bug del strike es uno; cualquier otro consumidor de `_get_candles` (TA spot, LPT, scripts) puede tener el mismo problema. Auditoría recomendada.
 2. **Observabilidad del IDLE branch en `_observe`** — cuando el strike fetch falla, `_observe()` aborta sin loguear nada. Considerar añadir un contador de fallos consecutivos y un warn cada 30-60s.
 3. **`get_strike` debería ser el path por defecto** para todos los descriptores que necesiten el strike — TA era el único que seguía yendo a Coinbase. El commit `25d1609` ("cambiar spot price a Binance") tocó spot pero no strike.
+
+---
+
+## v2 — fix 30-min aggregation bug (2026-09-13)
+
+**Severidad**: alta — el bot operaba con strikes desfasados $25–$214 vs el strike real por ventana.
+**Estado**: aplicado en `bot/polymarket_price.py` + `bot/coinbase_api.py`.
+
+### Síntoma
+
+Strike logged idéntico durante 11 ventanas 5-min consecutivas (50+ min). Strike `76,763.33` reportado para boundaries `13:05, 13:10, …, 13:55` cuando Coinbase mostraba opens distintos en cada uno:
+
+| Boundary | Coinbase open | Bot strike | Diferencia |
+|---|---:|---:|---:|
+| 13:25 | 76642.42 | 76763.33 | $120.91 |
+| 13:30 | 76549.56 | 76763.33 | $213.77 |
+| 13:55 | 76838.12 | 76763.33 | $74.79 |
+
+### Causa raíz
+
+`polymarket.com/api/crypto/crypto-price?eventStartTime=X` **no respeta el evento de 5 min** — devuelve agregados de 30 min. Para queries dentro del mismo agregado 30-min, retorna los mismos `openPrice`/`closePrice`:
+
+| Query | openPrice | closePrice | completed |
+|---|---|---|---|
+| 2026-09-13T13:10:00Z | 76763.33 | 76853.02 | True |
+| 2026-09-13T13:30:00Z | 76763.33 | 76853.02 | True |
+| 2026-09-13T13:55:00Z | 76763.33 | 76853.02 | True |
+| 2026-09-13T14:00:00Z | 76853.01 | 76930.01 | False |
+
+El API sólo cambia cuando cruza un boundary 30-min. Como el `eventStartTime` del query cae en el medio de la ventana 30-min `13:00-13:30`, devuelve el último agregado cerrado disponible.
+
+El fix original (v1, 2026-09-11) verificó una sola ventana afortunada donde el agregado 30-min coincidía con la ventana 5-min consultada — el bug de agregación pasó desapercibido.
+
+### Fix
+
+**`bot/coinbase_api.py`** — nueva función `get_5min_candle_close_at(window_ts, symbol)`:
+```python
+def get_5min_candle_close_at(window_ts, symbol="btc"):
+    raw = _get_candles(300, product_id=pair_for(symbol),
+                       start=window_ts-300, end=window_ts+1)
+    if not raw: return None
+    for candle in raw:
+        if int(candle[0]) == int(window_ts):
+            close = float(candle[4]); return close if close > 0 else None
+    last = raw[-1]
+    return float(last[4]) if float(last[4]) > 0 else None
+```
+
+Devuelve el **close** de la vela 5-min Coinbase **completada** que termina en `window_ts` (= strike aproximado del 5-min market que arranca en `window_ts`).
+
+**`bot/polymarket_price.py:get_strike`** ahora:
+
+1. Cache hit → si el valor cacheado es bit-idéntico al strike de la ventana previa, descartar y forzar fallback Coinbase.
+2. Fetch Polymarket → si `openPrice` es bit-idéntico al strike previo, descartar (leak signature) y forzar fallback Coinbase.
+3. Fallback → `coinbase_api.get_5min_candle_close_at(window_ts, symbol)`.
+4. Cachea el resultado (Polymarket o Coinbase) en `_STRIKE_CACHE[(symbol, window_ts)]`.
+
+**`get_strike_and_mark`** aplica la misma validación al `openPrice` pero **conserva el `closePrice` (mark) de Polymarket** — el mark sí es live y útil, sólo el strike sufre del leak 30-min.
+
+### Verificación
+
+Tras el deploy, comprobar:
+
+```bash
+# 1. Warnings de strike sospechoso (durante la primera media hora post-restart)
+journalctl -u polymarket-bot --since "30 min ago" | grep "30-min\|Coinbase fallback"
+# Esperado: algunos STRIKE_SAME_AS_PREV warnings durante transiciones de boundary 30-min
+
+# 2. Strike varía entre ventanas 5-min (antes era idéntico durante 50+ min)
+grep "Strike obtenido" /opt/polymarket-bot/logs/bot.log | tail -12
+# Esperado: 8 valores distintos para las últimas 8 ventanas
+
+# 3. Suite de tests local (sin deploy)
+python -m pytest tests/test_polymarket_price.py -v
+# Esperado: 13 passed
+```
+
+### Tests añadidos
+
+`tests/test_polymarket_price.py` (nuevo, 13 tests):
+- Happy path: Polymarket OK → se usa su valor.
+- Cache: 3 calls en la misma ventana → 1 fetch.
+- Leak detection: Polymarket devuelve mismo valor que ventana previa → fallback Coinbase.
+- First-window guard: sin cache previa, no se fuerza fallback.
+- Polymarket None → fallback Coinbase.
+- Ambos fallan → `None`.
+- Cache stale heredado (pre-fix) → se sobreescribe con Coinbase.
+- `get_strike_and_mark` happy path (mark live, strike cached).
+- `get_strike_and_mark` con leak (fallback en strike, mark conservado).
+- `get_strike_and_mark` con Polymarket caído (None).
+- `get_5min_candle_close_at` directo: retorna close.
+- `get_5min_candle_close_at` sin datos → None.
+- `get_5min_candle_close_at` cierra ≤ 0 → None.

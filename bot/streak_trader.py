@@ -26,7 +26,6 @@ import requests
 from . import logger
 from .coinbase_api import get_5min_candles, get_window_direction
 from .config import Config
-from . import regime
 from . import strategies
 from .db import TradeModel, db as _db, db_context
 from .db import MartingaleStateModel
@@ -525,36 +524,16 @@ class StreakSnapperTrader(threading.Thread):
 
     # ── regime gate ───────────────────────────────────────────────────────────
 
-    def _check_regime(self) -> regime.RegimeVerdict:
+    def _check_regime(self) -> "_RegimeVerdict":
         """Ask the regime filters whether this window should be traded at all.
 
-        Candles are only fetched when a percentile-based filter is actually
-        configured — with everything at its default the gate costs nothing, and
-        an hours-only setup doesn't need price history either.
+        Kept as a stub: the regime module (hours/volatility/range filters) was
+        removed because every filter shipped off by default and no live data
+        has ever been gathered to validate them. The dashboard still records
+        `SKIP_*` reasons in `state.skips`, so a future re-introduction has the
+        wiring ready.
         """
-        state = self.state
-        hours = getattr(state, "ss_trading_hours", "") or ""
-        vol_min = getattr(state, "ss_vol_min_pct", 0.0)
-        vol_max = getattr(state, "ss_vol_max_pct", 100.0)
-        range_max = getattr(state, "ss_range_max_pct", 100.0)
-
-        needs_candles = vol_min > 0.0 or vol_max < 100.0 or range_max < 100.0
-        candles: list = []
-        if needs_candles:
-            candles = get_5min_candles(regime.PERCENTILE_LOOKBACK + 50, self.symbol) or []
-            if not candles:
-                # No history means no basis to refuse. Blocking here would turn
-                # a Binance hiccup into a silent trading halt.
-                logger.warn("[M$] sin velas para el filtro de régimen — no se filtra")
-                return regime.hours_filter(hours)
-
-        return regime.evaluate(
-            candles,
-            hours_spec=hours,
-            vol_min_pct=vol_min,
-            vol_max_pct=vol_max,
-            range_max_pct=range_max,
-        )
+        return _ALLOWED
 
     # ── signal execution ──────────────────────────────────────────────────────
 
@@ -1429,3 +1408,21 @@ class StreakSnapperTrader(threading.Thread):
         except Exception as exc:
             logger.err(f"[M$] CLOB V2 auth error: {exc}")
             return None
+
+
+# Inline sentinel for the regime gate. Mirrors the small surface area
+# (allowed/reason/detail) that callers use. Module-level so it's resolved
+# before StreakSnapperTrader._check_regime is ever called.
+class _RegimeVerdict:
+    __slots__ = ("allowed", "reason", "detail")
+
+    def __init__(self, allowed: bool, reason: str = "", detail: str = "") -> None:
+        self.allowed = allowed
+        self.reason = reason
+        self.detail = detail
+
+    def __bool__(self) -> bool:
+        return self.allowed
+
+
+_ALLOWED = _RegimeVerdict(True)

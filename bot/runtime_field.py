@@ -63,13 +63,30 @@ class RuntimeField:
                 return (parsed in self.choices), parsed
 
             if self.kind == "hours":
-                # Imported here: bot.regime imports nothing from this module, but
-                # keeping the dependency local documents that this is the only
-                # place a field needs to know what an hours spec looks like.
-                from .regime import is_valid_hours_spec
+                # Inline hours-spec validator. The original `is_valid_hours_spec`
+                # lived in `bot.regime` (now removed). The format is a
+                # comma-separated list of "lo-hi" UTC hour ranges ("13-21,22-2");
+                # every non-empty fragment must parse to a valid range.
+                def _is_valid(spec: str) -> bool:
+                    fragments = [c.strip() for c in (spec or "").split(",") if c.strip()]
+                    if not fragments:
+                        return True
+                    parsed = 0
+                    for frag in fragments:
+                        if "-" not in frag:
+                            return False
+                        lo_s, _, hi_s = frag.partition("-")
+                        try:
+                            lo, hi = int(lo_s), int(hi_s)
+                        except ValueError:
+                            return False
+                        if not (0 <= lo <= 24 and 0 <= hi <= 24) or lo == hi:
+                            return False
+                        parsed += 1
+                    return parsed == len(fragments)
 
                 parsed = str(value).strip()
-                return is_valid_hours_spec(parsed), parsed
+                return _is_valid(parsed), parsed
 
             parsed = int(value) if self.kind == "int" else float(value)
         except (TypeError, ValueError):

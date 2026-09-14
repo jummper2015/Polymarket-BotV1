@@ -13,74 +13,11 @@ import time
 
 from . import logger
 from .auth import auth_enabled, verify_startup_config
-from .chainlink_feed import ChainlinkTwapFeed
-from .chainlink_recorder import ChainlinkRecorder
 from .config import Config, coerce_overrides, load_config, min_recovering_factor
 from .dashboard import create_app, start_price_fetcher
 from .db import get_all_config, init_db
 from .state import STATE, active_states, state_for
 from .streak_trader import StreakSnapperTrader
-
-
-def _start_status_publisher(feed: ChainlinkTwapFeed, window_s: int) -> None:
-    """Push feed status into STATE once a second for the dashboard.
-
-    A poll rather than a push from `on_tick`: the tile has to keep reporting
-    while the feed is *silent*, and silence is exactly when it matters.
-    """
-    def _publish() -> None:
-        while True:
-            time.sleep(1.0)
-            try:
-                spot = STATE.spot_price
-                divergence = (
-                    feed.divergence(spot, window_s) if spot else None
-                )
-                STATE.set_chainlink_status(feed.status(), divergence)
-            except Exception:
-                pass  # a dashboard tile is never worth crashing a thread over
-
-    threading.Thread(target=_publish, name="chainlink-status", daemon=True).start()
-
-
-def _start_chainlink_feed(cfg: Config) -> ChainlinkTwapFeed | None:
-    """Start the TWAP feed if enabled, and wire the tape recorder to it.
-
-    Off by default. The topics only went live 4-ago-2026, and even once they
-    work this feed can't settle or originate a trade — it filters
-    (docs/CHAINLINK_TWAP.md §3). Any failure here is logged and swallowed: the
-    bot traded fine without this feed and must keep doing so.
-    """
-    if not cfg.cl_twap_enabled:
-        logger.info("[chainlink] feed desactivado (CL_TWAP_ENABLED=false)", icon="🔗")
-        return None
-
-    recorder = ChainlinkRecorder(retention_days=cfg.cl_tick_retention_days) \
-        if cfg.cl_record_ticks else None
-
-    def _on_tick(symbol, window_s, value, observed_at, received_at):
-        if recorder is not None:
-            recorder.record(symbol, window_s, value, observed_at, received_at)
-
-    try:
-        feed = ChainlinkTwapFeed(
-            stale_seconds=cfg.cl_twap_stale_seconds,
-            on_tick=_on_tick,
-        )
-        feed.start()
-    except Exception as exc:
-        logger.warn(f"[chainlink] no se pudo arrancar el feed: {exc} — el bot sigue")
-        return None
-
-    STATE.configure(cl_enabled=True)
-    _start_status_publisher(feed, int(cfg.cl_twap_window or 30))
-    logger.ok(
-        f"[chainlink] feed TWAP arrancado  ventana={cfg.cl_twap_window}s  "
-        f"frescura<{cfg.cl_twap_stale_seconds}s  "
-        f"grabador={'on' if recorder else 'off'}",
-        icon="🔗",
-    )
-    return feed
 
 
 def _apply_persisted_overrides() -> None:
@@ -231,11 +168,6 @@ def main() -> None:
             ss_vol_min_pct=cfg.ss_vol_min_pct,
             ss_vol_max_pct=cfg.ss_vol_max_pct,
             ss_range_max_pct=cfg.ss_range_max_pct,
-            cl_twap_enabled=cfg.cl_twap_enabled,
-            cl_twap_window=cfg.cl_twap_window,
-            cl_twap_stale_seconds=cfg.cl_twap_stale_seconds,
-            cl_divergence_max=cfg.cl_divergence_max,
-            cl_record_ticks=cfg.cl_record_ticks,
         )
 
     if cfg.is_real and not cfg.has_credentials:
@@ -257,9 +189,6 @@ def main() -> None:
 
     # Start BTC price fetcher (CoinGecko, for dashboard display)
     start_price_fetcher()
-
-    # Start Chainlink TWAP feed (no-op unless CL_TWAP_ENABLED)
-    cl_feed = _start_chainlink_feed(cfg)
 
     # One trader thread per market. They share nothing but the config: each has
     # its own BotState, its own martingale row and its own DB queries.
@@ -305,8 +234,6 @@ def main() -> None:
         )
         for trader in traders:
             trader.stop()
-        if cl_feed is not None:
-            cl_feed.stop()
         raise SystemExit(1)
 
     logger.ok(

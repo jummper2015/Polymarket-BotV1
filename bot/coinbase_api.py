@@ -284,3 +284,38 @@ def get_current_window_open(symbol: str = "btc", window_ts: Optional[int] = None
 
     open_px = float(candle[3])
     return open_px if open_px > 0 else None
+
+
+def get_5min_candle_close_at(
+    window_ts: int, symbol: str = "btc"
+) -> Optional[float]:
+    """Close of the COMPLETED 5-min candle whose [start, end] window ends at `window_ts`.
+
+    Added 2026-09-13 as the fallback when `polymarket_price.get_strike` detects
+    that the upstream 5-min strike from Polymarket's crypto-price endpoint is
+    actually a 30-min aggregate (same value across multiple 5-min windows).
+
+    Coinbase only returns COMPLETED candles, so this fetches the candle that
+    starts at `window_ts - 300` and ends at `window_ts`. Its close is the BTC
+    price at `window_ts` minus a few seconds — close enough to use as the
+    strike for the 5-min Polymarket market starting at `window_ts`.
+
+    Returns None on any failure (network, missing candle, non-positive price).
+    """
+    start = int(window_ts) - 300
+    end   = int(window_ts) + 1   # +1 to include the boundary candle itself
+    raw = _get_candles(300, product_id=pair_for(symbol), start=start, end=end)
+    if not raw:
+        return None
+
+    # raw is oldest-first; prefer the candle whose ts == window_ts (boundary
+    # candle from the prior window's close).
+    for candle in raw:
+        if int(candle[0]) == int(window_ts):
+            close = float(candle[4])
+            return close if close > 0 else None
+
+    # Fallback: most recent candle in the returned range.
+    last = raw[-1]
+    close = float(last[4])
+    return close if close > 0 else None
