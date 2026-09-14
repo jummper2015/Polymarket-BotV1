@@ -43,3 +43,8 @@ data/*.csv
 
 # Documentación externa y notas de revisión
 revisar*.md
+
+# Local deployment artifacts — backups de .env, systemd units, nginx configs,
+# tarballs con DB + secrets, snapshots pre/post-migración de datacenter.
+# NUNCA commitear: contienen PRIVATE_KEY, POLY_API_KEY, DASHBOARD_PASSWORD, etc.
+.backups/
