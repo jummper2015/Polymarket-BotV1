@@ -354,18 +354,34 @@ def test_get_5min_candle_open_at_returns_open_at_window_ts():
 
 
 def test_get_5min_candle_open_at_returns_none_when_window_ts_not_in_response():
-    """If the requested window_ts is not in the candle list, return None
-    (do NOT fall back to a wrong candle — that would silently apply the
-    previous window's strike to the current window, inverting reads)."""
+    """If the requested window_ts is not in the candle list AND the last
+    candle has a non-positive close, return None (no valid strike available
+    from Coinbase)."""
     from bot import coinbase_api
 
-    # Candle from the previous window — within the response but not the
-    # requested window. Returning its open would be a 5-min-late strike.
-    candle = _coinbase_candle_response(TS_PREV, 70_555.0)
-    with patch.object(coinbase_api, "_get_candles", return_value=candle):
+    # Candle from the previous window — but with a non-positive close, so
+    # even the fallback (last close) is unusable.
+    bad = [[TS_PREV, 0, 0, 0, -1, 0]]
+    with patch.object(coinbase_api, "_get_candles", return_value=bad):
         result = coinbase_api.get_5min_candle_open_at(TS_CURR)
 
     assert result is None
+
+
+def test_get_5min_candle_open_at_falls_back_to_previous_candle_close():
+    """When the boundary candle hasn't been published yet (Coinbase REST has
+    a ~5-30s delay), the previous candle's CLOSE is the best estimate —
+    that's the price at the exact boundary tick, which equals the current
+    candle's open once Coinbase publishes it."""
+    from bot import coinbase_api
+
+    # Previous candle (no boundary candle in response yet).
+    candle = [[TS_PREV, 76057.23, 76148.80, 76081.88, 76087.98, 100.0]]
+    with patch.object(coinbase_api, "_get_candles", return_value=candle):
+        result = coinbase_api.get_5min_candle_open_at(TS_CURR)
+
+    # Returns the close (76087.98), NOT the open (76081.88).
+    assert result == 76087.98
 
 
 def test_get_5min_candle_open_at_returns_none_when_no_data():
