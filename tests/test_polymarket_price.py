@@ -335,17 +335,19 @@ def test_get_strike_and_mark_mark_only_polymarket_call_required():
 
 def test_get_5min_candle_open_at_returns_open_at_window_ts():
     """Direct unit test for the Coinbase OPEN helper that backs the primary
-    strike path. Asks for a 1-second slice starting at window_ts and returns
-    the open of the candle that begins there."""
+    strike path. Asks for a 301-second slice centered on window_ts and returns
+    the open of the candle that begins there. The wide slice is required
+    because Coinbase rejects narrower ranges (1-second slices return [])."""
     from bot import coinbase_api
 
     candle = _coinbase_candle_response(TS_CURR, 70_777.0)
     with patch.object(coinbase_api, "_get_candles", return_value=candle) as mock_gc:
         result = coinbase_api.get_5min_candle_open_at(TS_CURR, "btc")
 
-    # _get_candles was called with the right window (start=TS_CURR, end=TS_CURR+1).
+    # _get_candles was called with the same 301-second slice as
+    # get_5min_candle_close_at (Coinbase rejects narrower ranges).
     args, kwargs = mock_gc.call_args
-    assert kwargs.get("start") == TS_CURR
+    assert kwargs.get("start") == TS_CURR - 300
     assert kwargs.get("end") == TS_CURR + 1
     assert result == 70_777.0
 

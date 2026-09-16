@@ -311,19 +311,25 @@ def get_5min_candle_open_at(
 
     Returns None on any failure (network, missing candle, non-positive open).
     """
-    start = int(window_ts)
-    end   = int(window_ts) + 1   # +1 to include the boundary candle itself
+    # Coinbase's REST candles endpoint rejects ranges narrower than ~one
+    # granularity period (a 1-second slice returns []). Use the same 301-second
+    # slice as `get_5min_candle_close_at` so we get both the previous candle
+    # and the boundary candle; we then pick the boundary candle by ts match.
+    start = int(window_ts) - 300
+    end   = int(window_ts) + 1
     raw = _get_candles(300, product_id=pair_for(symbol), start=start, end=end)
     if not raw:
         return None
 
-    # raw is oldest-first; prefer the candle whose ts == window_ts.
+    # raw is oldest-first; prefer the candle whose ts == window_ts (the one
+    # that *starts* at the boundary, whose open is the strike).
     for candle in raw:
         if int(candle[0]) == int(window_ts):
             open_px = float(candle[3])
             return open_px if open_px > 0 else None
 
-    # Fallback: most recent candle in the returned range.
+    # Fallback: most recent candle in the returned range (the boundary candle
+    # may not be published yet; in that case use the previous candle's tail).
     last = raw[-1]
     open_px = float(last[3])
     return open_px if open_px > 0 else None
