@@ -104,7 +104,7 @@ def test_get_strike_coinbase_wins_even_when_chainlink_disagrees():
     from bot import chainlink_strike, polymarket_price
     from bot import coinbase_api
 
-    cb_response = _coinbase_candle_response(TS_PREV, STRIKE_FROM_COINBASE)
+    cb_response = _coinbase_candle_response(TS_CURR, STRIKE_FROM_COINBASE)
 
     with patch.object(chainlink_strike, "get_strike_at",
                       return_value=CHAINLINK_OFF_BY_A_LOT), \
@@ -123,7 +123,7 @@ def test_get_strike_warns_when_coinbase_and_chainlink_disagree_by_more_than_0_3_
     from bot import chainlink_strike, polymarket_price
     from bot import coinbase_api
 
-    cb_response = _coinbase_candle_response(TS_PREV, STRIKE_FROM_COINBASE)
+    cb_response = _coinbase_candle_response(TS_CURR, STRIKE_FROM_COINBASE)
 
     with patch.object(chainlink_strike, "get_strike_at",
                       return_value=CHAINLINK_OFF_BY_A_LOT), \
@@ -254,7 +254,7 @@ def test_get_strike_overwrites_stale_cache_hit_that_matches_previous_window():
     polymarket_price._STRIKE_CACHE[("btc", TS_PREV)] = STRIKE_PREV
     polymarket_price._STRIKE_CACHE[("btc", TS_CURR)] = STRIKE_PREV  # stale!
 
-    cb_response = _coinbase_candle_response(TS_PREV, 70_050.0)
+    cb_response = _coinbase_candle_response(TS_CURR, 70_050.0)
     with patch.object(coinbase_api, "_get_candles", return_value=cb_response), \
          patch.object(polymarket_price, "fetch_window_price") as mock_poly:
         result = polymarket_price.get_strike(TS_CURR)
@@ -335,36 +335,37 @@ def test_get_strike_and_mark_mark_only_polymarket_call_required():
 
 def test_get_5min_candle_open_at_returns_open_at_window_ts():
     """Direct unit test for the Coinbase OPEN helper that backs the primary
-    strike path. Asks for a 301-second slice centered on window_ts and returns
-    the open of the candle that begins there. The wide slice is required
-    because Coinbase rejects narrower ranges (1-second slices return [])."""
+    strike path. Queries without start/end so the forming candle (current
+    window) is included; returns the open of the candle whose ts matches
+    window_ts."""
     from bot import coinbase_api
 
     candle = _coinbase_candle_response(TS_CURR, 70_777.0)
     with patch.object(coinbase_api, "_get_candles", return_value=candle) as mock_gc:
         result = coinbase_api.get_5min_candle_open_at(TS_CURR, "btc")
 
-    # _get_candles was called with the same 301-second slice as
-    # get_5min_candle_close_at (Coinbase rejects narrower ranges).
+    # _get_candles was called without start/end so the forming candle is
+    # included — querying with start/end filters it out (production bug
+    # surfaced 2026-09-16).
     args, kwargs = mock_gc.call_args
-    assert kwargs.get("start") == TS_CURR - 300
-    assert kwargs.get("end") == TS_CURR + 1
+    assert kwargs.get("start") is None
+    assert kwargs.get("end") is None
     assert result == 70_777.0
 
 
-def test_get_5min_candle_open_at_falls_back_to_last_in_range():
-    """When the requested window's candle isn't in the response (e.g. the
-    boundary tick hasn't been published yet), fall back to the last candle
-    in the returned range rather than returning None."""
+def test_get_5min_candle_open_at_returns_none_when_window_ts_not_in_response():
+    """If the requested window_ts is not in the candle list, return None
+    (do NOT fall back to a wrong candle — that would silently apply the
+    previous window's strike to the current window, inverting reads)."""
     from bot import coinbase_api
 
-    # Candle from the previous window — within the 1-second slice the API
-    # returned the previous candle's tail.
+    # Candle from the previous window — within the response but not the
+    # requested window. Returning its open would be a 5-min-late strike.
     candle = _coinbase_candle_response(TS_PREV, 70_555.0)
     with patch.object(coinbase_api, "_get_candles", return_value=candle):
-        result = coinbase_api.get_5min_candle_open_at(TS_CURR, "btc")
+        result = coinbase_api.get_5min_candle_open_at(TS_CURR)
 
-    assert result == 70_555.0
+    assert result is None
 
 
 def test_get_5min_candle_open_at_returns_none_when_no_data():

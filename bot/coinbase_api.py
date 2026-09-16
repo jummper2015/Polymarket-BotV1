@@ -297,42 +297,42 @@ def get_5min_candle_open_at(
     returns the forming candle with the open frozen at the boundary, so this
     is the freshest per-window strike available.
 
+    Implementation note (2026-09-16 production bug): Coinbase's REST
+    `/products/{id}/candles` endpoint with `?start=&end=` filters out the
+    currently-forming candle — only completed candles in the range are
+    returned. This caused the bot to fall through to the previous window's
+    candle (5-min-late strike) during the current window. The fix is to
+    query without `start/end` ("latest N candles") which DOES include the
+    forming candle, then pick the entry whose timestamp equals `window_ts`.
+
     Differs from `get_5min_candle_close_at` in two ways:
-      - asks for a 1-second slice starting AT `window_ts` (not the prior
-        300-second window), so the returned candle is the one that *begins*
-        at the boundary, not the one that ends there.
+      - queries without `start/end` so the forming candle is included;
       - returns OPEN (the boundary price) instead of CLOSE (the live price
         of the forming candle, which moves).
 
-    Added 2026-09-16 to replace Chainlink as primary strike source after a
-    production bug surfaced where Chainlink's ~30-min heartbeat caused the
-    same strike to be reused across 6+ consecutive 5-min windows, inverting
-    the bot's leader-side reads in volatile moves.
-
     Returns None on any failure (network, missing candle, non-positive open).
+    When None is returned, the caller MUST NOT fall back to any other candle
+    in the response — that would silently apply the previous window's strike
+    to the current window, inverting direction reads. Fall through to
+    Chainlink instead.
     """
-    # Coinbase's REST candles endpoint rejects ranges narrower than ~one
-    # granularity period (a 1-second slice returns []). Use the same 301-second
-    # slice as `get_5min_candle_close_at` so we get both the previous candle
-    # and the boundary candle; we then pick the boundary candle by ts match.
-    start = int(window_ts) - 300
-    end   = int(window_ts) + 1
-    raw = _get_candles(300, product_id=pair_for(symbol), start=start, end=end)
+    # Query WITHOUT start/end so the forming candle (current window) is
+    # included. Coinbase returns the most recent 300 5-min candles, oldest-
+    # first, which covers ~25 hours of history — enough for the bot's runtime
+    # (we always query the current window) and recent lookbacks.
+    raw = _get_candles(300, product_id=pair_for(symbol))
     if not raw:
         return None
 
-    # raw is oldest-first; prefer the candle whose ts == window_ts (the one
-    # that *starts* at the boundary, whose open is the strike).
+    # Find the candle whose ts == window_ts. Do NOT fall back to raw[-1] —
+    # that would silently return the previous window's open as the current
+    # window's strike (a 5-min lag that inverts direction reads).
     for candle in raw:
         if int(candle[0]) == int(window_ts):
             open_px = float(candle[3])
             return open_px if open_px > 0 else None
 
-    # Fallback: most recent candle in the returned range (the boundary candle
-    # may not be published yet; in that case use the previous candle's tail).
-    last = raw[-1]
-    open_px = float(last[3])
-    return open_px if open_px > 0 else None
+    return None
 
 
 def get_5min_candle_close_at(
