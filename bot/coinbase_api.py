@@ -286,6 +286,49 @@ def get_current_window_open(symbol: str = "btc", window_ts: Optional[int] = None
     return open_px if open_px > 0 else None
 
 
+def get_5min_candle_open_at(
+    window_ts: int, symbol: str = "btc"
+) -> Optional[float]:
+    """Open of the 5-min candle that STARTS at `window_ts` — the strike.
+
+    This is the price Polymarket compares the close against to resolve the
+    up/down market for the window starting at `window_ts`. Coinbase candles
+    are 5-min aligned on the same grid Polymarket uses, and the REST endpoint
+    returns the forming candle with the open frozen at the boundary, so this
+    is the freshest per-window strike available.
+
+    Differs from `get_5min_candle_close_at` in two ways:
+      - asks for a 1-second slice starting AT `window_ts` (not the prior
+        300-second window), so the returned candle is the one that *begins*
+        at the boundary, not the one that ends there.
+      - returns OPEN (the boundary price) instead of CLOSE (the live price
+        of the forming candle, which moves).
+
+    Added 2026-09-16 to replace Chainlink as primary strike source after a
+    production bug surfaced where Chainlink's ~30-min heartbeat caused the
+    same strike to be reused across 6+ consecutive 5-min windows, inverting
+    the bot's leader-side reads in volatile moves.
+
+    Returns None on any failure (network, missing candle, non-positive open).
+    """
+    start = int(window_ts)
+    end   = int(window_ts) + 1   # +1 to include the boundary candle itself
+    raw = _get_candles(300, product_id=pair_for(symbol), start=start, end=end)
+    if not raw:
+        return None
+
+    # raw is oldest-first; prefer the candle whose ts == window_ts.
+    for candle in raw:
+        if int(candle[0]) == int(window_ts):
+            open_px = float(candle[3])
+            return open_px if open_px > 0 else None
+
+    # Fallback: most recent candle in the returned range.
+    last = raw[-1]
+    open_px = float(last[3])
+    return open_px if open_px > 0 else None
+
+
 def get_5min_candle_close_at(
     window_ts: int, symbol: str = "btc"
 ) -> Optional[float]:

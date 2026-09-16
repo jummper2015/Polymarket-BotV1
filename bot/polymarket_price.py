@@ -6,17 +6,21 @@
 
 Resolution order, in priority:
 
-1. **Chainlink BTC/USD on Ethereum mainnet** (aggregator
+1. **Coinbase** — open of the 5-min candle that STARTS at `window_ts`.
+   Per-window strike aligned to Polymarket's 5-min boundaries. Coinbase's
+   REST endpoint returns the forming candle with its open frozen at the
+   boundary, so this is the freshest possible per-window strike. Default
+   primary since 2026-09-16, replacing Chainlink (whose ~30-min heartbeat
+   was reusing the same strike across 6+ consecutive 5-min windows and
+   inverting the bot's leader-side reads in volatile moves).
+
+2. **Chainlink BTC/USD on Ethereum mainnet** (aggregator
    `0xF403...eE88c`, queried via public RPCs in
    `bot.chainlink_strike`). Closest match to Polymarket's display because
    Polymarket's BTC/USD TWAP stream aggregates the same exchanges the
-   legacy Data Feed tracks. Default source for 24h A/B comparison vs
-   Coinbase.
-
-2. **Coinbase** — close of the completed 5-min candle ending at `window_ts`.
-   Always returns a per-window 5-min strike (Coinbase candles are 5-min
-   aligned, contiguously). Fallback when Chainlink RPC fails. Typically
-   within $1–$50 of Chainlink depending on volatility.
+   legacy Data Feed tracks. Used here as a *fallback* when Coinbase is
+   unavailable and as a *sanity cross-check* (warn if Coinbase open and
+   Chainlink latest differ by >0.3%).
 
 3. **Polymarket's `crypto-price` endpoint** — used only as a tertiary
    fallback when both above fail. The `openPrice` is a 30-min aggregate
@@ -145,11 +149,15 @@ def get_strike(window_ts: int, symbol: str = "btc") -> Optional[float]:
       1. Cache hit (validates against previous cached strike: if identical,
          the cached value is a stale aggregate leak; treat as miss and
          re-fetch from Chainlink).
-      2. **Chainlink BTC/USD on Ethereum** — closest match to Polymarket's
-         BTC/USD TWAP stream.
-      3. **Coinbase** — close of the completed 5-min candle ending at
-         `window_ts`. Per-window 5-min strike; differs from Chainlink by
-         the volume-weighted-average gap ($1–$50 typical).
+      2. **Coinbase** — open of the 5-min candle that STARTS at `window_ts`.
+         Per-window 5-min strike aligned to Polymarket's 5-min boundaries.
+         Updated 2026-09-16 from fallback to PRIMARY because Chainlink's
+         ~30-min heartbeat was reusing the same strike across 6+
+         consecutive 5-min windows, inverting the leader-side reads in
+         volatile moves.
+      3. **Chainlink BTC/USD on Ethereum** — fallback when Coinbase is
+         unavailable; also used as a sanity cross-check (>0.3% gap logs
+         a warning).
       4. **Polymarket** — used only as a tertiary fallback when both
          above fail; validated against the previous-window strike to reject
          30-min aggregate leaks.
@@ -172,43 +180,42 @@ def get_strike(window_ts: int, symbol: str = "btc") -> Optional[float]:
         else:
             return cached
 
-    # 2. Primary: Chainlink BTC/USD on Ethereum.
-    cl_price = chainlink_strike.get_strike_at(int(window_ts), symbol)
-    if cl_price is not None and cl_price > 0:
-        # Cross-check vs Coinbase: log a warning if the gap is large, but
-        # trust Chainlink as ground truth (closer to Polymarket's source).
-        cb_price = coinbase_api.get_5min_candle_close_at(int(window_ts), symbol)
-        if cb_price is not None and cb_price > 0:
-            diff_pct = abs(cl_price - cb_price) / max(cb_price, 1.0) * 100.0
-            if diff_pct > 0.5:  # >0.5% gap is worth logging for the 24h study
+    # 2. Primary: Coinbase 5-min candle OPEN at window_ts. Per-window strike
+    #    aligned to Polymarket's 5-min boundaries; fresh every window.
+    cb_open = coinbase_api.get_5min_candle_open_at(int(window_ts), symbol)
+    if cb_open is not None and cb_open > 0:
+        # Cross-check vs Chainlink for diagnostic logging only.
+        cl_price = chainlink_strike.get_strike_at(int(window_ts), symbol)
+        if cl_price is not None and cl_price > 0:
+            diff_pct = abs(cb_open - cl_price) / max(cl_price, 1.0) * 100.0
+            if diff_pct > 0.3:  # >0.3% gap is worth logging
                 logger.info(
                     f"[PM strike] {symbol} {window_ts}: "
-                    f"Chainlink={cl_price:.2f} vs Coinbase={cb_price:.2f} "
-                    f"({diff_pct:.3f}% gap) — usando Chainlink",
+                    f"Coinbase open={cb_open:.2f} vs Chainlink={cl_price:.2f} "
+                    f"({diff_pct:.3f}% gap) — usando Coinbase open",
                     icon="📊",
                 )
         with _lock:
             if len(_STRIKE_CACHE) >= _CACHE_LIMIT:
                 for stale in sorted(_STRIKE_CACHE)[: _CACHE_LIMIT // 2]:
                     _STRIKE_CACHE.pop(stale, None)
-            _STRIKE_CACHE[key] = cl_price
-        return cl_price
-    if cl_price is None:
-        logger.warn(
-            f"[PM strike] {symbol} {window_ts}: Chainlink no disponible — "
-            f"fallback a Coinbase",
-            icon="⚠",
-        )
+            _STRIKE_CACHE[key] = cb_open
+        return cb_open
 
-    # 3. Fallback: Coinbase 5-min candle close at window_ts.
-    cb_close = coinbase_api.get_5min_candle_close_at(int(window_ts), symbol)
-    if cb_close is not None and cb_close > 0:
+    # 3. Fallback: Chainlink BTC/USD on Ethereum (closest to Polymarket's TWAP).
+    logger.warn(
+        f"[PM strike] {symbol} {window_ts}: Coinbase open no disponible — "
+        f"fallback a Chainlink",
+        icon="⚠",
+    )
+    cl_price = chainlink_strike.get_strike_at(int(window_ts), symbol)
+    if cl_price is not None and cl_price > 0:
         with _lock:
             if len(_STRIKE_CACHE) >= _CACHE_LIMIT:
                 for stale in sorted(_STRIKE_CACHE)[: _CACHE_LIMIT // 2]:
                     _STRIKE_CACHE.pop(stale, None)
-            _STRIKE_CACHE[key] = cb_close
-        return cb_close
+            _STRIKE_CACHE[key] = cl_price
+        return cl_price
 
     # 4. Last resort: Polymarket (validated against previous-window strike).
     data = fetch_window_price(int(window_ts), symbol)
