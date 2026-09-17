@@ -33,7 +33,6 @@ OPEN → Chainlink → Polymarket, in that order.
 from __future__ import annotations
 
 import json
-import logging
 import threading
 import time
 from collections import deque
@@ -41,7 +40,7 @@ from typing import Deque, Optional, Tuple
 
 import websocket  # websocket-client, already in requirements.txt
 
-logger = logging.getLogger(__name__)
+from . import logger  # bot's per-market logger (has .info/.ok/.warn/.err)
 
 # Coinbase's public exchange WebSocket — ticker channel is public, no auth.
 WS_URL = "wss://ws-feed.exchange.coinbase.com"
