@@ -138,6 +138,12 @@ class BotState:
         self.ta_hedge_enabled:    bool  = True
         self.ta_hedge_drop_pct:   float = 0.40
         self.ta_hedge_max_sum:    float = 0.92
+        # TWAP-aware early hedge: fires in the last 60s when the official
+        # TWAP-60s (resolution oracle) strongly opposes our position.
+        # Added 2026-09-17. Default OFF — enable via /settings once validated.
+        self.ta_twap_hedge_enabled: bool  = False
+        self.ta_twap_hedge_margin:  float = 50.0
+        self.ta_twap_hedge_max_sum: float = 0.92
         # Stop-loss / Trailing-stop (wired 2026-09-13 cutover so /settings can
         # expose them — temporal_arb.py uses getattr fallbacks if absent).
         self.ta_stop_loss_enabled:    bool  = True
@@ -638,6 +644,9 @@ class BotState:
                 "ta_hedge_enabled":    self.ta_hedge_enabled,
                 "ta_hedge_drop_pct":   self.ta_hedge_drop_pct,
                 "ta_hedge_max_sum":    self.ta_hedge_max_sum,
+                "ta_twap_hedge_enabled": self.ta_twap_hedge_enabled,
+                "ta_twap_hedge_margin":  self.ta_twap_hedge_margin,
+                "ta_twap_hedge_max_sum": self.ta_twap_hedge_max_sum,
                 "ta_stop_loss_enabled":    self.ta_stop_loss_enabled,
                 "ta_stop_loss_time_sec":   self.ta_stop_loss_time_sec,
                 "ta_stop_loss_threshold":  self.ta_stop_loss_threshold,

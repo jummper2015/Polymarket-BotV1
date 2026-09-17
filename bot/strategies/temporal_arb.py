@@ -71,7 +71,11 @@ from .base import StrategyContext, StrategyDescriptor
 from ..runtime_field import RuntimeField
 
 # ── defaults ──────────────────────────────────────────────────────────────────
-MIN_ITM_PCT_DEFAULT      = 0.05   # % BTC must move through the strike before entry
+# Lowered from 0.05 → 0.025 on 2026-09-17 after the strike source moved to a
+# local TWAP-60s (gap vs Polymarket official dropped from $20-30 to $0-5).
+# Bot can now safely take thinner edges without false positives from stale
+# strikes. Production .env still overrides (was 0.02, can stay or drop further).
+MIN_ITM_PCT_DEFAULT      = 0.025  # % BTC must move through the strike before entry
 ENTRY_MIN_ASK_DEFAULT    = 0.40   # leader ask floor (below = market already caught up)
 ENTRY_MAX_ASK_DEFAULT    = 0.55   # leader ask ceiling (above = no misprice to exploit)
 COMPLETE_CAP_DEFAULT     = 0.82   # max total pair cost to accept for second leg
@@ -91,6 +95,17 @@ LPT_MAX_LEFT_DEFAULT     = 148.0  # latest T-N seconds (just below entry_cutoff)
 HEDGE_ENABLED_DEFAULT    = True
 HEDGE_DROP_PCT_DEFAULT   = 0.40   # fire if current_ask ≤ entry_px * (1 - drop_pct)
 HEDGE_MAX_SUM_DEFAULT    = 0.92   # max entry_px + hedge_ask to still be worthwhile
+
+# TWAP-aware hedge defaults (added 2026-09-17)
+# Fires earlier than the price-drop hedge (Path B): when the Polymarket
+# resolution oracle's TWAP-60s strongly opposes our position during the
+# last 60s of the window. Earlier signal → better hedge price.
+#
+# Default: DISABLED. Activate via /settings once the local TWAP-60s source
+# has been validated in production. Tests must explicitly enable.
+TWAP_HEDGE_ENABLED_DEFAULT = False
+TWAP_HEDGE_MARGIN_DEFAULT  = 50.0  # $|margin|$ in dollars for the TWAP projection
+TWAP_HEDGE_MAX_SUM_DEFAULT = 0.92  # same cost ceiling as Path B
 
 # Stop-loss defaults
 STOP_LOSS_ENABLED_DEFAULT    = True
@@ -361,6 +376,10 @@ def _observe(ctx: StrategyContext) -> None:
     hedge_enabled  = bool(getattr(state, "ta_hedge_enabled",  HEDGE_ENABLED_DEFAULT))
     hedge_drop_pct = float(getattr(state, "ta_hedge_drop_pct", HEDGE_DROP_PCT_DEFAULT))
     hedge_max_sum  = float(getattr(state, "ta_hedge_max_sum",  HEDGE_MAX_SUM_DEFAULT))
+    # TWAP-aware hedge config (added 2026-09-17)
+    twap_hedge_enabled = bool(getattr(state, "ta_twap_hedge_enabled", TWAP_HEDGE_ENABLED_DEFAULT))
+    twap_hedge_margin  = float(getattr(state, "ta_twap_hedge_margin", TWAP_HEDGE_MARGIN_DEFAULT))
+    twap_hedge_max_sum = float(getattr(state, "ta_twap_hedge_max_sum", TWAP_HEDGE_MAX_SUM_DEFAULT))
     # Stop-loss config
     stop_loss_enabled    = bool(getattr(state, "ta_stop_loss_enabled",    STOP_LOSS_ENABLED_DEFAULT))
     stop_loss_time_sec   = float(getattr(state, "ta_stop_loss_time_sec",  STOP_LOSS_TIME_SEC_DEFAULT))
@@ -443,6 +462,11 @@ def _observe(ctx: StrategyContext) -> None:
 
         # Get current ask of the first leg for stop-loss tracking
         current_first_ask = ask_up if ta.first_side == "UP" else ask_dn
+
+        # Live BTC spot price — used by the TWAP-aware hedge (Path C, last 60s).
+        # Defined here (not inside the IDLE block) so it's in scope throughout
+        # the function. May be None if the price feed hasn't reported yet.
+        spot = getattr(state, "spot_price", None)
 
         # ══════════════════════════════════════════════════════════════════════════
         # NUEVA LÓGICA: HOLD WINNER & REVERSIÓN DESDE WINNER ZONE
@@ -654,6 +678,64 @@ def _observe(ctx: StrategyContext) -> None:
                     ta.phase = "hedged"
                     state.record_observation("TA_HEDGE")
                     return
+
+        # Path C: TWAP-aware early hedge — fires only in the last 60s when
+        # the official TWAP-60s (Polymarket resolution oracle) strongly
+        # opposes our position. Earlier signal than Path B because it uses
+        # the resolution oracle's projected winner, not the spot price.
+        if (
+            twap_hedge_enabled
+            and not ta.hedge_fired
+            and secs < 60.0
+            and ta.first_px is not None
+            and ta.first_side is not None
+            and ta.strike is not None
+        ):
+            from .. import polymarket_twap_tracker as twap_tracker
+            twap_state = twap_tracker.get_state(
+                window_ts=int(window_ts),
+                current_ts=int(time.time()),
+                strike=ta.strike,
+                current_btc=spot,
+            )
+            # Only fire when TWAP projects the opposite side as winner with
+            # enough margin AND the hedge price is acceptable.
+            if (
+                twap_state.projected_winner is not None
+                and twap_state.projected_winner != ta.first_side
+                and twap_state.margin is not None
+                and abs(twap_state.margin) >= twap_hedge_margin
+            ):
+                hedge_ask = ask_dn if second_side == "DOWN" else ask_up
+                if (
+                    hedge_ask is not None
+                    and round(ta.first_px + hedge_ask, 4) <= twap_hedge_max_sum
+                ):
+                    tok_hedge = tokens.up_token_id if second_side == "UP" else tokens.down_token_id
+                    hedge_shares = ta.first_shares_filled if ta.first_shares_filled > 0 else shares
+                    oid_th = trader._place_taker_order(tok_hedge, "BUY", hedge_ask, hedge_shares)
+                    if oid_th:
+                        net_cost = round(ta.first_px + hedge_ask, 4)
+                        net_locked = round(1.0 - net_cost, 4)
+                        logger.ok(
+                            f"[TA] 🧭 TWAP EARLY HEDGE  "
+                            f"primera={ta.first_side}@{ta.first_px:.3f}  "
+                            f"proy_TWAP_winner={twap_state.projected_winner}  "
+                            f"margin=${twap_state.margin:+.2f}  "
+                            f"hedge={second_side}@{hedge_ask:.3f}  "
+                            f"costo_total={net_cost:.3f}  "
+                            f"breakeven_locked={net_locked:+.4f}/share  "
+                            f"left={secs:.0f}s",
+                            icon="🧭",
+                        )
+                        trader._record_box_fill(
+                            tokens, second_side, tok_hedge, hedge_ask, hedge_shares,
+                            strategy="temporal_arb",
+                        )
+                        ta.hedge_fired = True
+                        ta.phase = "hedged"
+                        state.record_observation("TA_TWAP_HEDGE")
+                        return
 
         # Bailout: time ran out — first leg resolves normally (win or loss)
         if secs <= bail_sec and not ta.logged_bailout:
@@ -996,6 +1078,21 @@ DESCRIPTOR = StrategyDescriptor(
             label="Hedge max suma",
             minimum=0.60, maximum=0.99, step=0.01,
             hint="Solo hace hedge si entrada + hedge_ask ≤ este valor (default 0.92)",
+        ),
+        # ── TWAP-aware hedge (added 2026-09-17) ─────────────────────────────────
+        RuntimeField("ta_twap_hedge_enabled", "bool", label="TWAP early hedge activo",
+                     hint="En los últimos 60s, hedgea si la TWAP-60s oficial se opone fuertemente a la posición"),
+        RuntimeField(
+            "ta_twap_hedge_margin", "float",
+            label="TWAP hedge margen mínimo ($)",
+            minimum=0.0, maximum=500.0, step=10.0,
+            hint="Activa hedge si $|margin|$ ≥ este valor (default 50 USD). margin = current_btc - required_avg.",
+        ),
+        RuntimeField(
+            "ta_twap_hedge_max_sum", "float",
+            label="TWAP hedge max suma",
+            minimum=0.60, maximum=0.99, step=0.01,
+            hint="Solo hace TWAP hedge si entrada + hedge_ask ≤ este valor (default 0.92)",
         ),
         # ── Stop-loss ──────────────────────────────────────────────────────────
         RuntimeField("ta_stop_loss_enabled", "bool", label="Stop-loss activo",

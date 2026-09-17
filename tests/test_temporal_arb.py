@@ -181,6 +181,7 @@ def _make_state(
     ta_entry_cutoff_sec=150.0,
     ta_bailout_sec=60.0,
     ta_cancel_all_sec=10.0,
+    ta_twap_hedge_enabled=False,   # off by default; tests opt in
     ask_up=0.50,
     ask_dn=0.50,
     spot_price=60060.0,   # +0.1% above strike by default
@@ -200,6 +201,7 @@ def _make_state(
         ta_entry_cutoff_sec=ta_entry_cutoff_sec,
         ta_bailout_sec=ta_bailout_sec,
         ta_cancel_all_sec=ta_cancel_all_sec,
+        ta_twap_hedge_enabled=ta_twap_hedge_enabled,
         spot_price=spot_price,
         mode=mode,
     )
@@ -432,6 +434,229 @@ class TestObserveHalfOpen:
                         logged_bailout=True)
         self._call(state, tokens, trader, win, secs=45.0)
         assert "TA_BAILOUT" not in skips
+
+    def test_twap_hedge_fires_when_resolution_oracle_opposes_position(self):
+        """Path C: TWAP-aware early hedge in the last 60s.
+
+        Setup: position UP @0.55 entered in T+30s, secs=45 (last minute).
+        TWAP-60s is accumulating in [T+240, T+300]; projected winner is DOWN
+        with margin -$300 (well above ta_twap_hedge_margin=50).
+        ta_twap_hedge_enabled=True (default is False; we opt in for this test).
+
+        Expected: bot buys DOWN as hedge, transitions to "hedged".
+        """
+        from bot import polymarket_twap_tracker as twap_tracker
+
+        twap_tracker.clear_all()
+        records = []
+
+        # Position UP @0.55; DOWN ask is 0.35. Pair sum = 0.90 ≤ 0.92 ✓.
+        # spot=$60,000 = right at strike → BTC hasn't moved; but TWAP projection says DOWN.
+        state = _make_state(
+            ask_up=0.81, ask_dn=0.35, spot_price=60_000.0,
+            ta_twap_hedge_enabled=True,   # opt in
+        )
+        tokens = _make_tokens()
+        trader = _make_trader(records=records)
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.55, first_shares_filled=80.0,
+            strike=STRIKE,
+        )
+
+        # Mock the TWAP tracker to project DOWN as winner with strong margin.
+        fake_twap_state = SimpleNamespace(
+            projected_winner="DOWN",
+            margin=-300.0,
+        )
+
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=fake_twap_state),
+        ):
+            ctx = _ctx(state, tokens, trader, seconds_left=45.0)
+            _observe(ctx)
+
+        assert win.phase == "hedged"
+        assert win.hedge_fired is True
+        # A hedge BUY on the DOWN token was placed at 0.35.
+        orders = trader._place_taker_order.call_args_list
+        assert any(
+            call.args[0] == tokens.down_token_id
+            and call.args[1] == "BUY"
+            and abs(call.args[2] - 0.35) < 1e-6
+            for call in orders
+        ), f"Expected DOWN hedge order at 0.35; got {orders}"
+
+    def test_twap_hedge_skipped_when_disabled_by_default(self):
+        """Default config has ta_twap_hedge_enabled=False — Path C is a no-op."""
+        from bot import polymarket_twap_tracker as twap_tracker
+
+        twap_tracker.clear_all()
+        state = _make_state(ask_up=0.81, ask_dn=0.35, spot_price=60_000.0)
+        # NOTE: ta_twap_hedge_enabled defaults to False — we don't override it.
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.55, first_shares_filled=80.0,
+            strike=STRIKE,
+            logged_bailout=True,
+        )
+
+        # TWAP projection would oppose our position.
+        fake_twap_state = SimpleNamespace(projected_winner="DOWN", margin=-300.0)
+
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=fake_twap_state),
+        ):
+            ctx = _ctx(state, tokens, trader, seconds_left=45.0)
+            _observe(ctx)
+
+        assert win.hedge_fired is False
+        trader._place_taker_order.assert_not_called()
+
+    def test_twap_hedge_skipped_when_projection_matches_position(self):
+        """If TWAP projects our side wins → don't hedge (we're on the right side)."""
+        from bot import polymarket_twap_tracker as twap_tracker
+
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.81, ask_dn=0.35, spot_price=60_000.0,
+            ta_twap_hedge_enabled=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.55, first_shares_filled=80.0,
+            strike=STRIKE,
+            logged_bailout=True,  # suppress bailout for isolation
+        )
+
+        fake_twap_state = SimpleNamespace(
+            projected_winner="UP",  # matches our position
+            margin=200.0,
+        )
+
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=fake_twap_state),
+        ):
+            ctx = _ctx(state, tokens, trader, seconds_left=45.0)
+            _observe(ctx)
+
+        assert win.hedge_fired is False
+        trader._place_taker_order.assert_not_called()
+
+    def test_twap_hedge_skipped_outside_last_60s(self):
+        """TWAP hedge only fires in the last 60s — earlier we wait for normal hedge."""
+        from bot import polymarket_twap_tracker as twap_tracker
+
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.81, ask_dn=0.35, spot_price=60_000.0,
+            ta_twap_hedge_enabled=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.55, first_shares_filled=80.0,
+            strike=STRIKE,
+        )
+
+        fake_twap_state = SimpleNamespace(projected_winner="DOWN", margin=-300.0)
+
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=fake_twap_state),
+        ):
+            # secs=120 — outside the last 60s window
+            ctx = _ctx(state, tokens, trader, seconds_left=120.0)
+            _observe(ctx)
+
+        assert win.phase == "half_open"
+        assert win.hedge_fired is False
+        trader._place_taker_order.assert_not_called()
+
+    def test_twap_hedge_skipped_when_margin_below_threshold(self):
+        """If $|margin|$ < ta_twap_hedge_margin (default 50), don't hedge."""
+        from bot import polymarket_twap_tracker as twap_tracker
+
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.81, ask_dn=0.35, spot_price=60_000.0,
+            ta_twap_hedge_enabled=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.55, first_shares_filled=80.0,
+            strike=STRIKE,
+            logged_bailout=True,  # suppress bailout for isolation
+        )
+
+        # Margin only $30 — below default threshold of 50
+        fake_twap_state = SimpleNamespace(projected_winner="DOWN", margin=-30.0)
+
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=fake_twap_state),
+        ):
+            ctx = _ctx(state, tokens, trader, seconds_left=45.0)
+            _observe(ctx)
+
+        assert win.hedge_fired is False
+        trader._place_taker_order.assert_not_called()
+
+    def test_min_itm_pct_default_lowered_to_0_025(self):
+        """2026-09-17: lowered from 0.05 to 0.025 after strike accuracy improved."""
+        from bot.strategies.temporal_arb import MIN_ITM_PCT_DEFAULT
+        assert MIN_ITM_PCT_DEFAULT == 0.025
+
+    def test_twap_hedge_default_disabled(self):
+        """ta_twap_hedge_enabled defaults to False — activate via /settings."""
+        from bot.strategies.temporal_arb import TWAP_HEDGE_ENABLED_DEFAULT
+        assert TWAP_HEDGE_ENABLED_DEFAULT is False
+
+    def test_twap_hedge_runtime_fields_exposed(self):
+        """The three new TWAP-hedge fields must appear in DESCRIPTOR.params."""
+        names = {p.name for p in DESCRIPTOR.params}
+        for expected in ("ta_twap_hedge_enabled", "ta_twap_hedge_margin", "ta_twap_hedge_max_sum"):
+            assert expected in names, f"missing param: {expected}"
 
 
 class TestObserveTerminal:
