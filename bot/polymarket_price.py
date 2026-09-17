@@ -47,7 +47,7 @@ from typing import Optional
 
 import requests
 
-from . import chainlink_strike, coinbase_api, logger
+from . import chainlink_strike, coinbase_api, coinbase_ticker_feed, logger
 
 HOST = "https://polymarket.com/api/crypto/crypto-price"
 TIMEOUT = 8.0
@@ -148,20 +148,23 @@ def get_strike(window_ts: int, symbol: str = "btc") -> Optional[float]:
 
       1. Cache hit (validates against previous cached strike: if identical,
          the cached value is a stale aggregate leak; treat as miss and
-         re-fetch from Chainlink).
-      2. **Coinbase** — open of the 5-min candle that STARTS at `window_ts`.
-         Per-window 5-min strike aligned to Polymarket's 5-min boundaries.
-         Updated 2026-09-16 from fallback to PRIMARY because Chainlink's
-         ~30-min heartbeat was reusing the same strike across 6+
-         consecutive 5-min windows, inverting the leader-side reads in
-         volatile moves.
-      3. **Chainlink BTC/USD on Ethereum** — fallback when Coinbase is
-         unavailable; also used as a sanity cross-check (>0.3% gap logs
+         re-fetch from local TWAP).
+      2. **Local TWAP-60s** — computed from a 90-second rolling buffer of
+         Coinbase BTC-USD ticker ticks maintained by `coinbase_ticker_feed`.
+         Closest approximation to the official Chainlink btc-usd-twap-60s
+         stream that Polymarket uses for its strike. Gap vs official: ~$0-5.
+         Added 2026-09-17 to close the ~$20-30 residual gap that Coinbase
+         candle OPEN leaves (since OPEN is the spot at the boundary, not the
+         60-second time-weighted average that ends at the boundary).
+      3. **Coinbase 5-min candle OPEN** at `window_ts` — per-window strike
+         aligned to Polymarket's 5-min boundaries; fallback when the ticker
+         feed isn't ready (startup, reconnect) or doesn't have enough data.
+      4. **Chainlink BTC/USD on Ethereum** — last-resort fallback; also used
+         as a sanity cross-check when sources 2 or 3 succeed (>0.3% gap logs
          a warning).
-      4. **Polymarket** — used only as a tertiary fallback when both
-         above fail; validated against the previous-window strike to reject
-         30-min aggregate leaks.
-      5. All paths failed → `None`.
+      5. **Polymarket** — final fallback when all above fail; validated
+         against the previous-window strike to reject 30-min aggregate leaks.
+      6. All paths failed → `None`.
     """
     key = (symbol, int(window_ts))
 
@@ -180,19 +183,41 @@ def get_strike(window_ts: int, symbol: str = "btc") -> Optional[float]:
         else:
             return cached
 
-    # 2. Primary: Coinbase 5-min candle OPEN at window_ts. Per-window strike
-    #    aligned to Polymarket's 5-min boundaries; fresh every window.
+    # 2. Primary: Local TWAP-60s from the Coinbase ticker feed. Closest
+    #    approximation to the official Chainlink btc-usd-twap-60s stream.
+    local_twap = coinbase_ticker_feed.get_twap60_at(int(window_ts))
+    if local_twap is not None and local_twap > 0:
+        # Cross-check vs Coinbase candle OPEN and Chainlink latest for
+        # diagnostic logging only — local TWAP is the new ground truth.
+        cb_open = coinbase_api.get_5min_candle_open_at(int(window_ts), symbol)
+        if cb_open is not None and cb_open > 0:
+            diff_pct = abs(local_twap - cb_open) / max(cb_open, 1.0) * 100.0
+            if diff_pct > 0.3:
+                logger.info(
+                    f"[PM strike] {symbol} {window_ts}: "
+                    f"local TWAP={local_twap:.2f} vs Coinbase open={cb_open:.2f} "
+                    f"({diff_pct:.3f}% gap)",
+                    icon="📊",
+                )
+        with _lock:
+            if len(_STRIKE_CACHE) >= _CACHE_LIMIT:
+                for stale in sorted(_STRIKE_CACHE)[: _CACHE_LIMIT // 2]:
+                    _STRIKE_CACHE.pop(stale, None)
+            _STRIKE_CACHE[key] = local_twap
+        return local_twap
+
+    # 3. Fallback: Coinbase 5-min candle OPEN at window_ts.
     cb_open = coinbase_api.get_5min_candle_open_at(int(window_ts), symbol)
     if cb_open is not None and cb_open > 0:
         # Cross-check vs Chainlink for diagnostic logging only.
         cl_price = chainlink_strike.get_strike_at(int(window_ts), symbol)
         if cl_price is not None and cl_price > 0:
             diff_pct = abs(cb_open - cl_price) / max(cl_price, 1.0) * 100.0
-            if diff_pct > 0.3:  # >0.3% gap is worth logging
+            if diff_pct > 0.3:
                 logger.info(
                     f"[PM strike] {symbol} {window_ts}: "
                     f"Coinbase open={cb_open:.2f} vs Chainlink={cl_price:.2f} "
-                    f"({diff_pct:.3f}% gap) — usando Coinbase open",
+                    f"({diff_pct:.3f}% gap) — usando Coinbase open (TWAP feed no listo)",
                     icon="📊",
                 )
         with _lock:
@@ -202,10 +227,10 @@ def get_strike(window_ts: int, symbol: str = "btc") -> Optional[float]:
             _STRIKE_CACHE[key] = cb_open
         return cb_open
 
-    # 3. Fallback: Chainlink BTC/USD on Ethereum (closest to Polymarket's TWAP).
+    # 4. Fallback: Chainlink BTC/USD on Ethereum.
     logger.warn(
-        f"[PM strike] {symbol} {window_ts}: Coinbase open no disponible — "
-        f"fallback a Chainlink",
+        f"[PM strike] {symbol} {window_ts}: TWAP feed no listo y Coinbase open "
+        f"no disponible — fallback a Chainlink",
         icon="⚠",
     )
     cl_price = chainlink_strike.get_strike_at(int(window_ts), symbol)
@@ -217,7 +242,7 @@ def get_strike(window_ts: int, symbol: str = "btc") -> Optional[float]:
             _STRIKE_CACHE[key] = cl_price
         return cl_price
 
-    # 4. Last resort: Polymarket (validated against previous-window strike).
+    # 5. Last resort: Polymarket (validated against previous-window strike).
     data = fetch_window_price(int(window_ts), symbol)
     if data:
         try:

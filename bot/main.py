@@ -190,6 +190,12 @@ def main() -> None:
     # Start BTC price fetcher (CoinGecko, for dashboard display)
     start_price_fetcher()
 
+    # Start Coinbase ticker WebSocket feed (for local TWAP-60s strike source).
+    # Replaces the ~$20-30 residual gap between Coinbase candle OPEN and
+    # the official Chainlink btc-usd-twap-60s stream that Polymarket uses.
+    from . import coinbase_ticker_feed
+    coinbase_ticker_feed.start()
+
     # One trader thread per market. They share nothing but the config: each has
     # its own BotState, its own martingale row and its own DB queries.
     traders = [StreakSnapperTrader(cfg, symbol) for symbol in cfg.ss_symbols]
