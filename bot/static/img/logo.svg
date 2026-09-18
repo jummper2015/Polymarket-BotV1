@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 64" role="img" aria-label="ME$IRVE">
+  <defs>
+    <linearGradient id="lp-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0c9d5b"/>
+      <stop offset="100%" stop-color="#086836"/>
+    </linearGradient>
+  </defs>
+  <g>
+    <rect x="2"  y="2"  width="60" height="60" rx="14" fill="url(#lp-grad)"/>
+    <rect x="2"  y="2"  width="60" height="60" rx="14" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="1"/>
+    <text x="32" y="44" text-anchor="middle"
+          font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+          font-size="30" font-weight="800" fill="#ffffff"
+          letter-spacing="-0.04em">M$</text>
+    <circle cx="51" cy="14" r="3.2" fill="#ffffff" fill-opacity="0.85"/>
+  </g>
+  <text x="78" y="42" text-anchor="start"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="24" font-weight="800" fill="#0f172a"
+        letter-spacing="-0.02em">ME$IRVE</text>
+  <text x="78" y="56" text-anchor="start"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="9" font-weight="600" fill="#0a8249"
+        letter-spacing="0.16em">POLYMARKET · 5M</text>
+</svg>

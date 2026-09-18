@@ -233,7 +233,7 @@ def create_app() -> Flask:
         # With no password configured the gate is off entirely; a login page
         # would just be a dead end.
         if not auth_enabled():
-            return redirect(url_for("index"))
+            return redirect(url_for("dashboard"))
 
         next_url = request.values.get("next") or ""
         # Only relative paths — an absolute URL here would be an open redirect.
@@ -244,7 +244,7 @@ def create_app() -> Flask:
             if check_password(request.form.get("password", "")):
                 session[SESSION_KEY] = True
                 session.permanent = False
-                return redirect(next_url or url_for("index"))
+                return redirect(next_url or url_for("dashboard"))
             logger.warn(f"[dashboard] intento de acceso fallido desde {request.remote_addr}")
             return render_template(
                 "login.html", error="Contraseña incorrecta", next_url=next_url
@@ -259,6 +259,11 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
+        # Public landing page — entry point for unauthenticated visitors.
+        return render_template("landing.html")
+
+    @app.get("/dashboard")
+    def dashboard():
         return render_template("dashboard.html", active_page="dashboard")
 
     @app.get("/settings")

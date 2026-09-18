@@ -1,0 +1,447 @@
+{# Landing page — public cover for https://polytradebot.cloud.
+   No auth required. Positions ME$IRVE as a product (not a personal script),
+   explains how it works, shows the roadmap to multi-user SaaS, and gives
+   prospective users a clear next step. #}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ME$IRVE — Bot de trading Polymarket · BTC, ETH, SOL</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/favicon.svg') }}">
+  <meta name="theme-color" content="#0c9d5b">
+  <meta property="og:title" content="ME$IRVE — Bot de trading Polymarket · BTC, ETH, SOL">
+  <meta property="og:description" content="Bot automatizado para mercados up/down de Bitcoin a 5 minutos en Polymarket. TWAP-60s local, pares balanceados, hedge automático.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="{{ url_for('static', filename='img/og-image.svg') }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ME$IRVE — Bot de trading Polymarket · BTC, ETH, SOL">
+  <meta name="twitter:description" content="Bot automatizado para mercados up/down de Bitcoin a 5 minutos en Polymarket.">
+  <meta name="twitter:image" content="{{ url_for('static', filename='img/og-image.svg') }}">
+  <meta name="description" content="Bot automatizado para mercados up/down de Bitcoin, Ethereum y Solana a 5 minutos en Polymarket. Strike TWAP-60s local, pares balanceados, hedge automático. Paper mode ahora, real mode en roadmap." />
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/icons/bootstrap-icons.min.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='landing.css') }}" />
+  <script defer src="{{ url_for('static', filename='landing.js') }}"></script>
+</head>
+<body class="lp-body">
+
+  <!-- Top nav -->
+  <nav class="lp-nav">
+    <div class="lp-nav-inner">
+      <a href="/" class="lp-brand">
+        <img class="lp-brand-svg" src="{{ url_for('static', filename='img/logo.svg') }}" alt="ME$IRVE" width="200" height="58">
+      </a>
+      <div class="lp-nav-links">
+        <a href="#how">Cómo funciona</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#use-cases">Casos de uso</a>
+        <a href="#faq">FAQ</a>
+      </div>
+      <a href="{{ url_for('login') }}" class="lp-nav-cta">
+        <i class="bi bi-box-arrow-in-right"></i> Acceder al panel
+      </a>
+    </div>
+  </nav>
+
+  <!-- ─── HERO ────────────────────────────────────────────────────────── -->
+  <header class="lp-hero">
+    <div class="lp-container">
+      <div class="lp-hero-grid">
+        <div class="lp-hero-copy" data-reveal>
+          <span class="lp-eyebrow">Polymarket · BTC / ETH / SOL · 5 min</span>
+          <h1 class="lp-headline">
+            Trading automatizado<br>
+            con ventaja de <span class="lp-accent">datos en vivo</span>.
+          </h1>
+          <p class="lp-sub">
+            ME$IRVE opera mercados up/down a 5 minutos las 24&nbsp;h, los 7 días.
+            Combina una fuente de strike local (TWAP-60s desde Coinbase)
+            con pares balanceados, hedge automático y stop-loss. Diseñado
+            para corredores, fondos y cualquiera que quiera exposición
+            sistemática a Polymarket.
+          </p>
+          <div class="lp-cta-row">
+            <a href="{{ url_for('login') }}" class="lp-btn lp-btn-primary">
+              <i class="bi bi-lightning-charge-fill"></i>
+              Probar el panel
+            </a>
+            <a href="#how" class="lp-btn lp-btn-ghost">
+              Cómo funciona <i class="bi bi-arrow-down"></i>
+            </a>
+          </div>
+          <p class="lp-hero-meta">
+            <span class="lp-pill lp-pill-success"><i class="bi bi-circle-fill"></i> Paper mode activo</span>
+            <span class="lp-pill"><i class="bi bi-clock"></i> Mercados 24/7</span>
+            <span class="lp-pill"><i class="bi bi-cpu"></i> Latencia &lt; 200ms</span>
+          </p>
+        </div>
+        <div class="lp-hero-visual" data-reveal="right" aria-hidden="true"><img class="lp-hero-preview" src="{{ url_for('static', filename='img/dashboard-preview.svg') }}" alt="Vista previa del panel ME$IRVE" width="600"></div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ─── STATS BAR ──────────────────────────────────────────────────── -->
+  <section class="lp-stats">
+    <div class="lp-container">
+      <div class="lp-stats-grid" data-reveal-stagger>
+        <div class="lp-stat" data-reveal-child data-reveal="scale">
+          <div class="lp-stat-value">&lt; 5 USD</div>
+          <div class="lp-stat-label">gap vs strike oficial</div>
+          <div class="lp-stat-sub">TWAP-60s local vs oráculo de Polymarket</div>
+        </div>
+        <div class="lp-stat" data-reveal-child data-reveal="scale">
+          <div class="lp-stat-value">~200 ms</div>
+          <div class="lp-stat-label">latencia CLOB</div>
+          <div class="lp-stat-sub">taker orders contra el libro</div>
+        </div>
+        <div class="lp-stat" data-reveal-child data-reveal="scale">
+          <div class="lp-stat-value">4</div>
+          <div class="lp-stat-label">fuentes de strike</div>
+          <div class="lp-stat-sub">TWAP local · Coinbase · Chainlink · Polymarket</div>
+        </div>
+        <div class="lp-stat" data-reveal-child data-reveal="scale">
+          <div class="lp-stat-value">3</div>
+          <div class="lp-stat-label">estrategias activas</div>
+          <div class="lp-stat-sub">taker pairs · hedge · stop-loss dinámico</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── HOW IT WORKS ────────────────────────────────────────────────── -->
+  <section class="lp-how" id="how">
+    <div class="lp-container">
+      <div class="lp-section-head">
+        <span class="lp-section-eyebrow">Cómo funciona</span>
+        <h2 class="lp-section-title">De una ventana de 5 minutos al cierre del par.</h2>
+        <p class="lp-section-sub">Cada ventana es un ciclo autónomo: detectar, valuar, ejecutar, asegurar.</p>
+      </div>
+
+      <div class="lp-how-grid" data-reveal-stagger>
+        <article class="lp-step" data-reveal-child>
+          <div class="lp-step-num">01</div>
+          <h3>Detectar la ventana</h3>
+          <p>El slug de Polymarket es determinista (<code>btc-updown-5m-{unix_ts}</code>). El bot calcula el timestamp de la próxima ventana, precarga los token IDs y se suscribe al WebSocket del CLOB antes de que abra.</p>
+        </article>
+
+        <article class="lp-step" data-reveal-child>
+          <div class="lp-step-num">02</div>
+          <h3>Calcular el strike</h3>
+          <p>Para evitar el gap del oráculo oficial (~$25 vs spot), ME$IRVE mantiene un buffer de ticks BTC-USD y calcula su propio TWAP-60s. Coinbase candle OPEN y Chainlink legacy actúan como fallback. <strong>Gap típico: &lt; $5.</strong></p>
+        </article>
+
+        <article class="lp-step" data-reveal-child>
+          <div class="lp-step-num">03</div>
+          <h3>Detectar mispricing</h3>
+          <p>Si BTC se movió &gt; 0.025% del strike, hay una pata barata. El bot compra tranches de la pata ganadora con slice sizing (no market-orders), siguiendo indicadores (ATR, RSI) para evitar impulsos débiles.</p>
+        </article>
+
+        <article class="lp-step" data-reveal-child>
+          <div class="lp-step-num">04</div>
+          <h3>Asegurar el par</h3>
+          <p>Cuando la pata perdedora cae lo suficiente, completa el par a costo ≤ 0.82¢, fijando una ganancia mecánica independiente del resultado. Si el TWAP-60s del oráculo se opone en el último minuto, hace hedge temprano antes del crash.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── ARCHITECTURE ───────────────────────────────────────────────── -->
+  <section class="lp-arch">
+    <div class="lp-container">
+      <div class="lp-section-head">
+        <span class="lp-section-eyebrow">Arquitectura</span>
+        <h2 class="lp-section-title">Pipeline transparente, cada decisión trazable.</h2>
+        <p class="lp-section-sub">Cuatro capas independientes. Una falla en una capa degrada; no rompe las demás.</p>
+      </div>
+
+      <div class="lp-arch-grid" data-reveal-stagger>
+        <div class="lp-arch-col" data-reveal="left">
+          <div class="lp-arch-num">1</div>
+          <h3>Fuentes de precio</h3>
+          <ul class="lp-arch-list">
+            <li><strong>Local TWAP-60s</strong> · Coinbase WebSocket · primary</li>
+            <li><strong>Coinbase candle OPEN</strong> · REST · fallback</li>
+            <li><strong>Chainlink BTC/USD</strong> · Ethereum RPC · fallback</li>
+            <li><strong>Polymarket crypto-price</strong> · REST · last resort</li>
+          </ul>
+        </div>
+
+        <div class="lp-arch-col">
+          <div class="lp-arch-num">2</div>
+          <h3>Lógica de decisión</h3>
+          <ul class="lp-arch-list">
+            <li>Strike vs spot → itm %</li>
+            <li>Filtros técnicos: ATR impulse, RSI overbought/oversold</li>
+            <li>Late pair taker: par barato al cierre</li>
+            <li>Hedge recovery: pata perdedora cae → completa</li>
+            <li>Stop-loss catastrófico &amp; trailing</li>
+            <li>TWAP-aware early hedge (último minuto)</li>
+          </ul>
+        </div>
+
+        <div class="lp-arch-col">
+          <div class="lp-arch-num">3</div>
+          <h3>Ejecución</h3>
+          <ul class="lp-arch-list">
+            <li><strong>Taker</strong> sobre el CLOB v2 de Polymarket</li>
+            <li>Slice sizing (ta_order_slice) para no mover el libro</li>
+            <li>Reintentos con backoff exponencial en el WS</li>
+            <li>Cancelación automática T-10s</li>
+          </ul>
+        </div>
+
+        <div class="lp-arch-col">
+          <div class="lp-arch-num">4</div>
+          <h3>Persistencia</h3>
+          <ul class="lp-arch-list">
+            <li>SQLite local con cada trade, strike y resolución</li>
+            <li>Configuración runtime editable desde el panel</li>
+            <li>Backups automáticos antes de cambios destructivos</li>
+            <li>Logs estructurados por ventana</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── ROADMAP ─────────────────────────────────────────────────────── -->
+  <section class="lp-roadmap" id="roadmap">
+    <div class="lp-container">
+      <div class="lp-section-head">
+        <span class="lp-section-eyebrow">Roadmap</span>
+        <h2 class="lp-section-title">De un bot personal a una plataforma multi-usuario.</h2>
+        <p class="lp-section-sub">Lo que está construido, lo que viene, y cuándo.</p>
+      </div>
+
+      <div class="lp-rm-track" data-reveal-stagger>
+        <article class="lp-rm<article class="lp-rm lp-rm-done">" data-reveal-child>
+          <div class="lp-rm-marker"><i class="bi bi-check-lg"></i></div>
+          <div class="lp-rm-period">Ahora</div>
+          <h3>v1.0 — Bot personal en paper mode</h3>
+          <p>BTC 5-min, estrategia Temporal Arb, dashboard protegido, persistencia SQLite, fuente de strike TWAP-60s local. Funcionando 24/7 en Hostinger LT.</p>
+          <span class="lp-rm-tag lp-rm-tag-done">En producción</span>
+        </article>
+
+        <article class="lp-rm<article class="lp-rm lp-rm-active">" data-reveal-child>
+          <div class="lp-rm-marker"><i class="bi bi-arrow-right"></i></div>
+          <div class="lp-rm-period">Q4 2026</div>
+          <h3>v1.5 — Multi-activo + real-money mode</h3>
+          <p>ETH y SOL 5-min (código ya los soporta), habilitación de real-money con credenciales CLOB L2 firmadas, paper mode opcional para pruebas, mejores stops adaptativos.</p>
+          <span class="lp-rm-tag lp-rm-tag-active">En desarrollo</span>
+        </article>
+
+        <article class="lp-rm<article class="lp-rm">" data-reveal-child>
+          <div class="lp-rm-marker"><i class="bi bi-circle"></i></div>
+          <div class="lp-rm-period">Q1 2027</div>
+          <h3>v2.0 — Cuentas multi-usuario</h3>
+          <p>Cuentas individuales con sus propias credenciales CLOB, dashboard por usuario, roles (admin / trader / observador), invitaciones por equipo, billing por uso.</p>
+          <span class="lp-rm-tag">Planificado</span>
+        </article>
+
+        <article class="lp-rm<article class="lp-rm">" data-reveal-child>
+          <div class="lp-rm-marker"><i class="bi bi-circle"></i></div>
+          <div class="lp-rm-period">Q2 2027</div>
+          <h3>v2.5 — Marketplace de señales</h3>
+          <p>Estrategias publicables, copy-trading, API REST para integrar ME$IRVE en tu propio stack, white-label para equipos con su marca.</p>
+          <span class="lp-rm-tag">Planificado</span>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── USE CASES ──────────────────────────────────────────────────── -->
+  <section class="lp-use" id="use-cases">
+    <div class="lp-container">
+      <div class="lp-section-head">
+        <span class="lp-section-eyebrow">¿Para quién?</span>
+        <h2 class="lp-section-title">Tres perfiles, el mismo edge mecánico.</h2>
+      </div>
+
+      <div class="lp-use-grid" data-reveal-stagger>
+        <article class="lp-use-card" data-reveal-child>
+          <div class="lp-use-icon"><i class="bi bi-person"></i></div>
+          <h3>Trader individual</h3>
+          <p>Opera Polymarket 24/7 sin tener que mirar pantallas. Tú defines los parámetros (mínima edge, capital por trade, pares); el bot ejecuta la mecánica.</p>
+          <ul class="lp-use-list">
+            <li>Sin código: configura desde el panel</li>
+            <li>Paper mode incluido para validar</li>
+            <li>Reportes por ventana y por día</li>
+          </ul>
+        </article>
+
+        <article class="lp-use-card" data-reveal-child>
+          <div class="lp-use-icon"><i class="bi bi-building"></i></div>
+          <h3>Fondo o family office</h3>
+          <p>Diversifica una parte del book con edge mecánico. Límites por riesgo por trade, exposición máxima por ventana, reportes para tu gestor.</p>
+          <ul class="lp-use-list">
+            <li>Multi-activo (BTC/ETH/SOL)</li>
+            <li>Kill-switch desde el panel</li>
+            <li>Auditoría completa en SQLite</li>
+          </ul>
+        </article>
+
+        <article class="lp-use-card" data-reveal-child>
+          <div class="lp-use-icon"><i class="bi bi-code-slash"></i></div>
+          <h3>Developer / integrador</h3>
+          <p>API REST + webhooks (próximamente). Integra ME$IRVE como una capa de señal dentro de tu propio sistema, o construye tu propio front-end sobre el motor.</p>
+          <ul class="lp-use-list">
+            <li>Python SDK (mismo repo)</li>
+            <li>Webhooks de fill &amp; resolución</li>
+            <li>Backtesting con histórico propio</li>
+          </ul>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FOR DEVELOPERS ────────────────────────────────────────────── -->
+  <section class="lp-devs">
+    <div class="lp-container">
+      <div class="lp-devs-grid">
+        <div class="lp-devs-copy" data-reveal="left">
+          <span class="lp-section-eyebrow">Open core</span>
+          <h2 class="lp-section-title">El motor es inspeccionable.</h2>
+          <p class="lp-section-sub">
+            Cada decisión queda registrada con su contexto: ventana, strike, fuentes consultadas, indicadores en el momento, fill price. No hay caja negra.
+            El código está disponible para revisión bajo acuerdo.
+          </p>
+          <ul class="lp-devs-list">
+            <li><i class="bi bi-check2-circle"></i> Snapshot de indicadores en cada entrada (ATR, RSI, volumen)</li>
+            <li><i class="bi bi-check2-circle"></i> Logs estructurados por ventana y por trade</li>
+            <li><i class="bi bi-check2-circle"></i> SQL abierto: cada trade es una fila consultable</li>
+            <li><i class="bi bi-check2-circle"></i> Métricas exportables (CSV via dashboard)</li>
+          </ul>
+        </div>
+        <div class="lp-devs-code" data-reveal="right">
+          <pre><code><span class="lp-code-comment"># Ejemplo: estado de una ventana en vivo</span>
+<span class="lp-code-key">from</span> bot.polymarket_price <span class="lp-code-key">import</span> get_strike
+
+strike = get_strike(window_ts=<span class="lp-code-num">1789594800</span>)
+<span class="lp-code-comment"># → 76108.12 (TWAP-60s local, gap $0.23 vs oficial)</span>
+
+<span class="lp-code-key">from</span> bot.coinbase_ticker_feed <span class="lp-code-key">import</span> get_twap60_at
+
+local_twap = get_twap60_at(window_ts=<span class="lp-code-num">1789594800</span>)
+<span class="lp-code-comment"># → 76108.35 (TWAP de los 60s previos al boundary)</span></code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FAQ ─────────────────────────────────────────────────────────── -->
+  <section class="lp-faq" id="faq">
+    <div class="lp-container">
+      <div class="lp-section-head">
+        <span class="lp-section-eyebrow">Preguntas frecuentes</span>
+        <h2 class="lp-section-title">Lo que más nos preguntan.</h2>
+      </div>
+
+      <div class="lp-faq-list" data-reveal-stagger>
+        <details class="lp-faq-item" data-reveal-child data-reveal="left" open>
+          <summary>¿Cuánto capital necesito para empezar?</summary>
+          <div class="lp-faq-body">
+            En paper mode, cero. Para real-money, el mínimo efectivo en Polymarket
+            son unos $50–100 USD por ventana porque los UP/DOWN tienen tick de $0.01
+            y cada trade usa 80 shares por defecto. Con capital más alto puedes
+            correr varias ventanas simultáneas en distintos símbolos.
+          </div>
+        </details>
+
+        <details class="lp-faq-item" data-reveal-child data-reveal="left">
+          <summary>¿Realmente no es una caja negra?</summary>
+          <div class="lp-faq-body">
+            No. Cada decisión se persiste: el strike usado, las fuentes consultadas,
+            los indicadores en el momento, el fill price. Si una operación te
+            parece rara, abres el log y reproduces la lógica exacta. El código
+            está disponible para revisión bajo acuerdo.
+          </div>
+        </details>
+
+        <details class="lp-faq-item" data-reveal-child data-reveal="left">
+          <summary>¿Por qué Polymarket y no Binance o un exchange tradicional?</summary>
+          <div class="lp-faq-body">
+            Los mercados binarios a 5 minutos en Polymarket ofrecen paridad
+            natural (ganas $1 o $0) y baja fricción operativa. En Binance o
+            similares no hay un instrumento 5-min limpio sobre BTC spot.
+            Además, los mercados prediction tienen edge mecánico explotables
+            mientras el spread entre exchanges no esté completamente arbitrado.
+          </div>
+        </details>
+
+        <details class="lp-faq-item" data-reveal-child data-reveal="left">
+          <summary>¿Cuál es el riesgo real?</summary>
+          <div class="lp-faq-body">
+            Cada operación usa una fracción del bankroll (default 10% por trade).
+            En el peor caso (una pata ganadora se queda sin par), la pérdida es
+            acotada al valor de esa pata. Los stop-loss evitan pérdidas &gt;
+            50% por trade. En paper mode el riesgo es cero (no hay órdenes reales).
+          </div>
+        </details>
+
+        <details class="lp-faq-item" data-reveal-child data-reveal="left">
+          <summary>¿Puedo correrlo en mi propia infraestructura?</summary>
+          <div class="lp-faq-body">
+            Sí. El repositorio es Python puro, sin servicios externos aparte
+            de los endpoints públicos de Polymarket y Coinbase. Cualquier
+            instancia con Python 3.12 + ~512 MB RAM basta. La sección de
+            deployment tiene instrucciones detalladas.
+          </div>
+        </details>
+
+        <details class="lp-faq-item" data-reveal-child data-reveal="left">
+          <summary>¿Cuándo estará disponible el acceso multi-usuario?</summary>
+          <div class="lp-faq-body">
+            Está en el roadmap para Q1 2027 (v2.0). Hasta entonces el acceso
+            se gestiona por invitaciones. Si te interesa participar antes,
+            contacta al administrador.
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── CTA FINAL ──────────────────────────────────────────────────── -->
+  <section class="lp-cta">
+    <div class="lp-container">
+      <div class="lp-cta-card" data-reveal="scale">
+        <h2>Únete al early access.</h2>
+        <p>
+          Paper mode está activo. Crea tu cuenta, configura tus parámetros
+          y observa al bot operar en vivo. Cuando abramos real-money en v1.5,
+          tu configuración ya estará afinada.
+        </p>
+        <a href="{{ url_for('login') }}" class="lp-btn lp-btn-primary lp-btn-lg">
+          <i class="bi bi-box-arrow-in-right"></i>
+          Acceder al panel
+        </a>
+        <p class="lp-cta-fineprint">
+          v1.0 paper · Q4 2026 v1.5 multi-activo · Q1 2027 v2.0 multi-usuario
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FOOTER ─────────────────────────────────────────────────────── -->
+  <footer class="lp-footer">
+    <div class="lp-container lp-footer-inner">
+      <div class="lp-footer-brand">
+        <img class="lp-brand-svg lp-brand-svg-sm" src="{{ url_for('static', filename='img/logo.svg') }}" alt="ME$IRVE" width="150" height="44">
+      </div>
+      <div class="lp-footer-links">
+        <a href="#how">Cómo funciona</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#use-cases">Casos de uso</a>
+        <a href="#faq">FAQ</a>
+      </div>
+      <p class="lp-footer-text">
+        Bot de Polymarket · v1.0 · Operando en paper mode por defecto.
+        El trading automatizado comporta riesgo; use bajo su responsabilidad.
+      </p>
+    </div>
+  </footer>
+
+</body>
+</html>

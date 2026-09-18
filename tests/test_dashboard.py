@@ -115,7 +115,9 @@ class TestAuthDisabled:
     bind to a public interface, not the request handler."""
 
     def test_pages_are_reachable(self, client):
+        # `/` is the public landing page, `/dashboard` is the bot view.
         assert client.get("/").status_code == 200
+        assert client.get("/dashboard").status_code == 200
         assert client.get("/state").status_code == 200
 
     def test_login_redirects_when_pointless(self, client):
@@ -124,8 +126,12 @@ class TestAuthDisabled:
 
 
 class TestAuthEnabled:
+    def test_landing_is_public(self, auth_app):
+        # `/` is the landing page — should NOT redirect to login even when auth is on.
+        assert auth_app.test_client().get("/").status_code == 200
+
     def test_pages_redirect_to_login(self, auth_app):
-        resp = auth_app.test_client().get("/")
+        resp = auth_app.test_client().get("/dashboard")
         assert resp.status_code == 302
         assert "/login" in resp.headers["Location"]
 
@@ -147,19 +153,19 @@ class TestAuthEnabled:
     def test_wrong_password_rejected(self, auth_app):
         client = auth_app.test_client()
         assert client.post("/login", data={"password": "nope"}).status_code == 401
-        assert client.get("/").status_code == 302
+        assert client.get("/dashboard").status_code == 302
 
     def test_correct_password_grants_access(self, auth_app):
         client = auth_app.test_client()
         assert _login(client).status_code == 302
-        assert client.get("/").status_code == 200
+        assert client.get("/dashboard").status_code == 200
         assert client.get("/state").status_code == 200
 
     def test_logout_ends_session(self, auth_app):
         client = auth_app.test_client()
         _login(client)
         client.get("/logout")
-        assert client.get("/").status_code == 302
+        assert client.get("/dashboard").status_code == 302
 
     def test_next_param_only_accepts_relative_paths(self, auth_app):
         # An absolute URL here would make the login form an open redirect.

@@ -5,6 +5,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}ME$IRVE{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/favicon.svg') }}">
+  <meta name="theme-color" content="#0c9d5b">
+  <meta property="og:title" content="ME$IRVE">
+  <meta property="og:description" content="Bot automatizado para mercados up/down de Bitcoin a 5 minutos en Polymarket. TWAP-60s local, pares balanceados, hedge automático.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="{{ url_for('static', filename='img/og-image.svg') }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ME$IRVE">
+  <meta name="twitter:description" content="Bot automatizado para mercados up/down de Bitcoin a 5 minutos en Polymarket.">
+  <meta name="twitter:image" content="{{ url_for('static', filename='img/og-image.svg') }}">
 
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/icons/bootstrap-icons.min.css') }}" />
@@ -23,7 +33,7 @@
     <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
 
       <div class="ss-brand d-flex align-items-center gap-2">
-        <span class="ss-logo"><i class="bi bi-lightning-charge-fill"></i></span>
+        <span class="ss-logo"><img src="{{ url_for('static', filename='img/logo.svg') }}" alt="ME$IRVE" height="36"></span>
         <span>
           <strong>ME$IRVE</strong>
           <small class="text-muted d-block d-sm-inline">v2 · BTC 5m</small>
@@ -31,7 +41,7 @@
       </div>
 
       <nav class="ss-nav d-flex gap-1">
-        <a href="{{ url_for('index') }}"
+        <a href="{{ url_for('dashboard') }}"
            class="ss-nav-link {% if active_page == 'dashboard' %}active{% endif %}">
           <i class="bi bi-graph-up-arrow"></i> Dashboard
         </a>

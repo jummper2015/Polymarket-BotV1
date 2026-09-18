@@ -29,7 +29,7 @@ _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 # Endpoints reachable without a session. `healthz` stays open so process monitors
 # and container probes don't need credentials.
-PUBLIC_ENDPOINTS = {"login", "healthz", "static"}
+PUBLIC_ENDPOINTS = {"login", "healthz", "static", "index"}
 
 
 def get_password() -> str:

@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img"
+     aria-label="ME$IRVE — Bot de trading Polymarket">
+  <defs>
+    <linearGradient id="og-bg" x1="0" y1="0" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0a8249"/>
+      <stop offset="100%" stop-color="#063d22"/>
+    </linearGradient>
+    <linearGradient id="og-mark" x1="0" y1="0" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#12b76d"/>
+      <stop offset="100%" stop-color="#0a8249"/>
+    </linearGradient>
+    <linearGradient id="og-chart" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#10b981" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="og-glow" cx="80%" cy="20%" r="50%">
+      <stop offset="0%"   stop-color="#10b981" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#og-bg)"/>
+  <rect width="1200" height="630" fill="url(#og-glow)"/>
+
+  <!-- Subtle grid -->
+  <g stroke="#ffffff" stroke-opacity="0.04">
+    <line x1="0" y1="157" x2="1200" y2="157"/>
+    <line x1="0" y1="315" x2="1200" y2="315"/>
+    <line x1="0" y1="472" x2="1200" y2="472"/>
+  </g>
+
+  <!-- Logo + brand -->
+  <g transform="translate(80, 80)">
+    <rect width="92" height="92" rx="22" fill="url(#og-mark)"/>
+    <rect width="92" height="92" rx="22" fill="none" stroke="#ffffff" stroke-opacity="0.20" stroke-width="2"/>
+    <text x="46" y="64" text-anchor="middle"
+          font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+          font-size="46" font-weight="800" fill="#ffffff"
+          letter-spacing="-0.04em">M$</text>
+    <circle cx="78" cy="20" r="5" fill="#ffffff" fill-opacity="0.9"/>
+  </g>
+  <text x="200" y="120"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="36" font-weight="800" fill="#ffffff"
+        letter-spacing="-0.02em">ME$IRVE</text>
+  <text x="200" y="152"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="13" font-weight="600" fill="#a7e8c4"
+        letter-spacing="0.18em">POLYMARKET · BTC 5-MIN</text>
+
+  <!-- Main headline -->
+  <text x="80" y="300"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="68" font-weight="800" fill="#ffffff"
+        letter-spacing="-0.025em">Trading automatizado</text>
+  <text x="80" y="370"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="68" font-weight="800" fill="#ffffff"
+        letter-spacing="-0.025em">con <tspan fill="#86efac">datos en vivo</tspan>.</text>
+
+  <!-- Sub -->
+  <text x="80" y="430"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="22" font-weight="500" fill="#bbf7d0">TWAP-60s local · pares balanceados · hedge automático</text>
+
+  <!-- Mini chart card on the right -->
+  <g transform="translate(780, 230)">
+    <rect width="340" height="180" rx="16" fill="#0f172a" fill-opacity="0.55"/>
+    <rect width="340" height="180" rx="16" fill="none" stroke="#ffffff" stroke-opacity="0.15"/>
+    <text x="20" y="28" font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#86efac" letter-spacing="0.08em">TWAP-60s vs STRIKE</text>
+    <line x1="20" y1="120" x2="320" y2="120" stroke="#86efac" stroke-dasharray="3 4" stroke-width="1"/>
+    <text x="316" y="116" text-anchor="end" font-family="Inter, sans-serif" font-size="9" fill="#86efac" font-weight="600">strike 76,108.12</text>
+    <!-- chart line + fill -->
+    <path d="M20,140 L60,130 L100,120 L140,100 L180,105 L220,90 L260,80 L300,86 L320,82 L320,160 L20,160 Z"
+          fill="url(#og-chart)" opacity="0.7"/>
+    <path d="M20,140 L60,130 L100,120 L140,100 L180,105 L220,90 L260,80 L300,86 L320,82"
+          fill="none" stroke="#10b981" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="320" cy="82" r="5" fill="#10b981" stroke="#ffffff" stroke-width="2"/>
+    <text x="20" y="170" font-family="Inter, sans-serif" font-size="11" fill="#ffffff" font-weight="600">gap &lt; $5 vs oráculo oficial</text>
+  </g>
+
+  <!-- Bottom badges -->
+  <g transform="translate(80, 500)">
+    <g>
+      <rect width="170" height="46" rx="23" fill="#86efac" fill-opacity="0.15" stroke="#86efac" stroke-opacity="0.45"/>
+      <circle cx="24" cy="23" r="5" fill="#86efac"/>
+      <text x="40" y="29" font-family="Inter, sans-serif" font-size="14" font-weight="700" fill="#ffffff">Paper mode activo</text>
+    </g>
+    <g transform="translate(190, 0)">
+      <rect width="150" height="46" rx="23" fill="#ffffff" fill-opacity="0.10" stroke="#ffffff" stroke-opacity="0.30"/>
+      <text x="22" y="29" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#ffffff">24/7 · BTC · ETH · SOL</text>
+    </g>
+    <g transform="translate(360, 0)">
+      <rect width="170" height="46" rx="23" fill="#ffffff" fill-opacity="0.10" stroke="#ffffff" stroke-opacity="0.30"/>
+      <text x="22" y="29" font-family="Inter, sans-serif" font-size="14" font-weight="600" fill="#ffffff">Latencia &lt; 200 ms</text>
+    </g>
+  </g>
+
+  <!-- URL footer -->
+  <text x="80" y="592"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="16" font-weight="600" fill="#a7e8c4"
+        letter-spacing="0.04em">polytradebot.cloud</text>
+  <text x="1120" y="592" text-anchor="end"
+        font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="14" fill="#a7e8c4" fill-opacity="0.7">v1.0 · Q4 2026 roadmap</text>
+</svg>

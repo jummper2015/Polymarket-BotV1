@@ -1,0 +1,323 @@
+/* ============================================================================
+   Login page — bot/static/login.css
+   Two-column Notika layout: left green brand panel + right white sign-in
+   card. Color tokens mirror the landing page for visual continuity.
+   ============================================================================ */
+
+:root {
+  --lp-green-600: #0c9d5b;
+  --lp-green-700: #0a8249;
+  --lp-green-800: #086836;
+  --lp-green-50:  #e8f7ef;
+  --lp-ink:       #0f172a;
+  --lp-ink-2:     #1e293b;
+  --lp-mute:      #6b7280;
+  --lp-line:      #e5e7eb;
+  --lp-bg:        #ffffff;
+  --lp-bg-2:      #f8fafc;
+}
+
+* { box-sizing: border-box; }
+
+.lp-auth-body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--lp-bg-2);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  color: var(--lp-ink);
+}
+
+/* Outer wrap — full viewport, vertically centered */
+.lp-auth-wrap {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+/* Two-column grid: brand panel + sign-in card */
+.lp-auth-grid {
+  width: 100%;
+  max-width: 1080px;
+  min-height: 600px;
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1fr);
+  background: #fff;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.04),
+    0 20px 50px -20px rgba(15, 23, 42, 0.18);
+}
+
+/* ─── LEFT: green brand panel ────────────────────────────────────────────── */
+.lp-auth-brand {
+  position: relative;
+  background:
+    radial-gradient(800px 500px at 100% 100%, rgba(255, 255, 255, 0.10), transparent 60%),
+    linear-gradient(135deg, var(--lp-green-600) 0%, var(--lp-green-800) 100%);
+  color: #fff;
+  padding: 56px 52px;
+  display: flex; flex-direction: column;
+}
+
+.lp-auth-brand-row {
+  display: inline-flex; align-items: center; gap: 14px;
+  text-decoration: none; color: #fff;
+  margin-bottom: 64px;
+}
+.lp-auth-mark {
+  width: 46px; height: 46px;
+  display: inline-grid; place-items: center;
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(4px);
+  font-weight: 800; font-size: 18px;
+  border-radius: 12px;
+  letter-spacing: -0.02em;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+.lp-auth-brand-text strong {
+  display: block; font-size: 16px; font-weight: 700; line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.lp-auth-brand-text small {
+  display: block; font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.10em;
+  opacity: 0.85;
+}
+
+.lp-auth-headline {
+  margin: 0 0 16px;
+  font-size: clamp(28px, 2.8vw, 36px);
+  font-weight: 800; line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+.lp-auth-sub {
+  margin: 0 0 40px;
+  font-size: 15px; line-height: 1.65;
+  opacity: 0.94;
+  max-width: 380px;
+}
+
+.lp-auth-features {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 22px;
+}
+.lp-auth-features li {
+  display: flex; align-items: flex-start; gap: 14px;
+}
+.lp-auth-feature-icon {
+  width: 38px; height: 38px;
+  display: inline-grid; place-items: center;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  flex-shrink: 0;
+  font-size: 18px;
+}
+.lp-auth-features li div {
+  display: flex; flex-direction: column; gap: 2px;
+  padding-top: 2px;
+}
+.lp-auth-features li strong {
+  font-size: 14px; font-weight: 700;
+}
+.lp-auth-features li span {
+  font-size: 13px; line-height: 1.5;
+  opacity: 0.88;
+}
+
+/* ─── RIGHT: sign-in card ───────────────────────────────────────────────── */
+.lp-auth-card {
+  padding: 56px 56px 48px;
+  display: flex; flex-direction: column;
+  justify-content: center;
+}
+.lp-auth-card-head {
+  margin-bottom: 32px;
+}
+.lp-auth-card-head h2 {
+  margin: 0 0 8px;
+  font-size: 30px; font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--lp-ink);
+}
+.lp-auth-card-head p {
+  margin: 0;
+  font-size: 14px; color: var(--lp-mute);
+}
+
+.lp-auth-alert {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
+  background: #fef2f2; color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  font-size: 13.5px; font-weight: 500;
+  margin-bottom: 22px;
+}
+.lp-auth-alert i { font-size: 16px; }
+
+.lp-auth-form { width: 100%; max-width: 420px; }
+
+.lp-auth-field { margin-bottom: 22px; }
+.lp-auth-field label {
+  display: block;
+  font-size: 12.5px; font-weight: 600;
+  color: var(--lp-ink-2);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+.lp-auth-input {
+  position: relative;
+  display: flex; align-items: center;
+  background: var(--lp-bg);
+  border: 1.5px solid var(--lp-line);
+  border-radius: 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.lp-auth-input:focus-within {
+  border-color: var(--lp-green-600);
+  box-shadow: 0 0 0 4px rgba(12, 157, 91, 0.10);
+}
+.lp-auth-input-icon {
+  display: inline-grid; place-items: center;
+  width: 44px; height: 100%;
+  color: var(--lp-mute);
+  font-size: 16px;
+}
+.lp-auth-control {
+  flex: 1; min-width: 0;
+  border: 0; outline: 0; background: transparent;
+  padding: 14px 12px 14px 0;
+  font-size: 15px; font-family: inherit;
+  color: var(--lp-ink);
+}
+.lp-auth-control::placeholder { color: #b8c0cc; }
+.lp-auth-input-toggle {
+  display: inline-grid; place-items: center;
+  width: 40px; height: 100%;
+  border: 0; background: transparent;
+  cursor: pointer; color: var(--lp-mute);
+  font-size: 16px;
+  transition: color 0.15s ease;
+}
+.lp-auth-input-toggle:hover { color: var(--lp-ink-2); }
+
+.lp-auth-row {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 28px;
+}
+.lp-auth-check {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13.5px; color: var(--lp-ink-2);
+  cursor: pointer; user-select: none;
+}
+.lp-auth-check input[type="checkbox"] {
+  width: 16px; height: 16px;
+  accent-color: var(--lp-green-600);
+  cursor: pointer;
+}
+.lp-auth-link {
+  font-size: 13.5px; font-weight: 500;
+  color: var(--lp-green-700);
+  text-decoration: none;
+}
+.lp-auth-link:hover { text-decoration: underline; }
+
+.lp-auth-submit {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  width: 100%;
+  padding: 14px 22px;
+  background: var(--lp-green-600);
+  color: #fff;
+  border: 0; border-radius: 10px;
+  font-size: 15px; font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+  box-shadow: var(--lp-shadow, 0 14px 40px -16px rgba(12, 157, 91, 0.45));
+}
+.lp-auth-submit:hover { background: var(--lp-green-700); transform: translateY(-1px); }
+.lp-auth-submit i { font-size: 18px; }
+
+.lp-auth-divider {
+  position: relative;
+  text-align: center;
+  margin: 28px 0;
+}
+.lp-auth-divider::before {
+  content: "";
+  position: absolute; top: 50%; left: 0; right: 0;
+  height: 1px;
+  background: var(--lp-line);
+}
+.lp-auth-divider span {
+  position: relative;
+  background: #fff;
+  padding: 0 14px;
+  font-size: 12px; font-weight: 500;
+  color: var(--lp-mute);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+
+.lp-auth-social {
+  display: flex; justify-content: center; gap: 12px;
+  margin-bottom: 24px;
+}
+.lp-auth-social-btn {
+  width: 44px; height: 44px;
+  display: inline-grid; place-items: center;
+  background: var(--lp-bg);
+  color: var(--lp-mute);
+  border: 1.5px solid var(--lp-line);
+  border-radius: 10px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.lp-auth-social-btn:not(:disabled):hover {
+  border-color: var(--lp-green-600);
+  color: var(--lp-green-700);
+}
+.lp-auth-social-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.lp-auth-footer {
+  margin: 0;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--lp-mute);
+}
+.lp-auth-footer a {
+  color: var(--lp-green-700);
+  font-weight: 600;
+  text-decoration: none;
+}
+.lp-auth-footer a:hover { text-decoration: underline; }
+
+/* ─── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 880px) {
+  .lp-auth-grid {
+    grid-template-columns: 1fr;
+    min-height: 0;
+    max-width: 480px;
+  }
+  .lp-auth-brand {
+    padding: 36px 32px 28px;
+  }
+  .lp-auth-brand-row { margin-bottom: 28px; }
+  .lp-auth-headline { font-size: 24px; }
+  .lp-auth-sub { margin-bottom: 24px; font-size: 14px; }
+  .lp-auth-features { gap: 14px; }
+  .lp-auth-features li span { display: none; }
+  .lp-auth-card { padding: 36px 32px 32px; }
+}
+@media (max-width: 480px) {
+  .lp-auth-wrap { padding: 12px; }
+  .lp-auth-card { padding: 28px 22px 24px; }
+  .lp-auth-card-head h2 { font-size: 24px; }
+  .lp-auth-submit { padding: 13px 18px; }
+}

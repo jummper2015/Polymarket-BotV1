@@ -1,52 +1,170 @@
 {# Standalone on purpose: base.html's header links to protected pages and shows
-   live bot state, neither of which belongs on the login screen. #}
+   live bot state, neither of which belongs on the login screen.
+
+   Layout matches the Notika reference: left green panel with brand +
+   feature highlights, right white card with the sign-in form. #}
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Acceso — ME$IRVE</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/favicon.svg') }}">
+  <meta name="theme-color" content="#0c9d5b">
+  <meta property="og:title" content="Acceso — ME$IRVE">
+  <meta property="og:description" content="Bot automatizado para mercados up/down de Bitcoin a 5 minutos en Polymarket. TWAP-60s local, pares balanceados, hedge automático.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="{{ url_for('static', filename='img/og-image.svg') }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Acceso — ME$IRVE">
+  <meta name="twitter:description" content="Bot automatizado para mercados up/down de Bitcoin a 5 minutos en Polymarket.">
+  <meta name="twitter:image" content="{{ url_for('static', filename='img/og-image.svg') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/icons/bootstrap-icons.min.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/notika/modern.css') }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/notika/style.css') }}" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='login.css') }}" />
 </head>
-<body class="ss-body ss-login-body">
+<body class="lp-auth-body">
 
-<div class="ss-login-wrap">
-  <div class="ss-login-card notika-shadow">
+<div class="lp-auth-wrap">
+  <div class="lp-auth-grid">
 
-    <div class="text-center mb-4">
-      <span class="ss-logo ss-logo-lg"><i class="bi bi-lightning-charge-fill"></i></span>
-      <h4 class="mt-3 mb-1">ME$IRVE</h4>
-      <p class="text-muted small mb-0">Panel de control · BTC 5m</p>
-    </div>
+    <!-- LEFT: green brand panel -->
+    <aside class="lp-auth-brand">
+      <a href="/" class="lp-auth-brand-row">
+        <img class="lp-auth-mark-img" src="{{ url_for('static', filename='img/logo.svg') }}" alt="ME$IRVE" width="46" height="46">
+        <span class="lp-auth-brand-text">
+          <strong>ME$IRVE</strong>
+          <small>Admin Dashboard</small>
+        </span>
+      </a>
 
-    {% if error %}
-    <div class="alert alert-danger py-2 px-3 small" role="alert">
-      <i class="bi bi-exclamation-triangle-fill"></i> {{ error }}
-    </div>
-    {% endif %}
+      <h1 class="lp-auth-headline">Bienvenido a ME$IRVE</h1>
+      <p class="lp-auth-sub">
+        Bot automatizado para mercados up/down de Bitcoin a 5 minutos en Polymarket.
+        Ejecución mecánica, pares balanceados, hedge automático.
+      </p>
 
-    <form method="post" action="{{ url_for('login') }}">
-      {# Preserved so a deep link survives the login round-trip. #}
-      <input type="hidden" name="next" value="{{ next_url or '' }}" />
+      <ul class="lp-auth-features">
+        <li>
+          <span class="lp-auth-feature-icon"><i class="bi bi-shield-check"></i></span>
+          <div>
+            <strong>Acceso seguro</strong>
+            <span>Contraseña única, sesión sin persistencia, IP logging de intentos.</span>
+          </div>
+        </li>
+        <li>
+          <span class="lp-auth-feature-icon"><i class="bi bi-bar-chart-line"></i></span>
+          <div>
+            <strong>Trading en vivo</strong>
+            <span>Visualización de strikes, TWAP-60s y resolución de trades en tiempo real.</span>
+          </div>
+        </li>
+        <li>
+          <span class="lp-auth-feature-icon"><i class="bi bi-lightning-charge-fill"></i></span>
+          <div>
+            <strong>Ejecución rápida</strong>
+            <span>Taker orders en ms contra el CLOB, con slice sizing para minimizar impacto.</span>
+          </div>
+        </li>
+      </ul>
+    </aside>
 
-      <label for="password" class="form-label small text-muted">Contraseña</label>
-      <div class="input-group mb-3">
-        <span class="input-group-text"><i class="bi bi-key"></i></span>
-        <input type="password" class="form-control" id="password" name="password"
-               autocomplete="current-password" autofocus required />
+    <!-- RIGHT: sign-in card -->
+    <main class="lp-auth-card">
+      <header class="lp-auth-card-head">
+        <h2>Sign In</h2>
+        <p>Introduce tus credenciales para acceder al panel.</p>
+      </header>
+
+      {% if error %}
+      <div class="lp-auth-alert" role="alert">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        <span>{{ error }}</span>
       </div>
+      {% endif %}
 
-      <button type="submit" class="btn btn-success w-100">
-        <i class="bi bi-box-arrow-in-right"></i> Entrar
-      </button>
-    </form>
+      <form method="post" action="{{ url_for('login') }}" class="lp-auth-form" autocomplete="on">
+        {# Preserved so a deep link survives the login round-trip. #}
+        <input type="hidden" name="next" value="{{ next_url or '' }}" />
+
+        <div class="lp-auth-field">
+          <label for="password">Contraseña</label>
+          <div class="lp-auth-input">
+            <span class="lp-auth-input-icon"><i class="bi bi-lock-fill"></i></span>
+            <input
+              type="password"
+              class="lp-auth-control"
+              id="password"
+              name="password"
+              placeholder="Introduce la contraseña del panel"
+              autocomplete="current-password"
+              autofocus
+              required
+            />
+            <button
+              type="button"
+              class="lp-auth-input-toggle"
+              id="toggle-password"
+              aria-label="Mostrar u ocultar contraseña"
+              tabindex="-1"
+            >
+              <i class="bi bi-eye"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="lp-auth-row">
+          <label class="lp-auth-check">
+            <input type="checkbox" name="remember" id="remember" />
+            <span>Mantenerme conectado</span>
+          </label>
+          <a href="#" class="lp-auth-link" onclick="return false;">¿Olvidaste la contraseña?</a>
+        </div>
+
+        <button type="submit" class="lp-auth-submit">
+          <i class="bi bi-arrow-right-circle-fill"></i>
+          <span>Sign In</span>
+        </button>
+
+        <div class="lp-auth-divider"><span>o continuar con</span></div>
+
+        <div class="lp-auth-social">
+          <button type="button" class="lp-auth-social-btn" aria-label="Continuar con Google" disabled>
+            <i class="bi bi-google"></i>
+          </button>
+          <button type="button" class="lp-auth-social-btn" aria-label="Continuar con GitHub" disabled>
+            <i class="bi bi-github"></i>
+          </button>
+          <button type="button" class="lp-auth-social-btn" aria-label="Continuar con Microsoft" disabled>
+            <i class="bi bi-microsoft"></i>
+          </button>
+        </div>
+
+        <p class="lp-auth-footer">
+          ¿No tienes cuenta? <a href="#" onclick="return false;">Contacta al administrador</a>
+        </p>
+      </form>
+    </main>
 
   </div>
 </div>
+
+<script>
+  // Show / hide password toggle (client-side only).
+  (function () {
+    const btn  = document.getElementById('toggle-password');
+    const inp  = document.getElementById('password');
+    if (!btn || !inp) return;
+    btn.addEventListener('click', function () {
+      const showing = inp.type === 'text';
+      inp.type = showing ? 'password' : 'text';
+      const icon = btn.querySelector('i');
+      icon.className = showing ? 'bi bi-eye' : 'bi bi-eye-slash';
+    });
+  })();
+</script>
 
 </body>
 </html>
