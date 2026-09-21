@@ -199,6 +199,54 @@ def _aggregate_db_stats(
     return stats, strat_stats, symbol_stats
 
 
+def _compute_pnl_breakdown(starting_bankroll: float) -> dict:
+    """Per-period resolved P&L for the 'P&L detallado' tiles.
+
+    Each entry is `{"pnl": float, "pct": float|None}` where `pct` is
+    `pnl / starting_bankroll * 100` ("% vs base"). `None` when the
+    period has no resolved trades.
+
+    Periods use the `trades.resolved_at` column. We treat "today" as
+    UTC days (matches the rest of the bot, which logs in UTC) so the
+    numbers don't shift under users in mixed timezones.
+    """
+    from datetime import datetime, timedelta, timezone
+    from .db import TradeModel
+
+    now = datetime.now(timezone.utc)
+    today_start  = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday    = today_start - timedelta(days=1)
+    week_start   = today_start - timedelta(days=7)
+    month_start  = today_start.replace(day=1)
+
+    def _sum_since(ts_lower: datetime, ts_upper: datetime) -> float:
+        q = (
+            db.session.query(func.coalesce(func.sum(TradeModel.pnl), 0.0))
+            .filter(TradeModel.status.in_(("won", "lost")))
+            .filter(TradeModel.resolved_at != None)  # noqa: E711 — SQLAlchemy IS NOT NULL
+            .filter(TradeModel.resolved_at >= ts_lower)
+            .filter(TradeModel.resolved_at <  ts_upper)
+        )
+        return float(q.scalar() or 0.0)
+
+    def _slot(pnl: float) -> dict:
+        out = {"pnl": round(pnl, 2)}
+        if starting_bankroll > 0:
+            out["pct"] = round(pnl / starting_bankroll * 100.0, 2)
+        else:
+            out["pct"] = None
+        return out
+
+    return {
+        "yesterday": _slot(_sum_since(yesterday,  today_start)),
+        "today":     _slot(_sum_since(today_start, now)),
+        "week":      _slot(_sum_since(week_start,  now)),
+        "month":     _slot(_sum_since(month_start, now)),
+        "total":     _slot(_sum_since(
+            datetime(2000, 1, 1, tzinfo=timezone.utc), now)),
+    }
+
+
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -326,11 +374,23 @@ def create_app() -> Flask:
         except Exception:
             all_symbol_stats = {}
 
+        # Per-period P&L breakdown for the dashboard tiles. All-time +
+        # rolling windows (yesterday / today / week / month). Cheap SQL
+        # aggregation; safe to call on every refresh.
+        try:
+            with app.app_context():
+                pnl_breakdown = _compute_pnl_breakdown(
+                    snap["stats"]["starting_bankroll"]
+                )
+        except Exception:
+            pnl_breakdown = {}
+
         return jsonify({
             "config_overrides": overridden,
             "symbol": active_symbol,
             "symbols": list(states),
             "symbol_stats": all_symbol_stats or db_symbol_stats,
+            "pnl_breakdown": pnl_breakdown,
             "skips": snap.get("skips", {}),
             "observations": snap.get("observations", {}),
             # The registry, so /settings can render one card per strategy
