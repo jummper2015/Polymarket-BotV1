@@ -203,6 +203,40 @@ def get_state(
     )
 
 
+def get_rolling_twap(
+    current_ts: int,
+    lookback_seconds: int = 60,
+) -> Optional[float]:
+    """TWAP of BTC ticks in `[current_ts − lookback, current_ts]`.
+
+    Unlike `get_state` (which tracks the resolution window [T+240, T+300]),
+    this computes a rolling TWAP over **any** recent interval. Use it during
+    the entry window (secs < 240) where no resolution TWAP exists yet.
+
+    Smoother than spot (which can whipsaw 30 ticks in 60s) but more
+    responsive than the final TWAP-60s. Falls back to None if the feed
+    isn't ready or there are fewer than ~10 ticks in the window — in those
+    cases the caller should use spot.
+    """
+    if not coinbase_ticker_feed.is_ready():
+        return None
+
+    start_ms = (int(current_ts) - int(lookback_seconds)) * 1000
+    end_ms = int(current_ts) * 1000
+
+    with coinbase_ticker_feed._lock:  # noqa: SLF001 — intentional cross-module
+        relevant = [(t, p) for t, p in coinbase_ticker_feed._buffer
+                   if start_ms <= t <= end_ms]
+
+    # Below ~10 samples the average is too noisy to be useful — return None
+    # so the caller can fall back to spot.
+    if len(relevant) < 10:
+        return None
+
+    prices = [p for _, p in relevant]
+    return sum(prices) / len(prices)
+
+
 def should_hedge(
     window_ts: int,
     current_ts: int,

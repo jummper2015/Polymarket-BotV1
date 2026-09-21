@@ -144,6 +144,11 @@ class BotState:
         self.ta_twap_hedge_enabled: bool  = False
         self.ta_twap_hedge_margin:  float = 50.0
         self.ta_twap_hedge_max_sum: float = 0.92
+        # TWAP-based entry signal: rolling 60s TWAP replaces raw spot as
+        # the reference for itm_pct and the ATR impulse filter.
+        # Added 2026-09-21.
+        self.ta_use_twap_signal:   bool  = True
+        self.ta_twap_lookback_sec: int   = 60
         # Stop-loss / Trailing-stop (wired 2026-09-13 cutover so /settings can
         # expose them — temporal_arb.py uses getattr fallbacks if absent).
         self.ta_stop_loss_enabled:    bool  = True
@@ -647,6 +652,8 @@ class BotState:
                 "ta_twap_hedge_enabled": self.ta_twap_hedge_enabled,
                 "ta_twap_hedge_margin":  self.ta_twap_hedge_margin,
                 "ta_twap_hedge_max_sum": self.ta_twap_hedge_max_sum,
+                "ta_use_twap_signal":     self.ta_use_twap_signal,
+                "ta_twap_lookback_sec":   self.ta_twap_lookback_sec,
                 "ta_stop_loss_enabled":    self.ta_stop_loss_enabled,
                 "ta_stop_loss_time_sec":   self.ta_stop_loss_time_sec,
                 "ta_stop_loss_threshold":  self.ta_stop_loss_threshold,

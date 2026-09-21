@@ -19,6 +19,26 @@ from bot.strategies.temporal_arb import (
 from bot.strategies.base import StrategyContext
 
 
+# ── isolation ───────────────────────────────────────────────────────────────
+# The TWAP-based entry signal (added 2026-09-21) pulls from the global
+# `coinbase_ticker_feed._buffer`. If a previous test left ticks there
+# (e.g., from test_polymarket_twap_tracker), the rolling TWAP will return
+# a non-None value and override the spot used by the test. Reset the feed
+# before each test so signal behavior is fully under the test's control.
+@pytest.fixture(autouse=True)
+def _reset_global_feed():
+    from bot import coinbase_ticker_feed as _feed
+    with _feed._lock:  # noqa: SLF001
+        _feed._buffer.clear()
+    _feed._last_tick_at = 0.0
+    _feed._connected = False
+    yield
+    with _feed._lock:  # noqa: SLF001
+        _feed._buffer.clear()
+    _feed._last_tick_at = 0.0
+    _feed._connected = False
+
+
 # ── find_leader_side ─────────────────────────────────────────────────────────
 
 class TestFindLeaderSide:
@@ -657,6 +677,80 @@ class TestObserveHalfOpen:
         names = {p.name for p in DESCRIPTOR.params}
         for expected in ("ta_twap_hedge_enabled", "ta_twap_hedge_margin", "ta_twap_hedge_max_sum"):
             assert expected in names, f"missing param: {expected}"
+
+    # ── TWAP-based entry signal ───────────────────────────────────────────
+
+    def test_find_leader_side_with_twap_uses_twap_not_spot(self):
+        """When `twap` is passed, the itm_pct reference price is the TWAP,
+        not spot. A spot-above-strike scenario with TWAP-below-strike should
+        classify as DOWN leader (or no signal if TWAP < threshold)."""
+        # spot is above strike (would normally trigger UP leader)
+        # twap is below strike (smoothed momentum says DOWN)
+        side, px, itm = find_leader_side(
+            spot=60_080.0,
+            strike=60_000.0,
+            ask_up=0.50,
+            ask_dn=0.45,
+            min_itm_pct=0.05,
+            min_ask=0.40,
+            max_ask=0.55,
+            twap=59_850.0,  # TWAP says DOWN
+        )
+        assert side == "DOWN"
+        assert px == 0.45
+        # itm = (59850 - 60000) / 60000 * 100 = -0.25%
+        assert itm == pytest.approx(-0.25, abs=1e-6)
+
+    def test_find_leader_side_twap_falls_below_min_itm_when_spot_doesnt(self):
+        """If spot is just barely above min_itm_pct but TWAP is well below,
+        the TWAP reference correctly skips (no false signal)."""
+        # spot = 60030 → itm_spot = +0.05% (above 0.05% threshold → would trigger)
+        # twap = 59980 → itm_twap = -0.033% (below 0.05% threshold → skip)
+        side, px, itm = find_leader_side(
+            spot=60_030.0,
+            strike=60_000.0,
+            ask_up=0.50,
+            ask_dn=0.45,
+            min_itm_pct=0.05,
+            min_ask=0.40,
+            max_ask=0.55,
+            twap=59_980.0,
+        )
+        # TWAP signal dominates; with itm_twap < min_itm_pct, no signal.
+        assert side is None
+        assert px is None
+        assert itm == pytest.approx(-0.0333, abs=1e-3)
+
+    def test_find_leader_side_without_twap_falls_back_to_spot(self):
+        """Backward compat: when twap=None, behavior is identical to the
+        pre-TWAP implementation (uses spot)."""
+        side, px, itm = find_leader_side(
+            spot=60_080.0,
+            strike=60_000.0,
+            ask_up=0.50,
+            ask_dn=0.45,
+            min_itm_pct=0.05,
+            min_ask=0.40,
+            max_ask=0.55,
+            # twap omitted (default None)
+        )
+        assert side == "UP"
+        assert px == 0.50
+        assert itm == pytest.approx(0.1333, abs=1e-3)
+
+    def test_use_twap_signal_default_enabled(self):
+        """TWAP-based entry signal defaults to ON — bot uses TWAP by default."""
+        from bot.strategies.temporal_arb import (
+            USE_TWAP_SIGNAL_DEFAULT, TWAP_LOOKBACK_SEC_DEFAULT,
+        )
+        assert USE_TWAP_SIGNAL_DEFAULT is True
+        assert TWAP_LOOKBACK_SEC_DEFAULT == 60
+
+    def test_twap_entry_signal_runtime_fields_exposed(self):
+        """The two new TWAP-signal fields must appear in DESCRIPTOR.params."""
+        names = {p.name for p in DESCRIPTOR.params}
+        assert "ta_use_twap_signal" in names
+        assert "ta_twap_lookback_sec" in names
 
 
 class TestObserveTerminal:

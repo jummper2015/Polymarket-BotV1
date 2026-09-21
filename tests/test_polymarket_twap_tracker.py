@@ -319,3 +319,72 @@ def test_feed_returns_zero_when_global_feed_not_ready():
 
     added = tr.feed_from_ticker_buffer(1_789_594_800, int(time.time()))
     assert added == 0
+
+
+# ── get_rolling_twap (entry-window TWAP, not resolution oracle) ──────────────
+
+
+def test_get_rolling_twap_returns_none_when_feed_not_ready():
+    from bot import polymarket_twap_tracker as tr
+    from bot import coinbase_ticker_feed as feed
+    feed._connected = False
+    feed._last_tick_at = 0.0
+    with feed._lock:
+        feed._buffer.clear()
+    assert tr.get_rolling_twap(int(time.time())) is None
+
+
+def test_get_rolling_twap_returns_none_with_too_few_ticks():
+    from bot import polymarket_twap_tracker as tr
+    from bot import coinbase_ticker_feed as feed
+
+    now_ms = int(time.time() * 1000)
+    with feed._lock:
+        feed._buffer.clear()
+        # Only 5 ticks — below the 10-tick threshold.
+        for i in range(5):
+            feed._buffer.append((now_ms - 5_000 + i * 1_000, 76_000.0))
+    feed._last_tick_at = time.time()
+    feed._connected = True
+
+    assert tr.get_rolling_twap(int(time.time()), lookback_seconds=60) is None
+
+
+def test_get_rolling_twap_averages_ticks_in_window():
+    from bot import polymarket_twap_tracker as tr
+    from bot import coinbase_ticker_feed as feed
+
+    now_ms = int(time.time() * 1000)
+    with feed._lock:
+        feed._buffer.clear()
+        # 60 ticks alternating 75000/76000 within the last 60s → avg = 75500
+        for i in range(60):
+            ts_ms = now_ms - 60_000 + i * 1_000
+            price = 75_000.0 if i % 2 == 0 else 76_000.0
+            feed._buffer.append((ts_ms, price))
+    feed._last_tick_at = time.time()
+    feed._connected = True
+
+    twap = tr.get_rolling_twap(int(time.time()), lookback_seconds=60)
+    assert twap == pytest.approx(75_500.0, abs=1e-6)
+
+
+def test_get_rolling_twap_excludes_ticks_outside_window():
+    from bot import polymarket_twap_tracker as tr
+    from bot import coinbase_ticker_feed as feed
+
+    now_ms = int(time.time() * 1000)
+    with feed._lock:
+        feed._buffer.clear()
+        # 30 ticks INSIDE the 60s window — should average to 76000
+        for i in range(30):
+            feed._buffer.append((now_ms - 30_000 + i * 1_000, 76_000.0))
+        # 20 ticks OUTSIDE the window — should be excluded
+        for i in range(20):
+            feed._buffer.append((now_ms - 90_000 + i * 1_000, 90_000.0))
+    feed._last_tick_at = time.time()
+    feed._connected = True
+
+    twap = tr.get_rolling_twap(int(time.time()), lookback_seconds=60)
+    # Only the 30 inside-window ticks at 76000 should contribute.
+    assert twap == pytest.approx(76_000.0, abs=1e-6)

@@ -107,6 +107,14 @@ TWAP_HEDGE_ENABLED_DEFAULT = False
 TWAP_HEDGE_MARGIN_DEFAULT  = 50.0  # $|margin|$ in dollars for the TWAP projection
 TWAP_HEDGE_MAX_SUM_DEFAULT = 0.92  # same cost ceiling as Path B
 
+# TWAP-based entry signal defaults (added 2026-09-21)
+# Replaces the raw spot price as the reference for itm_pct and the ATR
+# impulse filter. The rolling TWAP (60s of Coinbase ticks) smooths out
+# intra-spread noise and reduces false-direction flips while keeping the
+# signal responsive. Default ON; disable for backtesting or A/B comparison.
+USE_TWAP_SIGNAL_DEFAULT     = True
+TWAP_LOOKBACK_SEC_DEFAULT    = 60    # window for the rolling TWAP computation
+
 # Stop-loss defaults
 STOP_LOSS_ENABLED_DEFAULT    = True
 STOP_LOSS_TIME_SEC_DEFAULT   = 60.0   # wait at least this long before considering stop-loss
@@ -179,6 +187,7 @@ def find_leader_side(
     min_itm_pct: float,
     min_ask: float,
     max_ask: float,
+    twap: Optional[float] = None,
 ) -> tuple[Optional[str], Optional[float], float]:
     """Identify the mispriced leading side based on BTC impulse vs strike.
 
@@ -187,17 +196,24 @@ def find_leader_side(
       - ask   = the leader's current ask, or None
       - itm_pct = signed % move through the strike (positive = BTC above strike)
 
+    `twap` is a smoothed price (e.g., 60s rolling average of Coinbase ticks)
+    used as the reference when provided; `spot` is the live tick used as
+    fallback when TWAP isn't ready. The smoother TWAP signal produces fewer
+    false-direction flips than raw spot in a 5-min window — meaningful
+    when the entry threshold (`min_itm_pct`) is small.
+
     The leader is the side BTC has already moved toward:
-      - BTC > strike → "UP" is the leader
-      - BTC < strike → "DOWN" is the leader
+      - ref > strike → "UP" is the leader
+      - ref < strike → "DOWN" is the leader
     We only enter if the leader's ask is in [min_ask, max_ask]: below that band
     the market has already fully repriced (no edge left); above it the market
     already overpriced the leader (also no edge, and wrong direction of misprice).
     """
-    if spot is None or strike is None or strike <= 0:
+    ref = twap if twap is not None else spot
+    if ref is None or strike is None or strike <= 0:
         return None, None, 0.0
 
-    itm_pct = (spot - strike) / strike * 100.0
+    itm_pct = (ref - strike) / strike * 100.0
 
     if abs(itm_pct) < min_itm_pct:
         return None, None, itm_pct  # coin-flip territory — no directional signal
@@ -395,6 +411,9 @@ def _observe(ctx: StrategyContext) -> None:
     rsi_oversold         = float(getattr(state, "ta_rsi_oversold",        RSI_OVERSOLD_DEFAULT))
     use_volume           = bool(getattr(state, "ta_use_volume",           USE_VOLUME_DEFAULT))
     min_volume_ratio     = float(getattr(state, "ta_min_volume_ratio",    MIN_VOLUME_RATIO_DEFAULT))
+    # TWAP-based entry signal (2026-09-21)
+    use_twap_signal        = bool(getattr(state, "ta_use_twap_signal", USE_TWAP_SIGNAL_DEFAULT))
+    twap_lookback_sec      = int(getattr(state, "ta_twap_lookback_sec", TWAP_LOOKBACK_SEC_DEFAULT))
 
     # ── terminal states ───────────────────────────────────────────────────────
     if ta.phase in ("complete", "lpt_complete", "hedged", "closed"):
@@ -822,13 +841,30 @@ def _observe(ctx: StrategyContext) -> None:
             ta.strike = open_px
             logger.info(f"[TA] ✅ Strike obtenido: ${ta.strike:,.2f}", icon="⚡")
 
-        # Gate 3: check BTC spot vs strike to identify the leader
+        # Gate 3: check BTC spot vs strike to identify the leader.
+        # When the TWAP signal is enabled (default) we feed find_leader_side
+        # the rolling TWAP of the last N seconds — a smoothed price that
+        # produces fewer false-direction flips than raw spot in a 5-min
+        # window. Falls back to spot when the feed isn't ready or hasn't
+        # accumulated enough ticks.
         spot = getattr(state, "spot_price", None)
         if ask_up is None or ask_dn is None or spot is None:
             return
 
+        twap_ref = None
+        if use_twap_signal:
+            try:
+                from .. import polymarket_twap_tracker as _twap_tracker
+                import time as _time
+                twap_ref = _twap_tracker.get_rolling_twap(
+                    int(_time.time()), lookback_seconds=twap_lookback_sec
+                )
+            except Exception:
+                twap_ref = None  # fall back to spot silently
+
         side, px, itm_pct = find_leader_side(
-            spot, ta.strike, ask_up, ask_dn, min_itm, min_ask, max_ask
+            spot, ta.strike, ask_up, ask_dn, min_itm, min_ask, max_ask,
+            twap=twap_ref,
         )
 
         # ── Technical indicator filters (applied BEFORE entry) ────────────────────
@@ -836,17 +872,20 @@ def _observe(ctx: StrategyContext) -> None:
         if side is not None:
             from ..indicators import get_atr, get_rsi, get_volume_ratio
 
-            # Filter 1: ATR normalized impulse
+            # Filter 1: ATR normalized impulse (TWAP-based when available,
+            # so the filter measures smoothed deviation rather than tick noise).
             if use_atr:
                 atr = get_atr(symbol, 14)
                 if atr and atr > 0 and ta.strike:
-                    impulse_dollars = abs(spot - ta.strike) if spot else 0
+                    ref_price = twap_ref if twap_ref is not None else spot
+                    impulse_dollars = abs(ref_price - ta.strike) if ref_price else 0
                     norm_impulse = impulse_dollars / atr
                     if norm_impulse < min_norm_impulse:
                         logger.info(
                             f"[M$] ⏭ SKIP_WEAK_IMPULSE  "
                             f"impulse=${impulse_dollars:.2f}  atr=${atr:.2f}  "
-                            f"norm={norm_impulse:.2f}ATR < {min_norm_impulse:.2f}ATR",
+                            f"norm={norm_impulse:.2f}ATR < {min_norm_impulse:.2f}ATR"
+                            f"{'  [TWAP]' if twap_ref is not None else ''}",
                             icon="⏭",
                         )
                         state.record_skip("TA_SKIP_WEAK_IMPULSE")
@@ -1154,5 +1193,14 @@ DESCRIPTOR = StrategyDescriptor(
             minimum=1.0, maximum=3.0, step=0.1,
             hint="Volumen actual debe ser ≥ X veces el promedio (default 1.5)",
         ),
-    ),
+        # ── TWAP-based entry signal (added 2026-09-21) ────────────────────────────
+        RuntimeField("ta_use_twap_signal", "bool", label="Usar TWAP rolling para entry",
+                     hint="Reemplaza spot por TWAP de 60s como referencia para itm_pct y filtro ATR"),
+        RuntimeField(
+            "ta_twap_lookback_sec", "int",
+            label="TWAP lookback (s)",
+            minimum=10, maximum=120, step=5,
+            hint="Ventana en segundos para el TWAP rolling (default 60)",
+        ),
+    )
 )
