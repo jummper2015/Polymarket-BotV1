@@ -1,20 +1,41 @@
-# Streak Snapper v2 — Polymarket BTC/ETH/SOL Bot
+# ME$IRVE — Polymarket BTC 5-min Bot
 
-Bot automatizado que opera los mercados **up/down de 5 minutos** en [Polymarket](https://polymarket.com). Incluye un dashboard Flask en tiempo real con KPIs, métricas por estrategia, libro de órdenes en vivo y control de configuración.
+Bot automatizado que opera los mercados **up/down de Bitcoin a 5 minutos**
+en [Polymarket](https://polymarket.com). Una sola estrategia activa
+(`temporal_arb`) con strike source TWAP-60s local, pares balanceados,
+hedge recovery, stop-loss dinámico y dos paths nuevos (profit-lock y
+martingale) listos para activar manualmente.
+
+Web dashboard en tiempo real con KPIs, métricas por estrategia, libro
+de órdenes en vivo y control de configuración. Landing pública en
+`https://polytradebot.cloud/` con auth rediseñado.
 
 ---
 
-## Estrategias activas
+## Estado actual (2026-09-23)
 
-| Estrategia | Modo | Edge | Estado |
-|---|---|---|---|
-| `box_builder` | Maker — cotiza en ambos lados en la primera mitad | Par redime a $1 sin riesgo direccional | **Activa** — `BB_ENABLED=true` con credenciales maker |
-| `coin_flip_dog` | Taker tardío — entra a T-30..T-90 | Underdog ask 0,22–0,47, coa ≤ 0,20 | **Activa** — `CFD_ENABLED=true` para acumular datos |
+- **Estrategia activa:** `temporal_arb` (única estrategia operativa)
+- **Modo:** paper mode con bankroll **$1000.00**
+- **Strike source:** local TWAP-60s desde Coinbase WebSocket
+  (gap vs oficial < $5)
+- **Estrategia configurada:** conservador (validación 3-5 días)
+- **Despliegue:** VPS Hostinger LT (`srv1702650`) en Vilnius, Lithuania
+- **Landing:** `https://polytradebot.cloud/`
+- **Auth:** Notika split layout con green panel + form card
 
-**Desactivadas** (módulos preservados como referencia):
-- `ss_fade` — medida +3,74%/op (Fase 8) pero descontinuada en esta fase.
-- `ss_trend` — medida −4,22%/op (t=−2,61). Sin edge.
-- `spread_harvest` — solo observación, nunca operó.
+### Features operativas
+
+| Path | Descripción | Estado |
+|---|---|---|
+| **Entry (Path A)** | Compra líder cuando BTC cruza el strike | ✅ activo |
+| **Pair completion** | Cierra par cuando segundo leg cheap | ✅ activo |
+| **Hedge Recovery (Path B)** | Compra opuesto si primer leg cae fuerte | ✅ activo |
+| **Stop-loss** | 3 disparadores: time threshold, trailing, catastrófico | ✅ activo |
+| **TWAP-aware hedge (Path C)** | Hedge anticipado si TWAP-60s se opone | ⚪ OFF (manual) |
+| **Profit-Lock completion (Path D)** | Cierre forzado tras 30s en ganancias | ⚪ OFF (manual) |
+| **Martingale hedge (Path E)** | Compra opuesta con qty multiplicada en pérdida | ⚪ OFF (manual) |
+| **Late Pair Taker (LPT)** | Compra ambos lados si suma ≤ cap al cierre | ⚪ OFF |
+| **TWAP entry signal** | Reemplaza spot por TWAP rolling 60s | ✅ activo |
 
 ---
 
@@ -26,192 +47,180 @@ pip install -r requirements.txt
 
 # Copiar y editar variables de entorno
 cp .env.example .env
+# Editar: DASHBOARD_PASSWORD, STARTING_BANKROLL, etc.
 
-# Arrancar (paper por defecto)
+# Arrancar (paper mode por defecto)
 python run.py
 
-# Puerto alternativo
-PORT=5055 python run.py
+# Suite de tests
+python -m pytest tests/ -q
+# Output: 581 passed, 1 skipped
 ```
 
-El dashboard queda disponible en `http://localhost:5000`.
+El dashboard queda en `http://localhost:5000`.
 
-> **Nota:** El bot rechaza arrancar si `DASHBOARD_HOST` no es loopback y `DASHBOARD_PASSWORD` está vacío. Para uso local: `DASHBOARD_HOST=127.0.0.1`.
+> ⚠️ El bot **rechaza arrancar** si `DASHBOARD_HOST` no es loopback y
+> `DASHBOARD_PASSWORD` está vacío (`bot/auth.py:verify_startup_config`).
+> Para uso local: `DASHBOARD_HOST=127.0.0.1`.
 
 ---
 
 ## Comandos útiles
 
 ```bash
-# Suite de tests (493 tests, ~7s)
+# Suite completa
 python -m pytest tests/ -q
 
-# Backtest completo (golpea Binance + Gamma, tarda minutos)
-python -m bot.backtest --windows 2900 --mode both --labels gamma --csv data/out.csv
+# Verificar operativa en VPS
+ssh root@76.13.251.202
+systemctl status polymarket-bot
 
-# Estudio de umbrales
-python -m bot.threshold_study --windows 3000
+# Log en vivo
+tail -f /opt/polymarket-bot/logs/bot.log | grep -E "TA_|💰|🛡"
 
-# Calibración de precios
-python scripts/price_calibration.py --windows 2000
+# Trades resueltos últimas 24h
+sqlite3 -header -column /opt/polymarket-bot/data/streak_snapper.db \
+  "SELECT COUNT(*) total, SUM(won=1) wins, ROUND(100.0*SUM(won=1)/COUNT(*),1) wr, ROUND(SUM(pnl),2) pnl FROM trades WHERE opened_at > datetime('now','-1 day');"
 ```
 
 ---
 
 ## Arquitectura
 
-`run.py` → `bot/main.py:main()` arranca un poller de precio spot, un hilo `StreakSnapperTrader` por símbolo en `SS_SYMBOLS`, un feed opcional Chainlink TWAP (solo BTC) y la app Flask en el hilo principal.
+```
+run.py
+  ↓
+bot/main.py:main()
+  ↓ (proceso único)
+  ├── Spot price poller (CoinGecko fallback)
+  ├── [por símbolo en SS_SYMBOLS]
+  │     └── bot/streak_trader.py — StreakSnapperTrader
+  │           ├── PriceFeed (CLOB v2 WebSocket)
+  │           ├── coinbase_ticker_feed (background thread, 90s rolling)
+  │           └── temporal_arb._observe() (cada 4s durante la ventana)
+  ├── coinbase_ticker_feed.start() — WebSocket Coinbase BTC-USD
+  └── bot/dashboard.py — Flask app
+        ├── GET /              → landing.html (público)
+        ├── GET /login         → login rediseñado (Notika split)
+        ├── GET /dashboard     → dashboard.html (auth required)
+        ├── GET /settings      → settings.html (RuntimeFields editor)
+        ├── GET /metrics       → métricas adicionales
+        └── GET /state         → JSON state (KPI tiles, pnl_breakdown, etc.)
+```
 
-### Ciclo de ventana (`bot/streak_trader.py`)
+### Ciclo de ventana (5 min)
 
-1. `market.load_market_for_current_window()` — resuelve IDs de tokens UP/DOWN.
-2. `_resolve_pending_trades()` + `_confirm_binance_resolutions()` — liquida ventanas pasadas.
-3. `PriceFeed` (CLOB v2 WebSocket) arranca y se mantiene durante toda la ventana.
-4. `_check_regime()` — filtros de régimen (todos off por defecto).
-5. Evalúa señales: `descriptor.evaluate(ctx)` para cada estrategia habilitada.
-6. `_execute_signal()` — ejecuta señal taker (coin_flip_dog).
-7. `_wait_out_window()` — espera cierre; `observe` y `evaluate_late` cada 4 s. **Box Builder vive aquí.**
-8. Liquida esta ventana antes de abrir la siguiente.
-
-### Box Builder
-
-Máquina de estados ejecutada en `observe` cada 4 s. Coloca bids maker en UP y DOWN en la primera mitad de la ventana (`BB_QUOTE_CUTOFF_SEC`). Cuando ambas patas llenan, el par redime a $1,00 — sin riesgo direccional, ≥ 6 c/par bloqueado.
-
-### Coin-Flip Dog
-
-Señal tardía en `evaluate_late` (T-30 a T-90 s). Entra en el lado underdog cuando `ask ∈ [0,22, 0,47]` y `coa = |mark − strike| / ATR4 ≤ 0,20`.
-
-### Resolución: dos fuentes
-
-Binance liquida al cierre de vela (`resolution_source="binance"`). Gamma (resultado oficial Polymarket) publica ~3 min después y corrige discrepancias en `_confirm_binance_resolutions()`.
+1. `bot/market.py` — resuelve IDs de tokens UP/DOWN de Polymarket vía Gamma.
+2. `bot/polymarket_price.py:get_strike()` — obtiene strike via rolling TWAP-60s.
+3. `_resolve_pending_trades()` + `_confirm_binance_resolutions()` — liquida pasadas.
+4. `_observe()` se ejecuta cada ~4s con el contexto (window_ts, secs_left, ask_up/dn, spot).
+5. Lógica temporal_arb (ver sección "Estrategia").
 
 ---
 
-## Variables de entorno principales
+## Estrategia: `temporal_arb`
 
-| Variable | Por defecto | Descripción |
+Archivo: `bot/strategies/temporal_arb.py`. Una sola función `_observe()` aplica los
+caminos en orden:
+
+1. **Path A — Pair completion:** si `first_px + opp_ask ≤ ta_complete_cap`,
+   compra el segundo leg y completa el par (lock instantáneo).
+2. **Path B — Hedge Recovery:** si el primer leg cae ≥ `ta_hedge_drop_pct` y
+   `first_px + hedge_ask ≤ ta_hedge_max_sum`, compra el lado opuesto para
+   acotar la pérdida.
+3. **Path C — TWAP-aware hedge** *(OFF)*: en los últimos 60s, si la
+   TWAP-60s oficial proyecta el lado opuesto con `|margin| ≥ $50`,
+   hedge anticipado.
+4. **Path D — Profit-Lock completion** *(OFF)*: tras `profit_lock_min_secs`
+   (30s) con la pata en ganancias, fuerza cierre si `pair ≤ profit_lock_cap`
+   ($1).
+5. **Path E — Martingale hedge** *(OFF)*: tras `mart_hedge_min_secs` (30s) en
+   pérdidas, compra opuesta con `qty × mult × (1 + loss_pct)` hasta
+   `mart_hedge_max_rounds` (3).
+6. **Bailout** si todo falla: a T-60s la pata queda sola y se liquida.
+
+### Strike source: TWAP-60s local
+
+Archivo: `bot/polymarket_twap_tracker.py`. Background WebSocket thread
+suscrito a `wss://ws-feed.exchange.coinbase.com`, canal `ticker`, producto
+`BTC-USD`. Mantiene un buffer rolling de 90s de ticks.
+
+Cuando `_observe()` necesita una señal:
+- `get_rolling_twap(current_ts, lookback_seconds=60)` — TWAP de los últimos 60s
+- Si el buffer tiene <10 ticks → devuelve None → fallback a spot
+
+Esto suaviza el ruido intra-spread y produce menos flips de dirección que
+el spot crudo.
+
+---
+
+## Configuración
+
+Toda la config se gestiona desde `/settings` en el dashboard (bot_config
+table + .env override). Defaults conservadores:
+
+| Campo | Default | Propuesto validación |
 |---|---|---|
-| `TRADING_MODE` | `paper` | `paper` o `real` |
-| `STARTING_BANKROLL` | `1000.0` | Bankroll inicial |
-| `SS_SYMBOLS` | `btc` | Mercados a operar (`btc`, `eth`, `sol`) |
-| `SS_ENABLED` | `true` | Activa el trader |
-| `SS_SIZING` | `flat` | `flat`, `kelly` o `martingale` |
-| `BB_ENABLED` | `false` | Activa Box Builder (requiere maker orders) |
-| `CFD_ENABLED` | `false` | Activa Coin-Flip Dog |
-| `PORT` | `5000` | Puerto del dashboard |
-| `DASHBOARD_HOST` | `0.0.0.0` | Host del dashboard |
-| `DASHBOARD_PASSWORD` | — | Contraseña (obligatoria si host no es loopback) |
-| `PRIVATE_KEY` | — | Clave privada wallet Polygon (solo modo real) |
-| `PROXY_WALLET` | — | Proxy wallet Polymarket (solo modo real) |
+| `ta_min_itm_pct` | 0.025 | **0.05** |
+| `ta_min_normalized_impulse` | 0.8 | **0.7** |
+| `ta_shares_per_leg` | 5 | **30** |
+| `ta_complete_cap` | 0.82 | **0.82** |
+| `ta_bailout_sec` | 60 | **60** |
+| `ta_entry_cutoff_sec` | 150 | **90** |
+| `ta_hedge_drop_pct` | 0.40 | **0.40** |
+| `ta_hedge_max_sum` | 0.92 | **0.94** |
+| `ta_stop_loss_time_sec` | 60 | **60** |
+| `ta_stop_loss_threshold` | 0.25 | **0.35** |
+| `ta_trailing_stop_pct` | 0.30 | **0.30** |
+| `ta_catastrophic_loss_pct` | 0.50 | **0.45** |
+| `ta_profit_lock_enabled` | false | false |
+| `ta_mart_hedge_enabled` | false | false |
+| `ta_use_twap_signal` | true | true |
+| `ta_twap_lookback_sec` | 60 | 60 |
+| `ta_lpt_enabled` | false | false |
 
-Ver `.env.example` para la lista completa.
-
----
-
-## Fuente de datos
-
-| Dato | Fuente | Uso |
-|---|---|---|
-| Precio spot BTC/ETH/SOL | **Binance** REST (velas 5m y 4h) | Resolución de ventanas, filtros de régimen, ATR |
-| Precios UP/DOWN en tiempo real | **Polymarket CLOB v2 WebSocket** | Señales, sizing, libro de órdenes |
-| Resultado oficial | **Gamma API** (Polymarket) | Confirmación de resolución ~3 min post-cierre |
-| Precio spot en dashboard | CoinGecko (cada 10 s) | Solo visualización en el header |
-| TWAP (opcional) | **Chainlink** on-chain | Filtro adicional — off por defecto (`CL_TWAP_ENABLED=false`) |
-
-Binance es la fuente primaria para la resolución de resultados. Ver [Binance puede seguir usándose](#binance).
+Para más detalle de cada parámetro y conflictos entre ellos:
+**`docs/AUDITORIA_TA_2026-09-18.md`**.
 
 ---
 
-## Dashboard web
+## Despliegue
 
-Disponible en `http://localhost:5000`.
+Workflow documentado en `docs/DEPLOY_VPS_HOSTINGER.md`. Resumen:
 
-| Ruta | Descripción |
+- **VPS:** Hostinger LT, Ubuntu 24.04, hostname `srv1702650`
+- **IP:** 76.13.251.202
+- **Usuario:** root
+- **Repo:** `/opt/polymarket-bot/` (detached HEAD `e8f8c6b`)
+- **Servicio:** `systemctl {start,stop,restart,status} polymarket-bot`
+- **Deploy workflow:** git push → `sshpass scp <files>` → `cp bot/file.py`
+  → `systemctl restart polymarket-bot`. **Nunca `git pull`** — divergencia
+  con VPS.
+
+### Backup antes de cambios destructivos
+```bash
+cp -r /opt/polymarket-bot /opt/polymarket-bot.bak.$(date +%Y%m%d)
+```
+
+---
+
+## Documentación relacionada
+
+| Doc | Propósito |
 |---|---|
-| `/` | Dashboard principal (KPIs, precios, libro, log) |
-| `/settings` | Configuración en tiempo real |
-| `/state` | JSON snapshot del estado activo |
-| `/api/trades` | Historial de trades paginado |
-| `/api/trades.csv` | Exportación CSV |
-| `/api/metrics/series` | Series temporales de métricas |
-| `POST /config` | Actualizar parámetros en caliente |
-| `POST /config/reset` | Resetear a valores del `.env` |
-| `/healthz` | Health check |
+| `CLAUDE.md` | Guía para Claude Code sobre este repo |
+| `docs/AUDITORIA_TA_2026-09-18.md` | Análisis de conflictos TA + config óptima |
+| `docs/ESTADO_BOT_2026-09-17.md` | Estado completo al cierre de sesión |
+| `docs/DEPLOY_VPS_HOSTINGER.md` | Deploy paso a paso |
+| `docs/PAPER_TO_REAL_RUNBOOK.md` | Migración paper → real |
+| `docs/RUTA.md` | Roadmap del proyecto |
+| `docs/PLAN.md` | Plan estratégico |
+| `docs/ARCHIVOS.md` | Mapa de archivos |
 
 ---
 
-## 🚀 Despliegue en VPS
+## Licencia y disclaimer
 
-### Guía rápida (10 minutos)
-
-El bot incluye scripts automatizados para desplegarlo en un VPS (Hostinger, DigitalOcean, etc.) con systemd + Nginx + SSL.
-
-**📖 Lee primero:** [`START_HERE.md`](START_HERE.md)
-
-**🎯 Guía rápida:** [`DEPLOY_QUICK.md`](DEPLOY_QUICK.md)
-
-**📋 Checklist imprimible:** [`CHECKLIST.txt`](CHECKLIST.txt)
-
-**📚 Guía detallada:** [`docs/DEPLOY_VPS_HOSTINGER.md`](docs/DEPLOY_VPS_HOSTINGER.md)
-
-**🔌 Trabajo remoto:** [`docs/REMOTE_SSH_GUIDE.md`](docs/REMOTE_SSH_GUIDE.md)
-
-**🌍 Ubicación del VPS:** [`docs/VPS_LOCATION_SUMMARY.md`](docs/VPS_LOCATION_SUMMARY.md) ⚠️ **Importante para latencia**
-
-### Scripts incluidos
-
-```bash
-# Instalación automática
-bash scripts/vps_setup.sh
-
-# Crear servicio systemd (como root)
-sudo bash scripts/create_systemd_service.sh
-
-# Configurar Nginx + SSL (como root)
-sudo bash scripts/setup_nginx.sh tudominio.com
-
-# Validar despliegue
-bash scripts/validate_deployment.sh
-
-# Test de latencia (ejecutar desde tu VPS)
-bash scripts/test_latency.sh
-python3 scripts/test_latency_detailed.py
-```
-
-### Comandos post-despliegue
-
-```bash
-# Control del bot
-sudo systemctl start|stop|restart|status polymarket-bot
-
-# Ver logs
-tail -f ~/Polymarket-BotV1/logs/bot.log
-
-# Acceder al dashboard
-https://tudominio.com
-```
-
----
-
-## Pasar a modo real
-
-1. Crear cuenta en [Polymarket](https://polymarket.com) y depositar USDC en Polygon.
-2. Obtener `PRIVATE_KEY` de tu wallet Polygon.
-3. Obtener la dirección `PROXY_WALLET` de Polymarket.
-4. Configurar en `.env`:
-   ```
-   TRADING_MODE=real
-   PRIVATE_KEY=0x...
-   PROXY_WALLET=0x...
-   ```
-5. Reiniciar el bot. El dashboard muestra el checklist de readiness.
-
----
-
-## Advertencias de riesgo
-
-- Los mercados de predicción son instrumentos especulativos de alto riesgo.
-- El modo paper no garantiza los mismos resultados en modo real.
-- Nunca compartas tu `PRIVATE_KEY` ni la subas a un repositorio público.
-- Empieza siempre con montos pequeños para validar el comportamiento en producción.
-- Este software se provee tal cual, sin garantía de ningún tipo.
+El trading automatizado comporta riesgo. Este bot opera por defecto en
+**paper mode**. La activación en modo real requiere credenciales L2
+configuradas explícitamente. Use bajo su responsabilidad.
