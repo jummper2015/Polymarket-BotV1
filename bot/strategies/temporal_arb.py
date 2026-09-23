@@ -115,6 +115,28 @@ TWAP_HEDGE_MAX_SUM_DEFAULT = 0.92  # same cost ceiling as Path B
 USE_TWAP_SIGNAL_DEFAULT     = True
 TWAP_LOOKBACK_SEC_DEFAULT    = 60    # window for the rolling TWAP computation
 
+# Profit-Lock completion defaults (added 2026-09-21)
+# When the first leg has gone ≥ta_profit_lock_min_secs in profit
+# (current_ask > first_px), force-close the pair if the pair cost is
+# ≤ ta_complete_cap. Reuses Path A's cap so behavior is consistent with
+# the normal completion logic. Default OFF.
+PROFIT_LOCK_ENABLED_DEFAULT  = False
+PROFIT_LOCK_MIN_SECS_DEFAULT = 30
+PROFIT_LOCK_CAP_DEFAULT      = 1.00
+
+# Martingale hedge defaults (added 2026-09-21)
+# When the first leg has gone ≥ta_mart_hedge_min_secs in loss
+# (current_ask < first_px), buy the opposite side with qty =
+# first_shares × mult × (1 + loss_pct). Each round is recorded
+# (`mart_hedge_rounds`); the strategy stops once `ta_mart_hedge_max_rounds`
+# is reached, after which only the regular stop-loss / hedge-recovery
+# paths apply. Cap on pair cost = `ta_hedge_max_sum` (same as Path B).
+# Default OFF — high risk in trending markets.
+MART_HEDGE_ENABLED_DEFAULT   = False
+MART_HEDGE_MIN_SECS_DEFAULT  = 30
+MART_HEDGE_MULT_DEFAULT      = 2.0
+MART_HEDGE_MAX_ROUNDS_DEFAULT = 3
+
 # Stop-loss defaults
 STOP_LOSS_ENABLED_DEFAULT    = True
 STOP_LOSS_TIME_SEC_DEFAULT   = 60.0   # wait at least this long before considering stop-loss
@@ -161,6 +183,11 @@ class _TAWindow:
     reached_winner_zone: bool            = False  # Flag: alguna vez llegó a ≥0.96
     absolute_peak:       Optional[float] = None   # Peak máximo alcanzado
     logged_winner_reversal: bool         = False  # Log de reversión desde winner
+    # ──── Profit-Lock + Mart-Hedge tracking (2026-09-21) ─────────────────
+    first_leg_filled_at: Optional[float] = None   # time.time() when first leg completed
+    profit_lock_fired:   bool            = False  # already locked profit this window
+    mart_hedge_rounds:    int             = 0       # consecutive adverse-side buys
+    mart_hedge_fired:     bool            = False   # any mart-hedge executed this window
 
 
 
@@ -414,6 +441,15 @@ def _observe(ctx: StrategyContext) -> None:
     # TWAP-based entry signal (2026-09-21)
     use_twap_signal        = bool(getattr(state, "ta_use_twap_signal", USE_TWAP_SIGNAL_DEFAULT))
     twap_lookback_sec      = int(getattr(state, "ta_twap_lookback_sec", TWAP_LOOKBACK_SEC_DEFAULT))
+    # Profit-Lock completion (2026-09-21)
+    profit_lock_enabled   = bool(getattr(state, "ta_profit_lock_enabled", PROFIT_LOCK_ENABLED_DEFAULT))
+    profit_lock_min_secs  = int(getattr(state, "ta_profit_lock_min_secs", PROFIT_LOCK_MIN_SECS_DEFAULT))
+    profit_lock_cap       = float(getattr(state, "ta_profit_lock_cap", PROFIT_LOCK_CAP_DEFAULT))
+    # Martingale hedge (2026-09-21)
+    mart_hedge_enabled    = bool(getattr(state, "ta_mart_hedge_enabled", MART_HEDGE_ENABLED_DEFAULT))
+    mart_hedge_min_secs   = int(getattr(state, "ta_mart_hedge_min_secs", MART_HEDGE_MIN_SECS_DEFAULT))
+    mart_hedge_mult       = float(getattr(state, "ta_mart_hedge_mult", MART_HEDGE_MULT_DEFAULT))
+    mart_hedge_max_rounds = int(getattr(state, "ta_mart_hedge_max_rounds", MART_HEDGE_MAX_ROUNDS_DEFAULT))
 
     # ── terminal states ───────────────────────────────────────────────────────
     if ta.phase in ("complete", "lpt_complete", "hedged", "closed"):
@@ -449,6 +485,7 @@ def _observe(ctx: StrategyContext) -> None:
                 f"vwap={ta.first_px:.4f}",
                 icon="📊",
             )
+            ta.first_leg_filled_at = time.time()  # mark time the first leg completed
             ta.phase = "half_open"
             return
 
@@ -497,27 +534,27 @@ def _observe(ctx: StrategyContext) -> None:
         if current_first_ask is not None and current_first_ask > ta.absolute_peak:
             ta.absolute_peak = current_first_ask
         
-        # Track si alguna vez llegó a winner zone (≥0.96)
-        if current_first_ask is not None and current_first_ask >= 0.96:
+        # Track si alguna vez llegó a winner zone (≥0.90)
+        if current_first_ask is not None and current_first_ask >= 0.90:
             ta.reached_winner_zone = True
         
         # ─────────────────────────────────────────────────────────────────────────
-        # REGLA 1: Si AHORA está ≥0.96 → HOLD (mantener, no buscar segunda pata)
+        # REGLA 1: Si AHORA está ≥0.90 → HOLD (mantener, no buscar segunda pata)
         # ─────────────────────────────────────────────────────────────────────────
-        if current_first_ask is not None and current_first_ask >= 0.96:
+        if current_first_ask is not None and current_first_ask >= 0.90:
             if not ta.logged_hold_winner:
                 ta.logged_hold_winner = True
                 logger.ok(
                     f"[TA] 🏆 HOLD WINNER  {ta.first_side}@{ta.first_px:.3f} "
-                    f"ahora {current_first_ask:.3f} (≥0.96)  "
+                    f"ahora {current_first_ask:.3f} (≥0.90)  "
                     f"→ mantener hasta resolución (ganancia casi segura)",
                     icon="🏆"
                 )
                 state.record_observation("TA_HOLD_WINNER")
-            return  # NO buscar segunda pata mientras esté ≥0.96
+            return  # NO buscar segunda pata mientras esté ≥0.90
         
         # ─────────────────────────────────────────────────────────────────────────
-        # REGLA 2: Si ESTUVO en ≥0.96 pero ahora bajó a <0.90 → BUSCAR EDGE
+        # REGLA 2: Si ESTUVO en ≥0.90 pero ahora bajó a <0.90 → BUSCAR EDGE
         # ─────────────────────────────────────────────────────────────────────────
         if (
             ta.reached_winner_zone
@@ -627,6 +664,48 @@ def _observe(ctx: StrategyContext) -> None:
                     f"peak={ta.first_leg_peak_ask:.3f}",
                     icon="🩺",
                 )
+
+        # Path D: Profit-Lock completion (added 2026-09-21).
+        # When the first leg has been half_open for at least
+        # `profit_lock_min_secs` and the current ask of the first leg is
+        # ABOVE first_px (in profit), force-close the pair if pair cost
+        # ≤ `ta_profit_lock_cap` (default $1, more permissive than Path A's
+        # complete_cap so this fires on pairs Path A skips).
+        if (
+            profit_lock_enabled
+            and not ta.profit_lock_fired
+            and ta.first_leg_filled_at is not None
+            and ta.first_shares_filled > 0
+            and ta.first_px is not None
+            and current_first_ask is not None
+            and current_first_ask > ta.first_px  # in profit
+            and (time.time() - ta.first_leg_filled_at) >= profit_lock_min_secs
+        ):
+            opp_ask = ask_dn if second_side == "DOWN" else ask_up
+            if opp_ask is not None and second_leg_worthwhile(ta.first_px, opp_ask, profit_lock_cap):
+                tok_second = tokens.up_token_id if second_side == "UP" else tokens.down_token_id
+                second_shares = ta.first_shares_filled
+                oid_pl = trader._place_taker_order(tok_second, "BUY", opp_ask, second_shares)
+                if oid_pl:
+                    pair_sum = round(ta.first_px + opp_ask, 4)
+                    locked = round(1.0 - pair_sum, 4)
+                    pct = (current_first_ask - ta.first_px) / ta.first_px * 100
+                    logger.ok(
+                        f"[TA] 💰 PROFIT-LOCK  "
+                        f"primera={ta.first_side}@{ta.first_px:.3f}"
+                        f" (ahora {current_first_ask:.3f}, +{pct:.1f}%)  "
+                        f"segunda={second_side}@{opp_ask:.3f}  "
+                        f"suma={pair_sum:.3f}  locked={locked:+.4f}/share",
+                        icon="💰",
+                    )
+                    trader._record_box_fill(
+                        tokens, second_side, tok_second, opp_ask, second_shares,
+                        strategy="temporal_arb",
+                    )
+                    ta.profit_lock_fired = True
+                    ta.phase = "complete"
+                    state.record_observation("TA_PROFIT_LOCK")
+                    return
 
         # Path A: normal pair completion — second leg is cheap enough
         if (
@@ -755,6 +834,55 @@ def _observe(ctx: StrategyContext) -> None:
                         ta.phase = "hedged"
                         state.record_observation("TA_TWAP_HEDGE")
                         return
+
+        # Path E: Martingale hedge (added 2026-09-21).
+        # When the first leg is half_open for at least `mart_hedge_min_secs`
+        # AND in loss (current_ask < first_px), buy the opposite side with
+        # qty = first_shares × mult × (1 + loss_pct). The cap on pair cost
+        # uses `ta_hedge_max_sum` (same as Path B). Stops after
+        # `mart_hedge_max_rounds` consecutive adverse moves; regular
+        # stop-loss / hedge-recovery paths then take over.
+        if (
+            mart_hedge_enabled
+            and not ta.mart_hedge_fired
+            and ta.first_leg_filled_at is not None
+            and ta.first_shares_filled > 0
+            and ta.first_px is not None
+            and current_first_ask is not None
+            and current_first_ask < ta.first_px  # in loss
+            and (time.time() - ta.first_leg_filled_at) >= mart_hedge_min_secs
+            and ta.mart_hedge_rounds < mart_hedge_max_rounds
+        ):
+            opp_ask = ask_dn if second_side == "DOWN" else ask_up
+            if opp_ask is not None and round(ta.first_px + opp_ask, 4) <= hedge_max_sum:
+                loss_pct = (ta.first_px - current_first_ask) / ta.first_px  # positive fraction
+                mart_qty = round(
+                    ta.first_shares_filled * mart_hedge_mult * (1.0 + loss_pct), 4
+                )
+                tok_second = tokens.up_token_id if second_side == "UP" else tokens.down_token_id
+                oid_mh = trader._place_taker_order(tok_second, "BUY", opp_ask, mart_qty)
+                if oid_mh:
+                    cost = round(ta.first_px + opp_ask, 4)
+                    locked = round(1.0 - cost, 4)
+                    ta.mart_hedge_rounds += 1
+                    ta.mart_hedge_fired = True
+                    logger.ok(
+                        f"[TA] 🛡 MART-HEDGE round={ta.mart_hedge_rounds}/{mart_hedge_max_rounds}  "
+                        f"primera={ta.first_side}@{ta.first_px:.3f}"
+                        f" (ahora {current_first_ask:.3f}, -{loss_pct*100:.1f}%)  "
+                        f"hedge={second_side}@{opp_ask:.3f} × {mart_qty:.0f}sh  "
+                        f"suma={cost:.3f}  locked={locked:+.4f}/share",
+                        icon="🛡",
+                    )
+                    trader._record_box_fill(
+                        tokens, second_side, tok_second, opp_ask, mart_qty,
+                        strategy="temporal_arb",
+                    )
+                    state.record_observation(f"TA_MART_HEDGE_R{ta.mart_hedge_rounds}")
+                    # Don't transition to "hedged" — the position is a hybrid:
+                    # first leg + mart hedge. The window still resolves
+                    # normally; the multiplier is the recovery bet.
+                    return
 
         # Bailout: time ran out — first leg resolves normally (win or loss)
         if secs <= bail_sec and not ta.logged_bailout:
@@ -1003,9 +1131,12 @@ def _observe(ctx: StrategyContext) -> None:
         state.record_observation("TA_FIRST_LEG")
 
         if slice_sz >= shares:
+            ta.first_leg_filled_at = time.time()  # single tranche → immediately half_open
             ta.phase = "half_open"
         else:
             ta.phase = "accumulating"
+            # first_leg_filled_at is set when accumulating transitions to half_open
+            # (see above)
 
 
 # ── descriptor ────────────────────────────────────────────────────────────────
@@ -1201,6 +1332,42 @@ DESCRIPTOR = StrategyDescriptor(
             label="TWAP lookback (s)",
             minimum=10, maximum=120, step=5,
             hint="Ventana en segundos para el TWAP rolling (default 60)",
+        ),
+        # ── Profit-Lock completion (added 2026-09-21) ────────────────────────────
+        RuntimeField("ta_profit_lock_enabled", "bool", label="Profit-Lock activo",
+                     hint="Tras N segundos con primera pata en ganancia, fuerza cerrar par si suma ≤ cap"),
+        RuntimeField(
+            "ta_profit_lock_min_secs", "int",
+            label="Profit-Lock espera (s)",
+            minimum=10, maximum=120, step=5,
+            hint="Segundos desde que la primera pata quedó half_open antes de forzar (default 30)",
+        ),
+        RuntimeField(
+            "ta_profit_lock_cap", "float",
+            label="Profit-Lock cap",
+            minimum=0.80, maximum=1.00, step=0.01,
+            hint="Suma máxima permitida para profit-lock (default 1.00, más permisivo que Path A)",
+        ),
+        # ── Martingale hedge (added 2026-09-21) ──────────────────────────────────
+        RuntimeField("ta_mart_hedge_enabled", "bool", label="Mart-Hedge activo",
+                     hint="Si primera pata en pérdidas tras Ns, compra lado opuesto con qty × mult × (1+loss_pct). PELIGROSO en tendencia."),
+        RuntimeField(
+            "ta_mart_hedge_min_secs", "int",
+            label="Mart-Hedge espera (s)",
+            minimum=10, maximum=120, step=5,
+            hint="Segundos desde half_open antes de evaluar mart-hedge (default 30)",
+        ),
+        RuntimeField(
+            "ta_mart_hedge_mult", "float",
+            label="Mart-Hedge multiplicador",
+            minimum=1.5, maximum=5.0, step=0.5,
+            hint="Multiplicador de qty: nueva_qty = first_shares × mult × (1 + loss_pct) (default 2.0)",
+        ),
+        RuntimeField(
+            "ta_mart_hedge_max_rounds", "int",
+            label="Mart-Hedge rondas máx",
+            minimum=1, maximum=5, step=1,
+            hint="Cap de rondas consecutivas (default 3). Después, aplican stops normales.",
         ),
     )
 )

@@ -149,6 +149,25 @@ class BotState:
         # Added 2026-09-21.
         self.ta_use_twap_signal:   bool  = True
         self.ta_twap_lookback_sec: int   = 60
+        # Profit-Lock completion: when the first leg has gone +30s in profit
+        # (current_ask > first_px), force-close the pair if pair cost is
+        # below the dedicated profit-lock cap (defaults to $1 = accept any
+        # profitable close). This is intentionally more permissive than
+        # Path A's `ta_complete_cap` (default 0.88) so it can complete pairs
+        # Path A skips.
+        # Defaults OFF — manual activation via /settings.
+        # Added 2026-09-21.
+        self.ta_profit_lock_enabled:   bool  = False
+        self.ta_profit_lock_min_secs:  int   = 30
+        self.ta_profit_lock_cap:       float = 1.00
+        # Martingale hedge: when the first leg is in loss after +30s, buy the
+        # opposite side with qty = first_shares × mult × (1 + loss_pct). Repeats
+        # up to max_rounds on subsequent adverse moves. Defaults OFF — high risk.
+        # Added 2026-09-21.
+        self.ta_mart_hedge_enabled:    bool  = False
+        self.ta_mart_hedge_min_secs:   int   = 30
+        self.ta_mart_hedge_mult:       float = 2.0
+        self.ta_mart_hedge_max_rounds: int   = 3
         # Stop-loss / Trailing-stop (wired 2026-09-13 cutover so /settings can
         # expose them — temporal_arb.py uses getattr fallbacks if absent).
         self.ta_stop_loss_enabled:    bool  = True
@@ -654,6 +673,13 @@ class BotState:
                 "ta_twap_hedge_max_sum": self.ta_twap_hedge_max_sum,
                 "ta_use_twap_signal":     self.ta_use_twap_signal,
                 "ta_twap_lookback_sec":   self.ta_twap_lookback_sec,
+                "ta_profit_lock_enabled": self.ta_profit_lock_enabled,
+                "ta_profit_lock_min_secs": self.ta_profit_lock_min_secs,
+                "ta_profit_lock_cap":     self.ta_profit_lock_cap,
+                "ta_mart_hedge_enabled":  self.ta_mart_hedge_enabled,
+                "ta_mart_hedge_min_secs": self.ta_mart_hedge_min_secs,
+                "ta_mart_hedge_mult":     self.ta_mart_hedge_mult,
+                "ta_mart_hedge_max_rounds": self.ta_mart_hedge_max_rounds,
                 "ta_stop_loss_enabled":    self.ta_stop_loss_enabled,
                 "ta_stop_loss_time_sec":   self.ta_stop_loss_time_sec,
                 "ta_stop_loss_threshold":  self.ta_stop_loss_threshold,

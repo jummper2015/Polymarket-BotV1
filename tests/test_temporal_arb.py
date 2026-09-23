@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
@@ -202,9 +203,19 @@ def _make_state(
     ta_bailout_sec=60.0,
     ta_cancel_all_sec=10.0,
     ta_twap_hedge_enabled=False,   # off by default; tests opt in
+    ta_hedge_enabled=True,        # off when path B/C must be isolated
+    ta_hedge_max_sum=0.92,
+    ta_use_twap_signal=False,   # off in tests by default to keep them isolated
+    ta_profit_lock_enabled=False,
+    ta_profit_lock_min_secs=30,
+    ta_mart_hedge_enabled=False,
+    ta_mart_hedge_min_secs=30,
+    ta_mart_hedge_mult=2.0,
+    ta_mart_hedge_max_rounds=3,
     ask_up=0.50,
     ask_dn=0.50,
     spot_price=60060.0,   # +0.1% above strike by default
+    logged_bailout=False,  # set True to suppress the normal bailout log
     skips=None,
     obs=None,
     mode="paper",
@@ -222,6 +233,16 @@ def _make_state(
         ta_bailout_sec=ta_bailout_sec,
         ta_cancel_all_sec=ta_cancel_all_sec,
         ta_twap_hedge_enabled=ta_twap_hedge_enabled,
+        ta_hedge_enabled=ta_hedge_enabled,
+        ta_hedge_max_sum=ta_hedge_max_sum,
+        ta_use_twap_signal=ta_use_twap_signal,
+        ta_profit_lock_enabled=ta_profit_lock_enabled,
+        ta_profit_lock_min_secs=ta_profit_lock_min_secs,
+        ta_mart_hedge_enabled=ta_mart_hedge_enabled,
+        ta_mart_hedge_min_secs=ta_mart_hedge_min_secs,
+        ta_mart_hedge_mult=ta_mart_hedge_mult,
+        ta_mart_hedge_max_rounds=ta_mart_hedge_max_rounds,
+        ta_logged_bailout=logged_bailout,  # NEW: lets tests suppress the bailout
         spot_price=spot_price,
         mode=mode,
     )
@@ -751,6 +772,429 @@ class TestObserveHalfOpen:
         names = {p.name for p in DESCRIPTOR.params}
         assert "ta_use_twap_signal" in names
         assert "ta_twap_lookback_sec" in names
+
+    # ── Profit-Lock completion (Path D) ────────────────────────────────────────
+
+    def test_profit_lock_default_disabled(self):
+        from bot.strategies.temporal_arb import PROFIT_LOCK_ENABLED_DEFAULT
+        assert PROFIT_LOCK_ENABLED_DEFAULT is False
+
+    def test_profit_lock_runtime_fields_exposed(self):
+        names = {p.name for p in DESCRIPTOR.params}
+        assert "ta_profit_lock_enabled" in names
+        assert "ta_profit_lock_min_secs" in names
+
+    def test_profit_lock_fires_when_in_profit_after_threshold(self):
+        """Path D: first leg up after 30s, pair ≤ cap → force-complete."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+
+        records = []
+        state = _make_state(
+            ask_up=0.70, ask_dn=0.20, spot_price=75_500.0,
+            ta_complete_cap=0.88,
+            ta_profit_lock_enabled=True, ta_profit_lock_min_secs=30,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader(records=records)
+        # First leg UP @0.50, now UP ask=0.70 (in profit +40%),
+        # DOWN ask=0.20 → sum 0.70 ≤ 0.88 cap.
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+        )
+
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.indicators.get_volume_ratio", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok") as mock_ok,
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+
+        assert win.phase == "complete"
+        assert win.profit_lock_fired is True
+        # A BUY on DOWN was placed at 0.20 for 80 shares
+        orders = trader._place_taker_order.call_args_list
+        assert any(
+            call.args[0] == tokens.down_token_id
+            and call.args[1] == "BUY"
+            and abs(call.args[2] - 0.20) < 1e-6
+            and abs(call.args[3] - 80.0) < 1e-6
+            for call in orders
+        ), f"Expected DOWN BUY @0.20 ×80; got {orders}"
+
+    def test_profit_lock_skipped_when_not_in_profit(self):
+        """If first leg is in loss, profit-lock does not fire (mart-hedge
+        handles the loss case)."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.30, ask_dn=0.65, spot_price=75_000.0,
+            ta_profit_lock_enabled=True, ta_profit_lock_min_secs=30,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.phase == "half_open"
+        assert win.profit_lock_fired is False
+        trader._place_taker_order.assert_not_called()
+
+    def test_profit_lock_skipped_when_pair_exceeds_cap(self):
+        """If pair > profit_lock_cap, profit-lock does not fire.
+        Other paths (A, B, C) are disabled to isolate this test."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.80, ask_dn=0.80, spot_price=75_500.0,  # sum 1.30 > 1.00 pl_cap
+            ta_complete_cap=0.65,  # block Path A: 1.30 > 0.65
+            ta_hedge_enabled=False,  # block Path B
+            ta_twap_hedge_enabled=False,  # block Path C
+            ta_profit_lock_enabled=True, ta_profit_lock_min_secs=30,
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.phase == "half_open"
+        assert win.profit_lock_fired is False
+
+    def test_profit_lock_skipped_before_min_secs(self):
+        """Profit-lock only fires after the configured grace period."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.70, ask_dn=0.20, spot_price=75_500.0,
+            ta_complete_cap=0.65,  # block Path A
+            ta_hedge_enabled=False, ta_twap_hedge_enabled=False,
+            ta_profit_lock_enabled=True, ta_profit_lock_min_secs=30,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        # first leg filled only 5s ago — too soon
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 5,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.phase == "half_open"
+        assert win.profit_lock_fired is False
+
+    def test_profit_lock_skipped_when_disabled(self):
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.70, ask_dn=0.20, spot_price=75_500.0,
+            ta_complete_cap=0.65,  # block Path A: 0.90 > 0.65
+            ta_hedge_enabled=False,  # block Path B
+            ta_twap_hedge_enabled=False,  # block Path C
+            ta_profit_lock_enabled=False,  # disabled
+            ta_profit_lock_min_secs=30,
+            logged_bailout=True,  # suppress bailout
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.phase == "half_open"
+        assert win.profit_lock_fired is False
+
+    # ── Martingale hedge (Path E) ────────────────────────────────────────────
+
+    def test_mart_hedge_defaults(self):
+        from bot.strategies.temporal_arb import (
+            MART_HEDGE_ENABLED_DEFAULT,
+            MART_HEDGE_MIN_SECS_DEFAULT,
+            MART_HEDGE_MULT_DEFAULT,
+            MART_HEDGE_MAX_ROUNDS_DEFAULT,
+        )
+        assert MART_HEDGE_ENABLED_DEFAULT is False
+        assert MART_HEDGE_MIN_SECS_DEFAULT == 30
+        assert MART_HEDGE_MULT_DEFAULT == 2.0
+        assert MART_HEDGE_MAX_ROUNDS_DEFAULT == 3
+
+    def test_mart_hedge_runtime_fields_exposed(self):
+        names = {p.name for p in DESCRIPTOR.params}
+        for f in ("ta_mart_hedge_enabled", "ta_mart_hedge_min_secs",
+                  "ta_mart_hedge_mult", "ta_mart_hedge_max_rounds"):
+            assert f in names, f"missing param: {f}"
+
+    def test_mart_hedge_qty_uses_multiplier_and_loss_pct(self):
+        """Practica el ejemplo del usuario:
+        UP 80 @0.50, ahora 0.35 (loss 30%). Expected qty = 80 × 2 × 1.30 = 208."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+
+        state = _make_state(
+            ask_up=0.35, ask_dn=0.40, spot_price=74_500.0,  # sum 0.90 ≤ hedge_max_sum
+            ta_hedge_max_sum=0.96,
+            ta_complete_cap=0.65,  # block Path A: 0.90 > 0.65
+            ta_profit_lock_enabled=False,  # isolate mart-hedge
+            ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+            ta_mart_hedge_mult=2.0, ta_mart_hedge_max_rounds=3,
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+
+        # mart hedge should have placed a BUY on DOWN with qty = 208
+        orders = trader._place_taker_order.call_args_list
+        assert any(
+            call.args[0] == tokens.down_token_id
+            and call.args[1] == "BUY"
+            and abs(call.args[2] - 0.40) < 1e-6
+            and abs(call.args[3] - 208.0) < 1e-3
+            for call in orders
+        ), f"Expected DOWN BUY @0.40 × 208; got {orders}"
+        assert win.mart_hedge_rounds == 1
+        assert win.mart_hedge_fired is True
+
+    def test_mart_hedge_skipped_when_in_profit(self):
+        """If first leg is in profit, mart-hedge does NOT fire. We use a low
+        `ta_complete_cap` to block Path A and profit-lock from completing
+        the pair, isolating mart-hedge behavior."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.70, ask_dn=0.20, spot_price=75_500.0,
+            ta_complete_cap=0.65,  # block Path A (sum 0.90 > 0.65)
+            ta_profit_lock_enabled=False,
+            ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.mart_hedge_rounds == 0
+        trader._place_taker_order.assert_not_called()
+
+    def test_mart_hedge_skipped_when_pair_exceeds_cap(self):
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.30, ask_dn=0.80, spot_price=74_500.0,  # sum 1.10 > 0.96
+            ta_hedge_max_sum=0.96,
+            ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.mart_hedge_rounds == 0
+        trader._place_taker_order.assert_not_called()
+
+    def test_mart_hedge_stops_at_max_rounds(self):
+        """Once mart_hedge_rounds reaches max_rounds, mart-hedge stops firing."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.30, ask_dn=0.60, spot_price=74_500.0,
+            ta_hedge_max_sum=0.96,
+            ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+            ta_mart_hedge_max_rounds=3,
+            ta_profit_lock_enabled=False,  # isolate mart-hedge
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        # Round counter already at max → no more mart-hedges
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+            mart_hedge_rounds=3,  # at cap
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.mart_hedge_rounds == 3  # unchanged
+        trader._place_taker_order.assert_not_called()
+
+    def test_mart_hedge_skipped_before_min_secs(self):
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.30, ask_dn=0.60, spot_price=74_500.0,
+            ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 5,  # too soon
+            logged_bailout=True,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.mart_hedge_rounds == 0
+        trader._place_taker_order.assert_not_called()
+
+    def test_mart_hedge_skipped_when_disabled(self):
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.30, ask_dn=0.60, spot_price=74_500.0,
+            ta_complete_cap=0.65,  # block Path A
+            ta_mart_hedge_enabled=False,  # disabled
+            ta_mart_hedge_mult=2.0, ta_mart_hedge_max_rounds=3,
+            ta_profit_lock_enabled=False,
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 35,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.mart_hedge_rounds == 0
+        trader._place_taker_order.assert_not_called()
+
+    def test_mart_hedge_state_attributes_added(self):
+        """`_TAWindow` carries the fields profit-lock and mart-hedge need."""
+        win = _TAWindow(window_ts=0, phase="half_open")
+        assert hasattr(win, "first_leg_filled_at")
+        assert hasattr(win, "profit_lock_fired")
+        assert hasattr(win, "mart_hedge_rounds")
+        assert hasattr(win, "mart_hedge_fired")
+        assert win.mart_hedge_rounds == 0
+        assert win.mart_hedge_fired is False
 
 
 class TestObserveTerminal:
