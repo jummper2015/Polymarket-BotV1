@@ -15,7 +15,7 @@ from typing import Any, Iterable
 
 from ..runtime_field import RuntimeField
 from .base import StrategyContext, StrategyDescriptor
-from . import box_builder, coin_flip_dog, temporal_arb, near_res
+from . import box_builder, coin_flip_dog, temporal_arb, near_res, impulse_hedge
 # ss_fade y ss_trend desactivadas:
 #   - ss_fade:  medida +3.74%/op (Fase 8) pero se descontinúa en esta fase.
 #   - ss_trend: medida −4.22%/op (Fase 8, t=−2.61). Sin edge.
@@ -29,6 +29,7 @@ _REGISTERED: tuple[StrategyDescriptor, ...] = (
     coin_flip_dog.DESCRIPTOR,
     temporal_arb.DESCRIPTOR,
     near_res.DESCRIPTOR,
+    impulse_hedge.DESCRIPTOR,
 )
 
 REGISTRY: dict[str, StrategyDescriptor] = {d.id: d for d in _REGISTERED}

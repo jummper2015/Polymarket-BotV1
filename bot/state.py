@@ -168,6 +168,14 @@ class BotState:
         self.ta_mart_hedge_min_secs:   int   = 30
         self.ta_mart_hedge_mult:       float = 2.0
         self.ta_mart_hedge_max_rounds: int   = 3
+        # Impulse-Lock strategy (added 2026-09-24)
+        self.ih_enabled:          bool  = False
+        self.ih_entry_min:        float = 0.55
+        self.ih_entry_max:        float = 0.62
+        self.ih_min_lock_profit:  float = 0.02
+        self.ih_min_fair_edge:    float = 0.03
+        self.ih_size_shares:      int   = 20
+        self.ih_z_min:             float = 2.5
         # Stop-loss / Trailing-stop (wired 2026-09-13 cutover so /settings can
         # expose them — temporal_arb.py uses getattr fallbacks if absent).
         self.ta_stop_loss_enabled:    bool  = True
@@ -680,6 +688,13 @@ class BotState:
                 "ta_mart_hedge_min_secs": self.ta_mart_hedge_min_secs,
                 "ta_mart_hedge_mult":     self.ta_mart_hedge_mult,
                 "ta_mart_hedge_max_rounds": self.ta_mart_hedge_max_rounds,
+                "ih_enabled":             self.ih_enabled,
+                "ih_entry_min":           self.ih_entry_min,
+                "ih_entry_max":           self.ih_entry_max,
+                "ih_min_lock_profit":     self.ih_min_lock_profit,
+                "ih_min_fair_edge":       self.ih_min_fair_edge,
+                "ih_size_shares":         self.ih_size_shares,
+                "ih_z_min":                self.ih_z_min,
                 "ta_stop_loss_enabled":    self.ta_stop_loss_enabled,
                 "ta_stop_loss_time_sec":   self.ta_stop_loss_time_sec,
                 "ta_stop_loss_threshold":  self.ta_stop_loss_threshold,

@@ -40,7 +40,7 @@ def _descriptor(sid, **kw):
 
 class TestRegistry:
     def test_the_registered_strategies(self):
-        assert strategies.ids() == ("box_builder", "coin_flip_dog", "temporal_arb", "near_res")
+        assert strategies.ids() == ("box_builder", "coin_flip_dog", "temporal_arb", "near_res", "impulse_hedge")
 
     def test_ids_match_what_trades_stores(self):
         """`trades.strategy` holds these strings; KPIs group by them."""
@@ -228,7 +228,8 @@ class TestToJson:
                                 ta_enabled=False, nrc_enabled=False)
         payload = strategies.to_json(state)
         assert [s["id"] for s in payload] == [
-            "box_builder", "coin_flip_dog", "temporal_arb", "near_res"
+            "box_builder", "coin_flip_dog", "temporal_arb", "near_res",
+            "impulse_hedge",
         ]
 
         bb = payload[0]
