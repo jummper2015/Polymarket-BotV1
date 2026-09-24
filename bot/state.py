@@ -161,13 +161,18 @@ class BotState:
         self.ta_profit_lock_min_secs:  int   = 30
         self.ta_profit_lock_cap:       float = 1.00
         # Martingale hedge: when the first leg is in loss after +30s, buy the
-        # opposite side with qty = first_shares × mult × (1 + loss_pct). Repeats
-        # up to max_rounds on subsequent adverse moves. Defaults OFF — high risk.
+        # opposite side with qty = first_shares × (2 + loss_pct). Repeats
+        # up to max_rounds on subsequent adverse moves. ON 2026-09-25 per
+        # Caso 3 — required by the documented strategy.
         # Added 2026-09-21.
-        self.ta_mart_hedge_enabled:    bool  = False
+        self.ta_mart_hedge_enabled:    bool  = True
         self.ta_mart_hedge_min_secs:   int   = 30
         self.ta_mart_hedge_mult:       float = 2.0
         self.ta_mart_hedge_max_rounds: int   = 3
+        # Profit-Lock extension (added 2026-09-25 per Caso 2)
+        # Beyond ta_profit_lock_min_secs (30s) we keep trying edge up to this
+        # max window (60s), so the bot keeps looking for the lock.
+        self.ta_profit_lock_max_secs:  float = 60.0
         # Impulse-Lock strategy (added 2026-09-24)
         self.ih_enabled:          bool  = False
         self.ih_entry_min:        float = 0.55
@@ -688,6 +693,7 @@ class BotState:
                 "ta_mart_hedge_min_secs": self.ta_mart_hedge_min_secs,
                 "ta_mart_hedge_mult":     self.ta_mart_hedge_mult,
                 "ta_mart_hedge_max_rounds": self.ta_mart_hedge_max_rounds,
+                "ta_profit_lock_max_secs":  self.ta_profit_lock_max_secs,
                 "ih_enabled":             self.ih_enabled,
                 "ih_entry_min":           self.ih_entry_min,
                 "ih_entry_max":           self.ih_entry_max,

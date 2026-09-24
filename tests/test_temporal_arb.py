@@ -1014,15 +1014,16 @@ class TestObserveHalfOpen:
         ):
             _observe(_ctx(state, tokens, trader, seconds_left=200.0))
 
-        # mart hedge should have placed a BUY on DOWN with qty = 208
+        # mart hedge should have placed a BUY on DOWN with qty = 184
+        # (formula: initial × (2 + loss_pct) = 80 × (2 + 0.30) = 184)
         orders = trader._place_taker_order.call_args_list
         assert any(
             call.args[0] == tokens.down_token_id
             and call.args[1] == "BUY"
             and abs(call.args[2] - 0.40) < 1e-6
-            and abs(call.args[3] - 208.0) < 1e-3
+            and abs(call.args[3] - 184.0) < 1e-3
             for call in orders
-        ), f"Expected DOWN BUY @0.40 × 208; got {orders}"
+        ), f"Expected DOWN BUY @0.40 × 184; got {orders}"
         assert win.mart_hedge_rounds == 1
         assert win.mart_hedge_fired is True
 
