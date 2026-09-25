@@ -309,7 +309,7 @@ class TestImpulseLockStrategy:
         strat._pending_impulse = Impulse(direction="UP", z=3.0,
                                          lead_venue="coinbase", ts=100.0)
         strat.on_book_update(
-            ts=100.5, strike=76000.0, ask_up=0.57, ask_dn=0.55,
+            ts=100.5, window_ts=1000000, ask_up=0.57, ask_dn=0.55,
             bid_up=0.56, bid_dn=0.54,
             secs_left=200.0, price_now=76050.0, trader=trader,
         )
@@ -329,7 +329,7 @@ class TestImpulseLockStrategy:
                                          lead_venue="coinbase", ts=100.0)
         # ask_up = 0.50 — below entry_min 0.55
         strat.on_book_update(
-            ts=100.5, strike=76000.0, ask_up=0.50, ask_dn=0.48,
+            ts=100.5, window_ts=1000000, ask_up=0.50, ask_dn=0.48,
             bid_up=0.49, bid_dn=0.47,
             secs_left=200.0, price_now=76050.0, trader=trader,
         )
@@ -345,7 +345,7 @@ class TestImpulseLockStrategy:
                                          lead_venue="coinbase", ts=100.0)
         # ask_up = 0.65 — above entry_max 0.62
         strat.on_book_update(
-            ts=100.5, strike=76000.0, ask_up=0.65, ask_dn=0.30,
+            ts=100.5, window_ts=1000000, ask_up=0.65, ask_dn=0.30,
             bid_up=0.64, bid_dn=0.29,
             secs_left=200.0, price_now=76050.0, trader=trader,
         )
@@ -361,7 +361,7 @@ class TestImpulseLockStrategy:
                                          lead_venue="coinbase", ts=100.0)
         # secs_left = 30 — too late (below 45s minimum)
         strat.on_book_update(
-            ts=100.5, strike=76000.0, ask_up=0.57, ask_dn=0.55,
+            ts=100.5, window_ts=1000000, ask_up=0.57, ask_dn=0.55,
             bid_up=0.56, bid_dn=0.54,
             secs_left=30.0, price_now=76050.0, trader=trader,
         )
@@ -376,7 +376,7 @@ class TestImpulseLockStrategy:
         strat._pending_impulse = Impulse(direction="UP", z=3.0,
                                          lead_venue="coinbase", ts=100.0)
         strat.on_book_update(
-            ts=100.5, strike=76000.0, ask_up=0.57, ask_dn=0.55,
+            ts=100.5, window_ts=1000000, ask_up=0.57, ask_dn=0.55,
             bid_up=0.56, bid_dn=0.54,
             secs_left=200.0, price_now=76050.0, trader=trader,
         )
@@ -384,7 +384,7 @@ class TestImpulseLockStrategy:
         initial_calls = trader._place_taker_order.call_count
         # Now trigger hedge
         strat.on_book_update(
-            ts=110.5, strike=76000.0, ask_up=0.58, ask_dn=0.41,
+            ts=110.5, window_ts=1000000, ask_up=0.58, ask_dn=0.41,
             bid_up=0.57, bid_dn=0.40,
             secs_left=190.0, price_now=76080.0, trader=trader,
         )
@@ -406,7 +406,7 @@ class TestImpulseLockStrategy:
         strat._pending_impulse = Impulse(direction="UP", z=3.0,
                                          lead_venue="coinbase", ts=100.0)
         strat.on_book_update(
-            ts=100.5, strike=76000.0, ask_up=0.57, ask_dn=0.55,
+            ts=100.5, window_ts=1000000, ask_up=0.57, ask_dn=0.55,
             bid_up=0.56, bid_dn=0.54,
             secs_left=200.0, price_now=76050.0, trader=trader,
         )
@@ -414,7 +414,7 @@ class TestImpulseLockStrategy:
         # z is stored as 3.0 > fade_cancel_z=1.5, so hedge WOULD be placed
         # The fade logic only matters for subsequent ticks where z decays
         strat.on_book_update(
-            ts=110.5, strike=76000.0, ask_up=0.58, ask_dn=0.41,
+            ts=110.5, window_ts=1000000, ask_up=0.58, ask_dn=0.41,
             bid_up=0.57, bid_dn=0.40,
             secs_left=190.0, price_now=76050.0, trader=trader,
         )
@@ -430,14 +430,14 @@ class TestImpulseLockStrategy:
         strat._pending_impulse = Impulse(direction="UP", z=3.0,
                                          lead_venue="coinbase", ts=100.0)
         strat.on_book_update(
-            ts=100.5, strike=76000.0, ask_up=0.57, ask_dn=0.55,
+            ts=100.5, window_ts=1000000, ask_up=0.57, ask_dn=0.55,
             bid_up=0.56, bid_dn=0.54,
             secs_left=200.0, price_now=76050.0, trader=trader,
         )
         initial_calls = trader._place_taker_order.call_count
         # 30 seconds left → settle
         strat.on_book_update(
-            ts=170.0, strike=76000.0, ask_up=0.58, ask_dn=0.42,
+            ts=170.0, window_ts=1000000, ask_up=0.58, ask_dn=0.42,
             bid_up=0.57, bid_dn=0.41,
             secs_left=30.0, price_now=76050.0, trader=trader,
         )

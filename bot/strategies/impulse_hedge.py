@@ -314,8 +314,8 @@ class ImpulseLockStrategy:
         return getattr(self, "_pending_impulse", None)
 
     def on_book_update(
-        self, ts: float, strike: float,
-        ask_up: Optional[float], ask_dn: Optional[float],
+        self, ts: float, window_ts: int = 0,
+        ask_up: Optional[float] = None, ask_dn: Optional[float] = None,
         bid_up: Optional[float] = None, bid_dn: Optional[float] = None,
         secs_left: float = 0.0, price_now: float = 0.0,
         trader: Any = None,
@@ -324,7 +324,7 @@ class ImpulseLockStrategy:
         c = self._c
         with self._lock:
             if self._state is State.IDLE:
-                self._maybe_enter(ts, strike, ask_up, ask_dn,
+                self._maybe_enter(ts, ask_up, ask_dn,
                                   secs_left, price_now, trader,
                                   bid_up=bid_up, bid_dn=bid_dn)
             elif self._state is State.ENTERED:
@@ -337,7 +337,7 @@ class ImpulseLockStrategy:
                 pass
 
     # ── Lógica de estados ────────────────────────────────────────────
-    def _maybe_enter(self, ts, strike, ask_up, ask_dn,
+    def _maybe_enter(self, ts, ask_up, ask_dn,
                     secs_left, price_now, trader,
                     bid_up=None, bid_dn=None):
         c = self._c
@@ -493,6 +493,71 @@ def _build_descriptor():
     return fields
 
 
+def _observe_impulse(ctx) -> None:
+    """Hook del bot: cada ~4s durante la ventana leemos el último tick
+    disponible del feed global. Si dispara un impulso, intentamos entrada
+    inmediatamente; en los ticks siguientes intentamos la cobertura."""
+    from bot import coinbase_ticker_feed as feed
+    with feed._lock:  # noqa: SLF001
+        buf = feed._buffer
+    if not buf:
+        return
+    ts, price = buf[-1]
+
+    # Lazy: reusar la misma instancia ImpulseLockStrategy por (symbol, window)
+    cache = _observe_impulse.__dict__
+    if cache.get("window") != ctx.tokens.window_id:
+        cache["window"] = ctx.tokens.window_id
+        cache["strats"] = {}
+    if ctx.symbol not in cache["strats"]:
+        s = ctx.state
+        cache["strats"][ctx.symbol] = ImpulseLockStrategy(ImpulseLockConfig(
+            entry_min=float(getattr(s, "ta_ih_entry_min", 0.55)),
+            entry_max=float(getattr(s, "ta_ih_entry_max", 0.62)),
+            z_min=float(getattr(s, "ta_ih_z_min", 2.5)),
+            min_lock_profit=float(getattr(s, "ta_ih_min_lock_profit", 0.02)),
+            size_shares=int(getattr(s, "ta_ih_size_shares", 20)),
+            hedge_deadline_s=30.0,
+            hedge_attempts=3,
+            exit_settle_secs=30.0,
+        ))
+        cache["strats"][ctx.symbol].reset(ctx.tokens.window_id)
+    strat = cache["strats"][ctx.symbol]
+
+    # 1) Alimentar el detector con el tick actual
+    strat.on_market_data(ts, price)
+
+    # 2) Si hay impulso pendiente, intentar entrada (leg 1)
+    if strat.pending_impulse is not None:
+        ask_up, ask_dn = ctx.state.get_asks()
+        spot = getattr(ctx.state, "spot_price", None)
+        window_ts = int(getattr(ctx.tokens, "window_ts", 0) or 0)
+        try:
+            strat.on_book_update(
+                ts=ts, window_ts=window_ts,
+                ask_up=ask_up, ask_dn=ask_dn,
+                secs_left=ctx.seconds_left,
+                price_now=spot,
+                trader=ctx.trader,
+            )
+        except Exception as exc:
+            logger.warn(f"impulse_hedge observe error: {exc}")
+            return
+
+        # 3) Si entramos, intentar hedge inmediatamente en ticks siguientes.
+        if strat._state.value == "ENTERED":
+            try:
+                strat.on_book_update(
+                    ts=ts, window_ts=window_ts,
+                    ask_up=ask_up, ask_dn=ask_dn,
+                    secs_left=ctx.seconds_left,
+                    price_now=spot,
+                    trader=ctx.trader,
+                )
+            except Exception as exc:
+                logger.warn(f"impulse_hedge hedge error: {exc}")
+
+
 _RUNTIME_FIELDS = _build_descriptor()
 
 
@@ -502,8 +567,9 @@ DESCRIPTOR = StrategyDescriptor(
     description="Detecta impulsos direccionales (z-score > umbral) y abre "
                 "par balanceado con cobertura inmediata. Lock ~2¢/share "
                 "cuando ambas patas llenan. Requiere cobertura ≥80%.",
-    evaluate=lambda ctx: [],   # el tick principal es on_market_data + on_book_update
+    evaluate=lambda ctx: [],   # sin señal al abrir (impulso es continuo)
     is_enabled=_is_enabled,
+    observe=_observe_impulse,  # el bot llama esto cada ~4s durante la ventana
     params=_RUNTIME_FIELDS,
     enabled_when={"field": "ih_enabled", "values": [True]},
     priority=1,  # por encima de temporal_arb si ambos apuntan al mismo lado
