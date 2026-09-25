@@ -515,7 +515,7 @@ def _observe_impulse(ctx) -> None:
         cache["strats"][ctx.symbol] = ImpulseLockStrategy(ImpulseLockConfig(
             entry_min=float(getattr(s, "ih_entry_min", 0.55)),
             entry_max=float(getattr(s, "ih_entry_max", 0.62)),
-            z_min=float(getattr(s, "ih_z_min", 2.5)),
+            min_impulse_z=float(getattr(s, "ih_z_min", 2.5)),
             min_lock_profit=float(getattr(s, "ih_min_lock_profit", 0.02)),
             size_shares=int(getattr(s, "ih_size_shares", 20)),
             hedge_deadline_s=30.0,
