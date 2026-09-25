@@ -505,6 +505,26 @@ def _observe_impulse(ctx) -> None:
         return
     ts, price = buf[-1]
 
+    # Heartbeat: throttled log so the user can see the strategy is alive
+    # even when no impulse fires (z below threshold). Without this the
+    # strategy appears dead in the logs.
+    import time as _time
+    cache = _observe_impulse.__dict__
+    last_log = cache.get("last_log", 0.0)
+    if _time.time() - last_log > 60:
+        sigma = cache.get("strats", {}).get(ctx.symbol)
+        if sigma is not None:
+            obs = sigma._detector._vol.sigma_per_sec
+            obs_str = f"σ={obs:.2e}/s" if obs else "σ=?"
+        else:
+            obs_str = "no_vol"
+        logger.info(
+            f"[IH] 👁 observando ventana={ctx.tokens.window_ts} ts={ts:.1f} "
+            f"price={price:.2f} {obs_str} ticks_in_buf={len(buf)}",
+            icon="👁",
+        )
+        cache["last_log"] = _time.time()
+
     # Lazy: reusar la misma instancia ImpulseLockStrategy por (symbol, window)
     cache = _observe_impulse.__dict__
     if cache.get("window") != ctx.tokens.window_ts:
