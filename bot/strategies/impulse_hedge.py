@@ -44,7 +44,8 @@ from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from .base import StrategyContext, StrategyDescriptor
-from .. import logger
+import logging
+logger = logging.getLogger(__name__)
 
 # ─── Math pura (sin I/O, testeable) ──────────────────────────────────────
 
