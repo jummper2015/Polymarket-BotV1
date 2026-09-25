@@ -902,7 +902,9 @@ def _observe(ctx: StrategyContext) -> None:
             # Cap por par: ≤ $1 para que el mart-hedge no sea auto-pérdida.
             # El cap regular (ta_hedge_max_sum=0.94) bloquea mart-hedge justo
             # cuando la pérdida es grande y el ask opuesto está elevado.
-            max_mart_pair_cost = 1.0 - 2 * taker_fee_per_share(0.5, c.fee_rate)
+            # Usamos un cap más generoso: max(hedge_max_sum, 0.965) permite
+            # mart-hedge hasta break-even (excluyendo fees).
+            max_mart_pair_cost = max(hedge_max_sum, 0.965)
             if opp_ask is not None and round(ta.first_px + opp_ask, 4) <= max_mart_pair_cost:
                 loss_pct = (ta.first_px - current_first_ask) / ta.first_px  # positive fraction
                 # qty = 2x initial + loss% of initial → qty = initial × (2 + loss_pct)
