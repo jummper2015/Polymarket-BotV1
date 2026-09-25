@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from .base import StrategyContext, StrategyDescriptor
+from .. import logger
 
 # ─── Math pura (sin I/O, testeable) ──────────────────────────────────────
 
