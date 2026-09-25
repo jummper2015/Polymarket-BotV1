@@ -512,6 +512,13 @@ def _observe_impulse(ctx) -> None:
     # strategy appears dead in the logs.
     import time as _time
     cache = _observe_impulse.__dict__
+    if cache.get("first_call") is None:
+        cache["first_call"] = False
+        logger.info(
+            f"[IH] 🟢 observe() primera llamada · ventana={ctx.tokens.window_ts} "
+            f"price={price:.2f} ticks_in_buf={len(buf)}",
+            icon="🟢",
+        )
     last_log = cache.get("last_log", 0.0)
     if _time.time() - last_log > 60:
         sigma = cache.get("strats", {}).get(ctx.symbol)
