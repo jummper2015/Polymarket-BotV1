@@ -1025,7 +1025,8 @@ class TestObserveHalfOpen:
             for call in orders
         ), f"Expected DOWN BUY @0.40 × 184; got {orders}"
         assert win.mart_hedge_rounds == 1
-        assert win.mart_hedge_fired is True
+        # mart_hedge_fired flag was removed: rounds can repeat per oscillation
+        # (multi-round martingale). Assert the round counter instead.
 
     def test_mart_hedge_skipped_when_in_profit(self):
         """If first leg is in profit, mart-hedge does NOT fire. We use a low
