@@ -879,13 +879,17 @@ def _observe(ctx: StrategyContext) -> None:
 
         # Path E: Martingale hedge (added 2026-09-21, refined 2026-09-25).
         # Caso 3 del usuario: el impulso resulta falso, el precio va en contra.
-        # Compramos el lado opuesto con qty = first_shares × (2 + loss_pct) para
-        # duplicar la posición inicial más un extra proporcional a la pérdida
-        # de la primera pata. Si el precio revierte y vuelve a favor, repite
-        # el paso (martingale). Cap a `mart_hedge_max_rounds` rondas.
+        # Compramos el lado opuesto con qty = first_shares × (2 + loss_pct).
+        # Si el precio revierte y vuelve a favor, repite el paso. Cap a
+        # `mart_hedge_max_rounds` rondas.
+        # NOTA sobre el cap: usamos `1.0 - fees` en lugar de `hedge_max_sum`
+        # porque cuando el bot está en loss grande, el ask opuesto está a $0.99+
+        # (BTC se movió mucho). El cap `hedge_max_sum=0.94` bloquearía el mart-hedge
+        # justo cuando más lo necesitamos. La condición `opp_ask + first_px ≤ 1.0`
+        # permite mart-hedge hasta break-even (excluyendo fees); más caro es
+        # matemáticamente peor que no hacer nada.
         if (
             mart_hedge_enabled
-            and not ta.mart_hedge_fired
             and ta.first_leg_filled_at is not None
             and ta.first_shares_filled > 0
             and ta.first_px is not None
@@ -895,7 +899,11 @@ def _observe(ctx: StrategyContext) -> None:
             and ta.mart_hedge_rounds < mart_hedge_max_rounds
         ):
             opp_ask = ask_dn if second_side == "DOWN" else ask_up
-            if opp_ask is not None and round(ta.first_px + opp_ask, 4) <= hedge_max_sum:
+            # Cap por par: ≤ $1 para que el mart-hedge no sea auto-pérdida.
+            # El cap regular (ta_hedge_max_sum=0.94) bloquea mart-hedge justo
+            # cuando la pérdida es grande y el ask opuesto está elevado.
+            max_mart_pair_cost = 1.0 - 2 * taker_fee_per_share(0.5, c.fee_rate)
+            if opp_ask is not None and round(ta.first_px + opp_ask, 4) <= max_mart_pair_cost:
                 loss_pct = (ta.first_px - current_first_ask) / ta.first_px  # positive fraction
                 # qty = 2x initial + loss% of initial → qty = initial × (2 + loss_pct)
                 mart_qty = round(
@@ -906,7 +914,8 @@ def _observe(ctx: StrategyContext) -> None:
                 if oid_mh:
                     cost = round(ta.first_px + opp_ask, 4)
                     ta.mart_hedge_rounds += 1
-                    ta.mart_hedge_fired = True
+                    # NO marcamos mart_hedge_fired=True para permitir múltiples
+                    # rondas en caso de oscilación adversa-recovery-adversa.
                     logger.ok(
                         f"[TA] 🛡 MART-HEDGE round={ta.mart_hedge_rounds}/{mart_hedge_max_rounds}  "
                         f"primera={ta.first_side}@{ta.first_px:.3f}"
