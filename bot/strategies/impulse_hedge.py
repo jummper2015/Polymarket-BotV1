@@ -486,8 +486,9 @@ def _build_descriptor():
         ),
         RuntimeField(
             "ih_z_min", "float", label="Impulse-Lock: z-score mínimo",
-            minimum=1.5, maximum=4.0, step=0.1,
-            hint="Umbral de z-score para detectar impulso (default 2.5)",
+            minimum=0.1, maximum=4.0, step=0.1,
+            hint="Umbral de z-score para detectar impulso (default 2.5, "
+                 "operativo 0.4 para BTC a $77k con ATR $40)",
         ),
     )
     return fields
@@ -512,16 +513,16 @@ def _observe_impulse(ctx) -> None:
     if ctx.symbol not in cache["strats"]:
         s = ctx.state
         cache["strats"][ctx.symbol] = ImpulseLockStrategy(ImpulseLockConfig(
-            entry_min=float(getattr(s, "ta_ih_entry_min", 0.55)),
-            entry_max=float(getattr(s, "ta_ih_entry_max", 0.62)),
-            z_min=float(getattr(s, "ta_ih_z_min", 2.5)),
-            min_lock_profit=float(getattr(s, "ta_ih_min_lock_profit", 0.02)),
-            size_shares=int(getattr(s, "ta_ih_size_shares", 20)),
+            entry_min=float(getattr(s, "ih_entry_min", 0.55)),
+            entry_max=float(getattr(s, "ih_entry_max", 0.62)),
+            z_min=float(getattr(s, "ih_z_min", 2.5)),
+            min_lock_profit=float(getattr(s, "ih_min_lock_profit", 0.02)),
+            size_shares=int(getattr(s, "ih_size_shares", 20)),
             hedge_deadline_s=30.0,
             hedge_attempts=3,
             exit_settle_secs=30.0,
         ))
-        cache["strats"][ctx.symbol].reset(ctx.tokens.window_id)
+        cache["strats"][ctx.symbol].reset(ctx.tokens.window_ts)
     strat = cache["strats"][ctx.symbol]
 
     # 1) Alimentar el detector con el tick actual
