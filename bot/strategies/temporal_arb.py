@@ -558,7 +558,7 @@ def _observe(ctx: StrategyContext) -> None:
         # Track tiempo en winner zone
         if current_first_ask is not None and current_first_ask >= HOLD_WINNER_THRESHOLD:
             if ta.winner_zone_entered_at is None:
-                ta.winner_zone_entered_at = ts
+                ta.winner_zone_entered_at = time.time()
             ta.reached_winner_zone = True
         else:
             ta.winner_zone_entered_at = None
