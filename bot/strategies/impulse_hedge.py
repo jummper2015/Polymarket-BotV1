@@ -507,8 +507,8 @@ def _observe_impulse(ctx) -> None:
 
     # Lazy: reusar la misma instancia ImpulseLockStrategy por (symbol, window)
     cache = _observe_impulse.__dict__
-    if cache.get("window") != ctx.tokens.window_id:
-        cache["window"] = ctx.tokens.window_id
+    if cache.get("window") != ctx.tokens.window_ts:
+        cache["window"] = ctx.tokens.window_ts
         cache["strats"] = {}
     if ctx.symbol not in cache["strats"]:
         s = ctx.state
