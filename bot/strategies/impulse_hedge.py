@@ -44,8 +44,9 @@ from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 from .base import StrategyContext, StrategyDescriptor
-import logging
-logger = logging.getLogger(__name__)
+# logger is imported lazily inside _observe_impulse and at the call sites
+# that need it. A top-level `from .. import logger` makes the file un-
+# importable in isolation (pytest collection), so we defer it to call time.
 
 # ─── Math pura (sin I/O, testeable) ──────────────────────────────────────
 
@@ -511,10 +512,11 @@ def _observe_impulse(ctx) -> None:
     # even when no impulse fires (z below threshold). Without this the
     # strategy appears dead in the logs.
     import time as _time
+    from .. import logger as _botlog
     cache = _observe_impulse.__dict__
     if cache.get("first_call") is None:
         cache["first_call"] = False
-        logger.info(
+        _botlog.info(
             f"[IH] 🟢 observe() primera llamada · ventana={ctx.tokens.window_ts} "
             f"price={price:.2f} ticks_in_buf={len(buf)}",
             icon="🟢",
@@ -527,7 +529,7 @@ def _observe_impulse(ctx) -> None:
             obs_str = f"σ={obs:.2e}/s" if obs else "σ=?"
         else:
             obs_str = "no_vol"
-        logger.info(
+        _botlog.info(
             f"[IH] 👁 observando ventana={ctx.tokens.window_ts} ts={ts:.1f} "
             f"price={price:.2f} {obs_str} ticks_in_buf={len(buf)}",
             icon="👁",
@@ -571,7 +573,8 @@ def _observe_impulse(ctx) -> None:
                 trader=ctx.trader,
             )
         except Exception as exc:
-            logger.warn(f"impulse_hedge observe error: {exc}")
+            from .. import logger as _botlog
+            _botlog.warn(f"impulse_hedge observe error: {exc}")
             return
 
         # 3) Si entramos, intentar hedge inmediatamente en ticks siguientes.
@@ -585,7 +588,8 @@ def _observe_impulse(ctx) -> None:
                     trader=ctx.trader,
                 )
             except Exception as exc:
-                logger.warn(f"impulse_hedge hedge error: {exc}")
+                from .. import logger as _botlog
+                _botlog.warn(f"impulse_hedge hedge error: {exc}")
 
 
 _RUNTIME_FIELDS = _build_descriptor()
