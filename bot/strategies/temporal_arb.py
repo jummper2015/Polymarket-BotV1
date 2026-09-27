@@ -899,13 +899,11 @@ def _observe(ctx: StrategyContext) -> None:
             and ta.mart_hedge_rounds < mart_hedge_max_rounds
         ):
             opp_ask = ask_dn if second_side == "DOWN" else ask_up
-            # Cap por par: ≤ $1 para que el mart-hedge no sea auto-pérdida.
-            # El cap regular (ta_hedge_max_sum=0.94) bloquea mart-hedge justo
-            # cuando la pérdida es grande y el ask opuesto está elevado.
-            # Usamos un cap más generoso: max(hedge_max_sum, 0.965) permite
-            # mart-hedge hasta break-even (excluyendo fees).
-            max_mart_pair_cost = max(hedge_max_sum, 0.965)
-            if opp_ask is not None and round(ta.first_px + opp_ask, 4) <= max_mart_pair_cost:
+            # Sin cap de precio: el usuario quiere mart-hedge SIEMPRE que
+            # haya pérdida significativa, incluso si el sum está por encima
+            # de $1 (asumiendo reversión del BTC). Sin esta pérdida, el bot
+            # pierde la pata entera al bailout.
+            if opp_ask is not None:
                 loss_pct = (ta.first_px - current_first_ask) / ta.first_px  # positive fraction
                 # qty = 2x initial + loss% of initial → qty = initial × (2 + loss_pct)
                 mart_qty = round(

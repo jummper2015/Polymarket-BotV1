@@ -174,12 +174,15 @@ class ImpulseDetector:
         """Procesa un tick y devuelve Impulse si se cumplen las condiciones."""
         from .. import coinbase_ticker_feed as feed
         c = self._c
+        # Snapshot the buffer under lock, but do NOT mutate it (other code
+        # readers depend on the live history — popping here would silently
+        # shorten their windows). Apply the staleness filter on the snapshot.
         with feed._lock:  # noqa: SLF001 — cross-module access
-            buf = feed._buffer  # noqa: SLF001
-        # Trim entries older than max_stale_s + lookback_s
-        cutoff = ts - (c.max_stale_s + c.lookback_s)
-        while buf and buf[0][0] < cutoff:
-            buf.popleft()
+            buf = tuple(feed._buffer)  # noqa: SLF001 — frozen copy
+        cutoff_ms = (ts - c.max_stale_s - c.lookback_s) * 1000
+        recent = [p for t, p in buf if t * 1000 >= cutoff_ms]
+        if not recent:
+            return None
         # Update vol using the lead venue only (1Hz sample)
         sec = int(ts)
         if venue == c.venues[0] and (self._last_vol_sec is None or sec > self._last_vol_sec):
@@ -191,10 +194,11 @@ class ImpulseDetector:
         scale = sigma * math.sqrt(c.lookback_s)
         if scale <= 0:
             return None
-        # Find price at ts - lookback_s
+        # Find price at ts - lookback_s (latest tick <= lookback ago)
         ref_price = None
+        cutoff_finder = ts - c.lookback_s
         for t, p in buf:
-            if t <= ts - c.lookback_s:
+            if t <= cutoff_finder:
                 ref_price = p
             else:
                 break

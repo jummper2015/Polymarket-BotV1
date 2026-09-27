@@ -1062,13 +1062,20 @@ class TestObserveHalfOpen:
         assert win.mart_hedge_rounds == 0
         trader._place_taker_order.assert_not_called()
 
-    def test_mart_hedge_skipped_when_pair_exceeds_cap(self):
+    def test_mart_hedge_fires_even_when_pair_exceeds_cap(self):
+        """Mart-hedge no longer has a price cap — it must fire whenever the
+        first leg is in loss past the min_secs threshold, even if the pair
+        sum is above hedge_max_sum (or even above $1.0). When BTC has moved
+        hard against the first leg, the opposite ask is near $0.99 — the
+        previous cap would have suppressed exactly the trades we need.
+        """
         from bot import polymarket_twap_tracker as twap_tracker
         twap_tracker.clear_all()
         state = _make_state(
-            ask_up=0.30, ask_dn=0.80, spot_price=74_500.0,  # sum 1.10 > 0.96
+            ask_up=0.30, ask_dn=0.80, spot_price=74_500.0,  # sum 1.10
             ta_hedge_max_sum=0.96,
             ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+            ta_profit_lock_enabled=False,  # isolate mart-hedge
             logged_bailout=True,
         )
         tokens = _make_tokens()
@@ -1089,8 +1096,15 @@ class TestObserveHalfOpen:
             patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
         ):
             _observe(_ctx(state, tokens, trader, seconds_left=200.0))
-        assert win.mart_hedge_rounds == 0
-        trader._place_taker_order.assert_not_called()
+        # Mart-hedge fires once with qty scaled by loss_pct, even though
+        # the pair sum is above hedge_max_sum and above $1.
+        assert win.mart_hedge_rounds == 1
+        assert trader._place_taker_order.call_count == 1
+        # first_px=0.50, current=0.30 → loss_pct=0.40, qty=80*(2+0.40)=192
+        called_args = trader._place_taker_order.call_args
+        # (token_id, side, price, qty)
+        assert called_args.args[1] == "BUY"
+        assert called_args.args[3] == round(80.0 * (2.0 + 0.40), 4)
 
     def test_mart_hedge_stops_at_max_rounds(self):
         """Once mart_hedge_rounds reaches max_rounds, mart-hedge stops firing."""
