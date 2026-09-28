@@ -173,6 +173,13 @@ class BotState:
         # Beyond ta_profit_lock_min_secs (30s) we keep trying edge up to this
         # max window (60s), so the bot keeps looking for the lock.
         self.ta_profit_lock_max_secs:  float = 60.0
+        # Post-trade grace + Mart-Hedge round 2 (added 2026-09-28)
+        # Path B (hedge recovery) and Path E round 1 (mart-hedge) only fire
+        # after grace_secs. Mart-hedge round 2 fires only on BTC reversal
+        # ≥ reversal_threshold AND cooldown_secs since round 1.
+        self.ta_grace_secs:               float = 60.0
+        self.ta_mh_round2_cooldown_secs:  float = 20.0
+        self.ta_mh_reversal_threshold:    float = 0.005
         # Impulse-Lock strategy (added 2026-09-24)
         self.ih_enabled:          bool  = False
         self.ih_entry_min:        float = 0.55
@@ -694,6 +701,9 @@ class BotState:
                 "ta_mart_hedge_mult":     self.ta_mart_hedge_mult,
                 "ta_mart_hedge_max_rounds": self.ta_mart_hedge_max_rounds,
                 "ta_profit_lock_max_secs":  self.ta_profit_lock_max_secs,
+                "ta_grace_secs":               self.ta_grace_secs,
+                "ta_mh_round2_cooldown_secs":  self.ta_mh_round2_cooldown_secs,
+                "ta_mh_reversal_threshold":    self.ta_mh_reversal_threshold,
                 "ih_enabled":             self.ih_enabled,
                 "ih_entry_min":           self.ih_entry_min,
                 "ih_entry_max":           self.ih_entry_max,

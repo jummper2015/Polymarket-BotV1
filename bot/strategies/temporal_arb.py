@@ -46,10 +46,16 @@ State machine (per window per symbol):
     ├─ target reached                      →  HALF_OPEN
     └─ secs ≤ ta_bailout_sec              →  HALF_OPEN  (hold what we have)
 
-  HALF_OPEN  (leader leg open, waiting for BTC to reverse + cheap second leg)
-    ├─ second_ask ≤ ta_complete_cap − first_px     →  BUY taker  →  COMPLETE
-    ├─ current_ask dropped ≥ ta_hedge_drop_pct AND
-    │  first_px + hedge_ask ≤ ta_hedge_max_sum     →  BUY hedge taker  →  HEDGED
+  HALF_OPEN  (leader leg open, grace_secs (60s default) before hedge paths)
+    ├─ Path A (any tick): second_ask ≤ ta_complete_cap − first_px → COMPLETE
+    ├─ After grace_secs (60s default):
+    │   ├─ Path D (profit-lock): in profit + edge → COMPLETE
+    │   ├─ Path B (hedge recovery): drop ≥ ta_hedge_drop_pct + sum ≤ ta_hedge_max_sum → HEDGED
+    │   └─ Path E (mart-hedge): in loss
+    │       ├─ round 1: qty = first_shares × (2 + loss_pct)
+    │       └─ round 2: only if BTC reversed ≥ta_mh_reversal_threshold
+    │          AND ta_mh_round2_cooldown_secs since round 1;
+    │          qty = round1_shares × (2 + round1_loss_pct)
     └─ secs ≤ ta_bailout_sec  →  CLOSED  (first leg resolves normally)
 
   HEDGED     both sides open; one wins, minimising net loss / reaching breakeven
@@ -148,7 +154,25 @@ PROFIT_LOCK_CAP_DEFAULT      = 1.00
 MART_HEDGE_ENABLED_DEFAULT   = False
 MART_HEDGE_MIN_SECS_DEFAULT  = 30
 MART_HEDGE_MULT_DEFAULT      = 2.0
-MART_HEDGE_MAX_ROUNDS_DEFAULT = 3
+MART_HEDGE_MAX_ROUNDS_DEFAULT = 2
+
+# Post-trade grace period (added 2026-09-28, spec rev 2026-09-27).
+# From first_leg_filled_at, the bot waits GRACE_SECS seconds for Path A
+# (cheap second leg) to complete the pair. Path B (hedge recovery) and
+# Path E round 1 (mart-hedge) only become eligible AFTER the grace.
+# User spec: "esperar hasta 60 segundos para encontrar el Edge configurado".
+GRACE_SECS_DEFAULT = 60.0
+
+# Mart-hedge round 2 (added 2026-09-28).
+# Round 2 only fires if (a) at least MH_ROUND2_COOLDOWN_SECS has elapsed
+# since round 1 AND (b) BTC has moved ≥MH_REVERSAL_THRESHOLD (0.5%) further
+# against the original first leg (current_first_ask < first_ask_at_r1 ×
+# (1 - threshold)). This prevents the consecutive-tick triple-fire bug
+# observed on 2026-09-22 (3 mart-hedges in <12s without waiting for
+# reversal). Round 2 qty uses the round-1 leg's loss_pct (per user's spec
+# "Shares pata perdedora actual × (2 + %perdida)").
+MH_ROUND2_COOLDOWN_SECS_DEFAULT = 20.0
+MH_REVERSAL_THRESHOLD_DEFAULT   = 0.005  # 0.5% further against first leg
 
 # Stop-loss defaults
 STOP_LOSS_ENABLED_DEFAULT    = True
@@ -203,6 +227,16 @@ class _TAWindow:
     profit_lock_fired:   bool            = False  # any profit-lock executed this window
     mart_hedge_rounds:    int             = 0
     mart_hedge_fired:     bool            = False
+    # Mart-Hedge round 1 leg tracking (added 2026-09-28).
+    # Round 2 uses these to compute new qty on the round-1 leg's loss_pct
+    # (per user spec "Shares pata perdedora actual × (2 + %perdida)")
+    # and to detect BTC reversal (current_first_ask < first_ask_at_r1 ×
+    # (1 - reversal_threshold)) before firing round 2.
+    mart_hedge_side: Optional[str]       = None  # "UP" / "DOWN" — what round 1 bought
+    mart_hedge_px:   Optional[float]     = None  # fill price of round 1 leg
+    mart_hedge_qty:  float               = 0.0   # filled shares of round 1 leg
+    mh_first_ask_at_r1: Optional[float]  = None  # current_first_ask when round 1 fired (BTC snapshot)
+    last_mh_round_at: Optional[float]    = None  # time.time() when last round fired (cooldown)
 
 
 
@@ -467,6 +501,10 @@ def _observe(ctx: StrategyContext) -> None:
     mart_hedge_max_rounds = int(getattr(state, "ta_mart_hedge_max_rounds", MART_HEDGE_MAX_ROUNDS_DEFAULT))
     # Hold-Winner + extended profit-lock (2026-09-25)
     profit_lock_max_secs  = float(getattr(state, "ta_profit_lock_max_secs", PROFIT_LOCK_MAX_SECS_DEFAULT))
+    # Post-trade grace (2026-09-28): hedge paths only fire after GRACE_SECS
+    grace_secs              = float(getattr(state, "ta_grace_secs", GRACE_SECS_DEFAULT))
+    mh_round2_cooldown_secs = float(getattr(state, "ta_mh_round2_cooldown_secs", MH_ROUND2_COOLDOWN_SECS_DEFAULT))
+    mh_reversal_threshold   = float(getattr(state, "ta_mh_reversal_threshold", MH_REVERSAL_THRESHOLD_DEFAULT))
 
     # ── terminal states ───────────────────────────────────────────────────────
     if ta.phase in ("complete", "lpt_complete", "hedged", "closed"):
@@ -781,7 +819,17 @@ def _observe(ctx: StrategyContext) -> None:
         # Example: bought DOWN@0.45, now DOWN@0.18 (lost 60% of value).
         # Buying UP@0.40 → total cost=0.85 → at expiry one side pays $1.00,
         # net P&L = 1.0 - 0.85 = +$0.15 instead of -$0.45 (or vice versa).
-        if hedge_enabled and not ta.hedge_fired and ta.first_px is not None:
+        #
+        # 2026-09-28: gated behind grace_secs (60s default). Before grace,
+        # Path A still tries the cheap-completion every tick and Path E
+        # hasn't armed yet. Path B firing during grace would skip the user's
+        # "wait for Edge" intent and lock the position too early.
+        time_in_trade = (
+            time.time() - ta.first_leg_filled_at
+            if ta.first_leg_filled_at is not None else None
+        )
+        if hedge_enabled and not ta.hedge_fired and ta.first_px is not None \
+                and time_in_trade is not None and time_in_trade >= grace_secs:
             # current ask of the FIRST leg (the losing side)
             current_first_ask = ask_up if ta.first_side == "UP" else ask_dn
             # ask of the HEDGE side (opposite)
@@ -877,17 +925,25 @@ def _observe(ctx: StrategyContext) -> None:
                         state.record_observation("TA_TWAP_HEDGE")
                         return
 
-        # Path E: Martingale hedge (added 2026-09-21, refined 2026-09-25).
+        # Path E: Martingale hedge (added 2026-09-21, refined 2026-09-25, rev 2026-09-28).
         # Caso 3 del usuario: el impulso resulta falso, el precio va en contra.
         # Compramos el lado opuesto con qty = first_shares × (2 + loss_pct).
-        # Si el precio revierte y vuelve a favor, repite el paso. Cap a
-        # `mart_hedge_max_rounds` rondas.
-        # NOTA sobre el cap: usamos `1.0 - fees` en lugar de `hedge_max_sum`
-        # porque cuando el bot está en loss grande, el ask opuesto está a $0.99+
-        # (BTC se movió mucho). El cap `hedge_max_sum=0.94` bloquearía el mart-hedge
-        # justo cuando más lo necesitamos. La condición `opp_ask + first_px ≤ 1.0`
-        # permite mart-hedge hasta break-even (excluyendo fees); más caro es
-        # matemáticamente peor que no hacer nada.
+        # Si el precio revierte, ejecuta round 2 con la pata perdedora del
+        # round 1 usando la misma fórmula.
+        #
+        # Round 1: fires once after grace_secs (60s) IF first leg is in loss.
+        # Round 2: fires ONLY IF
+        #   (a) at least mh_round2_cooldown_secs (20s) since round 1 AND
+        #   (b) BTC moved further against the original first leg:
+        #       current_first_ask < mh_first_ask_at_r1 × (1 - mh_reversal_threshold).
+        # Without (b), the previous code fired round 2 on the very next tick
+        # because current_first_ask < first_px was still true. That was the
+        # "3 mart-hedges in 12s without reversal" failure mode observed on
+        # 2026-09-22 (trades 8+9 window 1790091900).
+        #
+        # qty formula per round (user spec):
+        #   round 1: qty = first_shares × (2 + loss_pct_first_leg)
+        #   round 2: qty = round1_qty × (2 + loss_pct_round1_leg)
         if (
             mart_hedge_enabled
             and ta.first_leg_filled_at is not None
@@ -897,39 +953,119 @@ def _observe(ctx: StrategyContext) -> None:
             and current_first_ask < ta.first_px  # in loss
             and (time.time() - ta.first_leg_filled_at) >= mart_hedge_min_secs
             and ta.mart_hedge_rounds < mart_hedge_max_rounds
+            and time_in_trade is not None
+            and time_in_trade >= grace_secs
         ):
             opp_ask = ask_dn if second_side == "DOWN" else ask_up
-            # Sin cap de precio: el usuario quiere mart-hedge SIEMPRE que
-            # haya pérdida significativa, incluso si el sum está por encima
-            # de $1 (asumiendo reversión del BTC). Sin esta pérdida, el bot
-            # pierde la pata entera al bailout.
-            if opp_ask is not None:
-                loss_pct = (ta.first_px - current_first_ask) / ta.first_px  # positive fraction
-                # qty = 2x initial + loss% of initial → qty = initial × (2 + loss_pct)
-                mart_qty = round(
-                    ta.first_shares_filled * (2.0 + loss_pct), 4
+
+            # Round-specific gate. Round 1: arm unconditionally past grace.
+            # Round 2: only fire if (a) cooldown elapsed and (b) BTC moved
+            # ≥reversal_threshold further against the first leg since round 1.
+            round_num = ta.mart_hedge_rounds + 1
+            if round_num == 2:
+                cooldown_ok = (
+                    ta.last_mh_round_at is not None
+                    and (time.time() - ta.last_mh_round_at) >= mh_round2_cooldown_secs
                 )
-                tok_second = tokens.up_token_id if second_side == "UP" else tokens.down_token_id
-                oid_mh = trader._place_taker_order(tok_second, "BUY", opp_ask, mart_qty)
-                if oid_mh:
-                    cost = round(ta.first_px + opp_ask, 4)
-                    ta.mart_hedge_rounds += 1
-                    # NO marcamos mart_hedge_fired=True para permitir múltiples
-                    # rondas en caso de oscilación adversa-recovery-adversa.
-                    logger.ok(
-                        f"[TA] 🛡 MART-HEDGE round={ta.mart_hedge_rounds}/{mart_hedge_max_rounds}  "
-                        f"primera={ta.first_side}@{ta.first_px:.3f}"
-                        f" (ahora {current_first_ask:.3f}, -{loss_pct*100:.1f}%)  "
-                        f"hedge={second_side}@{opp_ask:.3f} × {mart_qty:.0f}sh  "
-                        f"suma={cost:.3f}  (qty=initial×(2+{loss_pct:.2f}))",
-                        icon="🛡",
+                btc_reversed = (
+                    ta.mh_first_ask_at_r1 is not None
+                    and current_first_ask
+                        < ta.mh_first_ask_at_r1 * (1.0 - mh_reversal_threshold)
+                )
+                if not (cooldown_ok and btc_reversed):
+                    # Conditions for round 2 not met → fall through to bailout
+                    # / next tick. Don't fire round 2 yet.
+                    pass
+                else:
+                    if opp_ask is not None:
+                        # Round 2 qty: round1_qty × (2 + loss_pct_round1_leg)
+                        # Per user spec: "Shares pata perdedora actual × (2 + %perdida)"
+                        # The "pata perdedora" in round 1 is `ta.mart_hedge_side`
+                        # (the opposite of the original first_leg). Its current
+                        # ask is opp_ask; its entry price was ta.mart_hedge_px.
+                        round1_loss_pct = (
+                            (ta.mart_hedge_px - opp_ask) / ta.mart_hedge_px
+                            if (ta.mart_hedge_px and ta.mart_hedge_px > 0)
+                            else 0.0
+                        )
+                        mart_qty = round(
+                            ta.mart_hedge_qty * (2.0 + round1_loss_pct), 4
+                        )
+                        # Round 2 buys the SAME side as round 1 (the mart-hedge
+                        # side that is now in loss). User spec: "Shares pata
+                        # perdedora actual × (2 + %perdida)" — average-down on
+                        # the leg that's losing, not flip back to first_side.
+                        round2_side = ta.mart_hedge_side
+                        tok_second = (
+                            tokens.up_token_id if round2_side == "UP"
+                            else tokens.down_token_id
+                        )
+                        oid_mh = trader._place_taker_order(
+                            tok_second, "BUY", opp_ask, mart_qty
+                        )
+                        if oid_mh:
+                            ta.mart_hedge_rounds += 1
+                            ta.last_mh_round_at = time.time()
+                            logger.ok(
+                                f"[TA] 🛡 MART-HEDGE round=2/{mart_hedge_max_rounds}  "
+                                f"primera={ta.first_side}@{ta.first_px:.3f}"
+                                f" (ahora {current_first_ask:.3f})  "
+                                f"r1_leg={ta.mart_hedge_side}@{ta.mart_hedge_px:.3f}"
+                                f" (ahora {opp_ask:.3f}, -{round1_loss_pct*100:.1f}%)  "
+                                f"hedge={round2_side}@{opp_ask:.3f} × {mart_qty:.0f}sh  "
+                                f"(qty=r1_shares×(2+{round1_loss_pct:.2f}))  "
+                                f"reversal_threshold={mh_reversal_threshold:.3f}",
+                                icon="🛡",
+                            )
+                            trader._record_box_fill(
+                                tokens, round2_side, tok_second, opp_ask, mart_qty,
+                                strategy="temporal_arb",
+                            )
+                            state.record_observation(
+                                f"TA_MART_HEDGE_R{ta.mart_hedge_rounds}"
+                            )
+                            return
+            elif round_num == 1:
+                # Round 1: standard formula on the original first leg.
+                if opp_ask is not None:
+                    loss_pct = (
+                        (ta.first_px - current_first_ask) / ta.first_px
+                    )  # positive fraction
+                    mart_qty = round(
+                        ta.first_shares_filled * (2.0 + loss_pct), 4
                     )
-                    trader._record_box_fill(
-                        tokens, second_side, tok_second, opp_ask, mart_qty,
-                        strategy="temporal_arb",
+                    tok_second = (
+                        tokens.up_token_id if second_side == "UP"
+                        else tokens.down_token_id
                     )
-                    state.record_observation(f"TA_MART_HEDGE_R{ta.mart_hedge_rounds}")
-                    return
+                    oid_mh = trader._place_taker_order(
+                        tok_second, "BUY", opp_ask, mart_qty
+                    )
+                    if oid_mh:
+                        ta.mart_hedge_rounds += 1
+                        # Track round-1 leg for round-2 reversal detection.
+                        ta.mart_hedge_side = second_side
+                        ta.mart_hedge_px   = opp_ask
+                        ta.mart_hedge_qty  = mart_qty
+                        ta.mh_first_ask_at_r1 = current_first_ask
+                        ta.last_mh_round_at   = time.time()
+                        cost = round(ta.first_px + opp_ask, 4)
+                        logger.ok(
+                            f"[TA] 🛡 MART-HEDGE round=1/{mart_hedge_max_rounds}  "
+                            f"primera={ta.first_side}@{ta.first_px:.3f}"
+                            f" (ahora {current_first_ask:.3f}, -{loss_pct*100:.1f}%)  "
+                            f"hedge={second_side}@{opp_ask:.3f} × {mart_qty:.0f}sh  "
+                            f"suma={cost:.3f}  (qty=initial×(2+{loss_pct:.2f}))",
+                            icon="🛡",
+                        )
+                        trader._record_box_fill(
+                            tokens, second_side, tok_second, opp_ask, mart_qty,
+                            strategy="temporal_arb",
+                        )
+                        state.record_observation(
+                            f"TA_MART_HEDGE_R{ta.mart_hedge_rounds}"
+                        )
+                        return
 
         # Bailout: time ran out — first leg resolves normally (win or loss)
         if secs <= bail_sec and not ta.logged_bailout:
@@ -1413,8 +1549,32 @@ DESCRIPTOR = StrategyDescriptor(
         RuntimeField(
             "ta_mart_hedge_max_rounds", "int",
             label="Mart-Hedge rondas máx",
-            minimum=1, maximum=5, step=1,
-            hint="Cap de rondas consecutivas (default 3). Después, aplican stops normales.",
+            minimum=1, maximum=2, step=1,
+            hint="Cap de rondas consecutivas (default 2: round 1 + round 2 condicional "
+                 "a reversión del BTC). Rev 2026-09-28.",
+        ),
+        # ── Post-trade grace + Mart-Hedge round 2 (2026-09-28) ──────────────────
+        RuntimeField(
+            "ta_grace_secs", "float",
+            label="Grace post-trade (s)",
+            minimum=30.0, maximum=120.0, step=5.0,
+            hint="Segundos desde half_open antes de permitir Path B (hedge recovery) "
+                 "y Path E round 1 (mart-hedge). Path A sigue intentando en cada tick. "
+                 "Spec usuario: 60s.",
+        ),
+        RuntimeField(
+            "ta_mh_round2_cooldown_secs", "float",
+            label="Mart-Hedge round 2 cooldown (s)",
+            minimum=5.0, maximum=60.0, step=5.0,
+            hint="Segundos mínimos desde round 1 antes de evaluar round 2. Default 20s.",
+        ),
+        RuntimeField(
+            "ta_mh_reversal_threshold", "float",
+            label="Mart-Hedge round 2 reversión (fracción)",
+            minimum=0.001, maximum=0.05, step=0.001,
+            hint="BTC debe haber movido ≥este % adicional en contra del primer leg "
+                 "para disparar round 2. Default 0.005 = 0.5%. Evita el bug de "
+                 "3 mart-hedges consecutivos en el mismo tick window.",
         ),
     )
 )

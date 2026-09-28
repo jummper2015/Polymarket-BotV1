@@ -212,6 +212,9 @@ def _make_state(
     ta_mart_hedge_min_secs=30,
     ta_mart_hedge_mult=2.0,
     ta_mart_hedge_max_rounds=3,
+    ta_grace_secs=0.0,   # default to 0 in tests; specific tests opt-in
+    ta_mh_round2_cooldown_secs=20.0,
+    ta_mh_reversal_threshold=0.005,
     ask_up=0.50,
     ask_dn=0.50,
     spot_price=60060.0,   # +0.1% above strike by default
@@ -242,6 +245,9 @@ def _make_state(
         ta_mart_hedge_min_secs=ta_mart_hedge_min_secs,
         ta_mart_hedge_mult=ta_mart_hedge_mult,
         ta_mart_hedge_max_rounds=ta_mart_hedge_max_rounds,
+        ta_grace_secs=ta_grace_secs,
+        ta_mh_round2_cooldown_secs=ta_mh_round2_cooldown_secs,
+        ta_mh_reversal_threshold=ta_mh_reversal_threshold,
         ta_logged_bailout=logged_bailout,  # NEW: lets tests suppress the bailout
         spot_price=spot_price,
         mode=mode,
@@ -972,7 +978,9 @@ class TestObserveHalfOpen:
         assert MART_HEDGE_ENABLED_DEFAULT is False
         assert MART_HEDGE_MIN_SECS_DEFAULT == 30
         assert MART_HEDGE_MULT_DEFAULT == 2.0
-        assert MART_HEDGE_MAX_ROUNDS_DEFAULT == 3
+        # 2026-09-28: max_rounds default lowered 3 → 2 to match the round-2
+        # reversal-gated design (round 1 + round 2 only on BTC reversal).
+        assert MART_HEDGE_MAX_ROUNDS_DEFAULT == 2
 
     def test_mart_hedge_runtime_fields_exposed(self):
         names = {p.name for p in DESCRIPTOR.params}
@@ -1211,6 +1219,246 @@ class TestObserveHalfOpen:
         assert hasattr(win, "mart_hedge_fired")
         assert win.mart_hedge_rounds == 0
         assert win.mart_hedge_fired is False
+
+    # ── 2026-09-28: post-trade grace + mart-hedge round 2 reversal-gated ──────
+
+    def test_path_b_hedge_blocked_by_grace(self):
+        """Path B (hedge recovery) must NOT fire before grace_secs even when
+        the first leg has dropped hard. The 60s grace lets Path A keep trying
+        the cheap-completion route without being preempted by the defensive
+        hedge."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        # Block Path A and mart-hedge to isolate Path B
+        state = _make_state(
+            ask_up=0.20, ask_dn=0.40,  # sum 0.60 ≤ 0.92 hedge_max_sum
+            spot_price=74_000.0,
+            ta_complete_cap=0.50,  # block Path A
+            ta_profit_lock_enabled=False,
+            ta_mart_hedge_enabled=False,
+            ta_grace_secs=60.0,    # enforce grace
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 30,  # before grace
+            logged_bailout=True,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        # Path B blocked by grace, even though price conditions are met
+        assert win.phase == "half_open"
+        assert win.hedge_fired is False
+        trader._place_taker_order.assert_not_called()
+
+    def test_path_b_hedge_fires_after_grace(self):
+        """Path B fires when grace has elapsed AND the price has dropped."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.20, ask_dn=0.40,  # sum 0.60 ≤ 0.92 hedge_max_sum
+            spot_price=74_000.0,
+            ta_complete_cap=0.50,  # block Path A
+            ta_profit_lock_enabled=False,
+            ta_mart_hedge_enabled=False,
+            ta_grace_secs=60.0,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 65,  # past grace
+            logged_bailout=True,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=200.0))
+        assert win.phase == "hedged"
+        assert win.hedge_fired is True
+        trader._place_taker_order.assert_called_once()
+
+    def test_mart_hedge_round2_blocked_by_cooldown(self):
+        """Round 2 must NOT fire within mh_round2_cooldown_secs even if BTC
+        has reversed. Without the cooldown, the bot would fire round 2 on the
+        very next observe tick (~4s later)."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.10, ask_dn=0.95,   # BTC crashed hard; UP ask way down
+            spot_price=70_000.0,
+            ta_complete_cap=0.50,
+            ta_profit_lock_enabled=False,
+            ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+            ta_mart_hedge_mult=2.0, ta_mart_hedge_max_rounds=2,
+            ta_grace_secs=60.0,
+            ta_mh_round2_cooldown_secs=20.0,
+            ta_mh_reversal_threshold=0.005,
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        # Round 1 fired 5s ago (within 20s cooldown) at UP_ask=0.30 (above 0.10)
+        # BTC has reversed (0.10 < 0.30 × (1-0.005)) but cooldown blocks round 2.
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 65,
+            mart_hedge_rounds=1,
+            mart_hedge_side="DOWN", mart_hedge_px=0.70, mart_hedge_qty=160.0,
+            mh_first_ask_at_r1=0.30,
+            last_mh_round_at=time.time() - 5,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=100.0))
+        # Round 2 must NOT fire — only 5s since round 1
+        assert win.mart_hedge_rounds == 1
+        # No additional taker orders beyond the round-1 fill (which is already
+        # past — no calls expected here)
+        assert trader._place_taker_order.call_count == 0
+
+    def test_mart_hedge_round2_blocked_without_reversal(self):
+        """Round 2 must NOT fire if BTC hasn't moved further against the first
+        leg since round 1. This is the bug we are fixing: the previous code
+        fired round 2 on every tick where current_first_ask < first_px was
+        still true, regardless of whether BTC actually moved further."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.25, ask_dn=0.70,
+            spot_price=74_000.0,
+            ta_complete_cap=0.50,
+            ta_profit_lock_enabled=False,
+            ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+            ta_mart_hedge_mult=2.0, ta_mart_hedge_max_rounds=2,
+            ta_grace_secs=60.0,
+            ta_mh_round2_cooldown_secs=20.0,
+            ta_mh_reversal_threshold=0.005,
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        # Round 1 fired 30s ago (cooldown OK) but BTC hasn't moved further:
+        # round 1 first_ask was 0.25, current is also 0.25 (no change).
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 90,
+            mart_hedge_rounds=1,
+            mart_hedge_side="DOWN", mart_hedge_px=0.70, mart_hedge_qty=160.0,
+            mh_first_ask_at_r1=0.25,  # BTC hasn't moved since round 1
+            last_mh_round_at=time.time() - 30,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=100.0))
+        # Round 2 must NOT fire — BTC hasn't reversed beyond threshold
+        assert win.mart_hedge_rounds == 1
+        assert trader._place_taker_order.call_count == 0
+
+    def test_mart_hedge_round2_fires_on_reversal_with_cooldown(self):
+        """Round 2 fires when BOTH cooldown elapsed AND BTC moved ≥threshold
+        further against the original first leg. Qty formula uses the round-1
+        leg's loss_pct (per user spec: 'Shares pata perdedora actual ×
+        (2 + %perdida)')."""
+        from bot import polymarket_twap_tracker as twap_tracker
+        twap_tracker.clear_all()
+        state = _make_state(
+            ask_up=0.20, ask_dn=0.50,  # round-1 leg DOWN at 0.70 now at 0.50
+            spot_price=73_500.0,
+            ta_complete_cap=0.50,
+            ta_profit_lock_enabled=False,
+            ta_mart_hedge_enabled=True, ta_mart_hedge_min_secs=30,
+            ta_mart_hedge_mult=2.0, ta_mart_hedge_max_rounds=2,
+            ta_grace_secs=60.0,
+            ta_mh_round2_cooldown_secs=20.0,
+            ta_mh_reversal_threshold=0.005,
+            logged_bailout=True,
+        )
+        tokens = _make_tokens()
+        trader = _make_trader()
+        # Round 1 fired 30s ago at first_ask=0.30; current UP_ask=0.20
+        # BTC moved from 0.30 to 0.20 (-33% > 0.5% threshold)
+        # Round-1 leg: DOWN @0.70 now @0.50 → loss_pct = (0.70-0.50)/0.70 = 0.286
+        # Round-2 qty = 160 × (2 + 0.286) = 365.7
+        win = _TAWindow(
+            window_ts=tokens.window_ts, phase="half_open",
+            first_side="UP", first_px=0.50, first_shares_filled=80.0,
+            strike=STRIKE, first_leg_filled_at=time.time() - 90,
+            mart_hedge_rounds=1,
+            mart_hedge_side="DOWN", mart_hedge_px=0.70, mart_hedge_qty=160.0,
+            mh_first_ask_at_r1=0.30,
+            last_mh_round_at=time.time() - 30,
+        )
+        with (
+            patch("bot.strategies.temporal_arb._get_window", return_value=win),
+            patch("bot.polymarket_price.get_strike", return_value=STRIKE),
+            patch("bot.indicators.get_atr", return_value=None),
+            patch("bot.indicators.get_rsi", return_value=None),
+            patch("bot.logger.info"),
+            patch("bot.logger.ok"),
+            patch("bot.logger.warn"),
+            patch.object(twap_tracker, "get_state", return_value=SimpleNamespace()),
+        ):
+            _observe(_ctx(state, tokens, trader, seconds_left=100.0))
+        assert win.mart_hedge_rounds == 2
+        # Round 2 buys the SAME side as round 1 (mart_hedge_side="DOWN") at
+        # opp_ask = ask_dn = 0.50 (the leg that is now in loss).
+        # loss_pct = (0.70-0.50)/0.70 = 0.28571428...
+        # qty = round1_qty × (2 + loss_pct) = 160 × 2.28571428... = 365.7143 (rounded)
+        orders = trader._place_taker_order.call_args_list
+        assert any(
+            call.args[0] == tokens.down_token_id
+            and call.args[1] == "BUY"
+            and abs(call.args[2] - 0.50) < 1e-6
+            and abs(call.args[3] - 365.7143) < 0.01
+            for call in orders
+        ), f"Expected DOWN BUY @0.50 × 365.7143; got {orders}"
+
+    def test_grace_and_round2_fields_exposed_in_descriptor(self):
+        """The 3 new RuntimeFields (ta_grace_secs, ta_mh_round2_cooldown_secs,
+        ta_mh_reversal_threshold) must be exposed in DESCRIPTOR.params so
+        /settings can render them."""
+        names = {p.name for p in DESCRIPTOR.params}
+        for f in ("ta_grace_secs", "ta_mh_round2_cooldown_secs",
+                  "ta_mh_reversal_threshold"):
+            assert f in names, f"missing param: {f}"
 
 
 class TestObserveTerminal:
