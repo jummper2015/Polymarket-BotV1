@@ -319,6 +319,14 @@ class Config:
     cl_record_ticks: bool
     cl_tick_retention_days: int
 
+    # ── Security guards (spend cap + circuit breaker) ─────────────────────────
+    security_enabled: bool
+    security_dry_run: bool
+    security_max_single_tx_usd: float
+    security_max_daily_spend_usd: float
+    security_max_consecutive_losses: int
+    security_max_hourly_drawdown_pct: float
+
     @property
     def is_real(self) -> bool:
         return self.mode == "real"
@@ -332,6 +340,14 @@ def load_config() -> Config:
     mode = (os.getenv("TRADING_MODE") or "paper").strip().lower()
     if mode not in ("paper", "real"):
         mode = "paper"
+
+    # Security guards
+    security_enabled: bool = _env_bool("SECURITY_ENABLED", True)
+    security_dry_run: bool = _env_bool("SECURITY_DRY_RUN", False)
+    security_max_single_tx_usd: float = _env_float("SECURITY_MAX_SINGLE_TX_USD", 50.0)
+    security_max_daily_spend_usd: float = _env_float("SECURITY_MAX_DAILY_SPEND_USD", 200.0)
+    security_max_consecutive_losses: int = _env_int("SECURITY_MAX_CONSECUTIVE_LOSSES", 3)
+    security_max_hourly_drawdown_pct: float = _env_float("SECURITY_MAX_HOURLY_DRAWDOWN_PCT", 0.08)
 
     # A typo here would otherwise fall through to whatever branch sizing takes
     # accident.
@@ -485,4 +501,12 @@ def load_config() -> Config:
         # 2 ticks/s × 2 windows ≈ 172.800 rows/day. Without a bound this fills
         # the disk on a VPS in weeks (docs/CHAINLINK_TWAP.md §11.3).
         cl_tick_retention_days=_env_int("CL_TICK_RETENTION_DAYS", 30),
+
+        # ── Security guards ───────────────────────────────────────────────────
+        security_enabled=security_enabled,
+        security_dry_run=security_dry_run,
+        security_max_single_tx_usd=security_max_single_tx_usd,
+        security_max_daily_spend_usd=security_max_daily_spend_usd,
+        security_max_consecutive_losses=security_max_consecutive_losses,
+        security_max_hourly_drawdown_pct=security_max_hourly_drawdown_pct,
     )
