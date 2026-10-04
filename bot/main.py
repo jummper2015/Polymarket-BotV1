@@ -180,7 +180,26 @@ def main() -> None:
 
     # One trader thread per market. They share nothing but the config: each has
     # its own BotState and its own DB queries.
-    traders = [StreakSnapperTrader(cfg, symbol) for symbol in cfg.ss_symbols]
+    # Security runtime is global — shared by all trader threads (counters are
+    # per-symbol inside GuardRepository so the per-symbol guards stay correct).
+    from decimal import Decimal
+    from .security import GuardConfig
+    from .security_store import GuardRepository
+    from .security_runtime import SecurityRuntime
+
+    guard_config = GuardConfig(
+        enabled=cfg.security_enabled,
+        dry_run=cfg.security_dry_run,
+        max_single_tx_usd=Decimal(str(cfg.security_max_single_tx_usd)),
+        max_daily_spend_usd=Decimal(str(cfg.security_max_daily_spend_usd)),
+        max_consecutive_losses=cfg.security_max_consecutive_losses,
+        max_hourly_drawdown_pct=Decimal(str(cfg.security_max_hourly_drawdown_pct)),
+    )
+    guard_repo = GuardRepository(lambda: db.session)
+    security_runtime = SecurityRuntime(guard_config, guard_repo)
+
+    traders = [StreakSnapperTrader(cfg, symbol, security_runtime=security_runtime)
+               for symbol in cfg.ss_symbols]
     for trader in traders:
         trader.start()
     # Report the EFFECTIVE settings, which may include saved overrides.
