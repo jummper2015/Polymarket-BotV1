@@ -91,6 +91,15 @@ class BotState:
         self.polymarket_balance_updated_at: float = 0.0
         self.polymarket_balance_error: str = ""
 
+        # ── Security guards (global, applies to all strategies) ─────────
+        # Mirrors Config.security_* — overridable via /settings → bot_config.
+        self.security_enabled:                  bool   = True
+        self.security_dry_run:                  bool   = False
+        self.security_max_single_tx_usd:        float  = 50.0
+        self.security_max_daily_spend_usd:      float  = 200.0
+        self.security_max_consecutive_losses:   int    = 3
+        self.security_max_hourly_drawdown_pct:  float  = 0.08
+
         # ── ME$IRVE config ─────────────────────────────────────────────
         self.ss_enabled: bool  = True
         # ss_mode, ss_fade_*, ss_trend_* eliminados — estrategias desactivadas.
@@ -719,6 +728,12 @@ class BotState:
                 "polymarket_positions_count":    self.polymarket_positions_count,
                 "polymarket_balance_updated_at": self.polymarket_balance_updated_at,
                 "polymarket_balance_error":      self.polymarket_balance_error,
+                "security_enabled":                self.security_enabled,
+                "security_dry_run":                self.security_dry_run,
+                "security_max_single_tx_usd":      self.security_max_single_tx_usd,
+                "security_max_daily_spend_usd":    self.security_max_daily_spend_usd,
+                "security_max_consecutive_losses": self.security_max_consecutive_losses,
+                "security_max_hourly_drawdown_pct": self.security_max_hourly_drawdown_pct,
                 "ih_enabled":             self.ih_enabled,
                 "ih_entry_min":           self.ih_entry_min,
                 "ih_entry_max":           self.ih_entry_max,

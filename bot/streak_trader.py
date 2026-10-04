@@ -154,12 +154,16 @@ def _floor_to_tick(price: float) -> float:
 class StreakSnapperTrader(threading.Thread):
     """Thread that drives the ME$IRVE 5-min window cycle."""
 
-    def __init__(self, cfg: Config, symbol: str = "btc") -> None:
+    def __init__(self, cfg: Config, symbol: str = "btc",
+                 security_runtime=None) -> None:
         super().__init__(name=f"ss-trader-{symbol}", daemon=True)
         self.cfg    = cfg
         self.symbol = symbol
         self.state  = state_for(symbol)
         self._stop = threading.Event()
+        # Security guards (optional — None disables the layer). Set by main()
+        # from bot.config.security_* via SecurityRuntime.
+        self._security_runtime = security_runtime
 
         # CLOB V2 client (real mode only)
         self._client = None
@@ -576,6 +580,27 @@ class StreakSnapperTrader(threading.Thread):
             logger.info(f"[M$ {strategy_label}] SKIP_ASK_ABOVE_CAP: {detail}", icon="⏭")
             return
 
+        # ── Security guards (global, all strategies) ─────────────────────
+        # Runs after the ask-above-cap gate so we don't waste a guard
+        # check on signals that won't fire anyway. In dry_run mode the
+        # guard logs WOULD_BLOCK but the trade proceeds; in real block
+        # mode it raises and we return early. getattr default handles
+        # tests that bypass __init__.
+        if getattr(self, "_security_runtime", None) is not None:
+            from decimal import Decimal
+            from .security import SpendLimitError, CircuitBreakerError
+            try:
+                proposed_usd = Decimal(str(sig.shares * (current_ask or 0)))
+                portfolio_value = Decimal(str(self.state.current_bankroll()))
+                self._security_runtime.check(
+                    symbol=self.symbol,
+                    proposed_usd=proposed_usd,
+                    portfolio_value_usd=portfolio_value,
+                    state=self.state,
+                )
+            except (SpendLimitError, CircuitBreakerError):
+                return  # already logged + state updated by runtime
+
         # Determine limit price: min(cap, current_ask)
         if current_ask and current_ask > 0:
             limit_price = round(min(sig.limit_cap, current_ask), 4)
@@ -862,6 +887,26 @@ class StreakSnapperTrader(threading.Thread):
                                          note=f"resolved: {trade.direction} vs {winner}")
             except Exception as exc:
                 logger.warn(f"[M$] in-memory sync failed for trade #{trade.id}: {exc}")
+
+            # ── Security guard bookkeeping ──────────────────────────────────
+            # After every resolved trade, update the spend + loss counters.
+            # Done inside the loop (not after) so the per-trade hook is
+            # correct even if a later resolution fails. getattr default
+            # handles tests that bypass __init__.
+            if getattr(self, "_security_runtime", None) is not None:
+                from decimal import Decimal
+                try:
+                    self._security_runtime.record_trade(
+                        symbol=self.symbol,
+                        usd=Decimal(str(getattr(trade, 'cost', 0) or 0)),
+                        is_loss=(not won),
+                        portfolio_value_usd=Decimal(str(self.state.current_bankroll())),
+                        now=time.time(),
+                    )
+                except Exception as exc:
+                    # Guard bookkeeping is best-effort — a DB hiccup here
+                    # must not block trade resolution bookkeeping above.
+                    logger.warn(f"[security] record_trade failed for trade #{trade.id}: {exc}")
 
         self.state.set_status("watching", f"{len(resolutions)} trades resueltos")
         return len(resolutions)
