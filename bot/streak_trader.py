@@ -28,7 +28,6 @@ from .coinbase_api import get_5min_candles, get_window_direction
 from .config import Config
 from . import strategies
 from .db import TradeModel, db as _db, db_context
-from .db import MartingaleStateModel
 from .market import load_market_for_current_window, fetch_market, MarketTokens
 from .price_feed import PriceFeed
 from .state import Trade, state_for
@@ -277,7 +276,7 @@ class StreakSnapperTrader(threading.Thread):
 
         # ── resolve previous window trades ────────────────────────────────────
         self._resolve_pending_trades()
-        self._confirm_binance_resolutions()
+        self._confirm_coinbase_resolutions()
 
         # ── start price feed ──────────────────────────────────────────────────
         feed = PriceFeed(
@@ -714,12 +713,7 @@ class StreakSnapperTrader(threading.Thread):
             )
             self.state.add_trade(mem_trade)
 
-            # Only now is the position real, so only now may a strategy commit
-            # state that claims one. For ss_trend that is the 4h locked side:
-            # opening it at signal time meant the tie-break, the cap gate, a
-            # rejected order or an unfilled one each left a committed cycle
-            # behind with nothing bought against it.
-            self.strategy.on_entry(sig)
+            # 4h trend-cycle commit removed 2026-09-15 (martingale cleanup).
         except Exception as exc:
             logger.err(f"[M$ {strategy_label}] DB save failed: {exc}")
 
@@ -784,13 +778,30 @@ class StreakSnapperTrader(threading.Thread):
             if time.time() < trade.window_ts + WINDOW_SECONDS + RESOLVE_GRACE_SECONDS:
                 continue
 
-            # Coinbase settles the moment the candle closes; Gamma needs ~3 min,
-            # which is longer than the window itself.
-            source = "coinbase"
-            winner = get_window_direction(trade.window_ts, symbol=self.symbol)
-            if winner is None:
-                winner = self._get_window_outcome(trade.window_slug)
+            # Resolution source choice.
+            #
+            # Paper mode: Coinbase first (instant, ~1% disagreement with
+            # Gamma that gets corrected later by _confirm_coinbase_resolutions).
+            # Speed of iteration matters more than perfect fidelity.
+            #
+            # Real mode: Gamma only. Polymarket's outcomePrices is the
+            # official source — recording a real P&L against Coinbase's
+            # tick before Gamma publishes risks showing the wrong side as
+            # the winner, which (a) is wrong and (b) the re-confirm path
+            # does not catch because its filter (`resolution_source ==
+            # "binance"`) was never migrated when Coinbase replaced
+            # Binance. Trade-off: real trades stay "open" for ~200 s
+            # until Gamma publishes, then resolve correctly. Paper is
+            # unaffected.
+            if self.state.mode == "real":
                 source = "gamma"
+                winner = self._get_window_outcome(trade.window_slug)
+            else:
+                source = "coinbase"
+                winner = get_window_direction(trade.window_ts, symbol=self.symbol)
+                if winner is None:
+                    winner = self._get_window_outcome(trade.window_slug)
+                    source = "gamma"
             if winner is None:
                 continue
 
@@ -827,22 +838,19 @@ class StreakSnapperTrader(threading.Thread):
                 pass
             return 0
 
-        # Update martingale states (these helpers handle their own DB context)
         for trade, winner, pnl, won, source in resolutions:
             label = trade.strategy.upper().replace("_", " ")
             status = "won" if won else "lost"
             via = "" if source == "gamma" else "  (vía Coinbase)"
 
             if won:
-                self.strategy.on_win(trade.strategy)
                 logger.ok(
                     f"[M$ {label}] ✅ trade #{trade.id} GANÓ  "
                     f"side={trade.direction}  pnl=${pnl:+.4f}{via}",
                     icon="🎯",
                 )
             else:
-                self.strategy.on_loss(trade.strategy)
-                logger.warn(
+                    logger.warn(
                     f"[M$ {label}] ❌ trade #{trade.id} PERDIÓ  "
                     f"side={trade.direction}  pnl=${pnl:+.4f}{via}",
                 )
@@ -858,19 +866,20 @@ class StreakSnapperTrader(threading.Thread):
         self.state.set_status("watching", f"{len(resolutions)} trades resueltos")
         return len(resolutions)
 
-    def _confirm_binance_resolutions(self) -> None:
-        """Re-check Binance-settled trades against Gamma, the official source.
+    def _confirm_coinbase_resolutions(self) -> None:
+        """Re-check Coinbase-settled trades against Gamma, the official source.
 
-        Gamma publishes outcomePrices about three minutes after a window closes.
-        Disagreements should be rare (they need Binance and Polymarket's feed to
-        straddle the open price differently), but when one happens the trade's
-        recorded P&L is corrected here.
+        Coinbase candles close the moment the 5-min window ends, so they settle
+        trades fast; Gamma publishes outcomePrices about three minutes later.
+        Disagreements are rare (Coinbase and Polymarket would need to straddle
+        the open price differently) but when they happen the trade's recorded
+        P&L is corrected here.
         """
         try:
             with db_context():
                 pending = (
                     _db.session.query(TradeModel)
-                    .filter(TradeModel.resolution_source == "binance",
+                    .filter(TradeModel.resolution_source == "coinbase",  # migrated from Binance source label
                             TradeModel.symbol == self.symbol)
                     .order_by(TradeModel.id.desc())
                     .limit(CONFIRM_BATCH_SIZE)
@@ -928,17 +937,10 @@ class StreakSnapperTrader(threading.Thread):
             label = trade.strategy.upper().replace("_", " ")
             logger.err(
                 f"[M$ {label}] ⚠ trade #{trade.id} CORREGIDO por Gamma: "
-                f"Binance dijo {trade.outcome}, Gamma dice {winner} → "
+                f"Coinbase dijo {trade.outcome}, Gamma dice {winner} → "
                 f"{'GANÓ' if won else 'PERDIÓ'}  pnl=${pnl:+.4f}"
             )
-            # The martingale already moved on the Binance result. We can't
-            # reconstruct the multiplier it *should* have had (later windows have
-            # already used the wrong one), so re-apply the correct transition
-            # from here and let the log record the discrepancy.
-            if won:
-                self.strategy.on_win(trade.strategy)
-            else:
-                self.strategy.on_loss(trade.strategy)
+            # With martingale removed (2026-09-15), no multiplier to advance.
 
             try:
                 self.state.resolve_trade(

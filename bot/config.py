@@ -87,19 +87,14 @@ def kelly_fraction(win_prob: float, price: float) -> float:
 BASE_FIELDS: tuple[RuntimeField, ...] = (
     RuntimeField("ss_enabled", "bool", label="Bot activo"),
     # ss_mode eliminado — fade y trend desactivados en esta fase.
-    RuntimeField(
-        "ss_martingale_mult_factor", "float", minimum=1.01, maximum=10.0,
-        label="Factor martingala", step=0.05,
-        hint="Solo con sizing=martingale. Debe superar 1/(1−cap) para recuperar",
-    ),
     # How the stake grows. `flat` is the default because the measured edge
     # (+3.74%/trade at 53.8% accuracy, docs/RUTA.md Fase 8) justifies about
     # 4% of bankroll per trade, and a martingale bets ~100× that.
     RuntimeField(
-        "ss_sizing", "choice", choices=("flat", "kelly", "martingale"),
+        "ss_sizing", "choice", choices=("flat", "kelly"),
         choice_labels=("Fijo", "Kelly", "Martingala"),
         label="Modo de sizing",
-        hint="Fijo por defecto; la martingala apuesta ~100× lo que el edge justifica",
+        hint="Fijo por defecto; kelly dimensiona al edge medido (~4% del bankroll)",
     ),
     RuntimeField(
         "ss_kelly_fraction", "float", minimum=0.05, maximum=1.0,
@@ -299,9 +294,8 @@ class Config:
     nrc_max_book_sum:    float
 
     # Sizing
-    ss_sizing: str                  # "flat" | "kelly" | "martingale"
+    ss_sizing: str                  # "flat" | "kelly"
     ss_kelly_fraction: float
-    ss_martingale_mult_factor: float
 
     # Markets to trade, in order. One trader thread each.
     ss_symbols: tuple[str, ...]
@@ -340,10 +334,9 @@ def load_config() -> Config:
         mode = "paper"
 
     # A typo here would otherwise fall through to whatever branch sizing takes
-    # last, which is the martingale — the one setting we don't want reached by
     # accident.
     sizing = (os.getenv("SS_SIZING") or "flat").strip().lower()
-    if sizing not in ("flat", "kelly", "martingale"):
+    if sizing not in ("flat", "kelly"):
         sizing = "flat"
 
     # Unknown symbols are dropped rather than defaulted: silently trading BTC
@@ -464,7 +457,6 @@ def load_config() -> Config:
         ss_kelly_fraction=_env_float("SS_KELLY_FRACTION", 0.25),
         # Martingale. 2.1, not 1.5: see min_recovering_factor() — at 0.52 cap
         # a ×1.5 cycle stops recovering on the third attempt.
-        ss_martingale_mult_factor=_env_float("SS_MARTINGALE_MULT", 2.1),
 
         # ── Regime filters ────────────────────────────────────────────────────
         # Off by default. US 13-21h UTC measured +9.22% against −5.00% for

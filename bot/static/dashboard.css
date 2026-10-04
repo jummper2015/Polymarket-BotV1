@@ -81,6 +81,70 @@ body.ss-body {
 
 .ss-card {
   background: var(--ss-card); border: 1px solid var(--ss-border);
+/* ── P&L detallado card ─────────────────────────────────────────────────
+ * Notika-style KPI card: flat white background, thin border, soft shadow,
+ * left-edge accent bar per tile that turns green/red/neutral by sign.
+ * Heavy gradients and big top borders felt out of place next to the rest
+ * of the dashboard — this matches the template's flat aesthetic.
+ */
+.ss-pnl-card {
+  background: var(--ss-card);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius);
+  padding: 1rem;
+  box-shadow: var(--ss-shadow);
+}
+.ss-pnl-card .ss-card-head { border-bottom: 1px solid var(--ss-border); padding-bottom: .5rem; margin-bottom: .75rem; }
+.ss-pnl-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+@media (max-width: 1199px) {
+  .ss-pnl-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 575px) {
+  .ss-pnl-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.ss-pnl-tile {
+  position: relative;
+  text-align: center;
+  padding: 1.1rem 0.85rem 0.85rem;
+  background: var(--ss-card);
+  border: 1px solid var(--ss-border);
+  border-left: 4px solid var(--ss-border);
+  border-radius: var(--ss-radius);
+  transition: border-left-color 0.15s ease;
+}
+.ss-pnl-tile-total {
+  background: #fafbfc;
+}
+.ss-pnl-tile-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ss-muted);
+  font-weight: 600;
+}
+.ss-pnl-tile-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 0.35rem 0 0.15rem;
+  color: var(--ss-text);
+}
+.ss-pnl-tile-pct {
+  font-size: 11px;
+  color: var(--ss-muted);
+}
+.ss-pnl-tile.ss-pnl-pos  { border-left-color: var(--ss-ok); }
+.ss-pnl-tile.ss-pnl-pos  .ss-pnl-tile-value { color: var(--ss-ok); }
+.ss-pnl-tile.ss-pnl-pos  .ss-pnl-tile-pct   { color: var(--ss-ok); }
+.ss-pnl-tile.ss-pnl-neg  { border-left-color: var(--ss-err); }
+.ss-pnl-tile.ss-pnl-neg  .ss-pnl-tile-value { color: var(--ss-err); }
+.ss-pnl-tile.ss-pnl-neg  .ss-pnl-tile-pct   { color: var(--ss-err); }
+.ss-pnl-tile.ss-pnl-zero { border-left-color: var(--ss-border); }
+
   border-radius: var(--ss-radius); padding: 1rem;
 }
 .ss-card-head {
@@ -93,10 +157,92 @@ body.ss-body {
 .ss-card-head h2 i { color: var(--ss-accent); margin-right: .25rem; }
 
 .ss-kpi {
+  /* legacy class — kept so older markup doesn't render bare. The Notika-style
+   * tiles below use .ss-kpi-tile instead. New code should prefer that. */
   background: var(--ss-card); border: 1px solid var(--ss-border);
   border-radius: var(--ss-radius); padding: .85rem 1rem;
   display: flex; flex-direction: column; gap: .15rem;
 }
+
+/* ── Notika-style KPI tiles ─────────────────────────────────────────
+ * Layout per tile: round icon on the left (color = per-tile accent),
+ * right column with label uppercase tiny, value bold large, sub muted small.
+ * Border-left 4px matches the icon color so the eye groups them.
+ * Grid: 5 → 3 → 2 → 1 columns across breakpoints.
+ */
+.ss-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+@media (max-width: 1199px) {
+  .ss-kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .ss-kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .ss-kpi-row { grid-template-columns: 1fr; }
+}
+.ss-kpi-tile {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 1.1rem 1rem;
+  background: var(--ss-card);
+  border: 1px solid var(--ss-border);
+  border-left: 4px solid var(--ss-border);
+  border-radius: var(--ss-radius);
+  box-shadow: var(--ss-shadow);
+  min-height: 92px;
+}
+.ss-kpi-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--ss-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  flex-shrink: 0;
+  color: var(--ss-muted);
+}
+.ss-kpi-body { flex: 1; min-width: 0; }
+.ss-kpi-tile .ss-kpi-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ss-muted);
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+.ss-kpi-tile .ss-kpi-value {
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--ss-text);
+}
+.ss-kpi-tile .ss-kpi-sub {
+  font-size: 11px;
+  color: var(--ss-muted);
+  margin-top: 0.15rem;
+}
+
+/* Per-tile accent (border-left + icon color) */
+.ss-kpi-winrate    { border-left-color: var(--ss-accent); }
+.ss-kpi-winrate    .ss-kpi-icon { color: var(--ss-accent); background: rgba(0,194,146,.08); }
+.ss-kpi-trades     { border-left-color: var(--ss-fade); }
+.ss-kpi-trades     .ss-kpi-icon { color: var(--ss-fade);  background: rgba(123,104,238,.08); }
+.ss-kpi-available  { border-left-color: var(--ss-trend); }
+.ss-kpi-available  .ss-kpi-icon { color: var(--ss-trend); background: rgba(3,169,244,.08); }
+.ss-kpi-bankroll   { border-left-color: var(--ss-btc); }
+.ss-kpi-bankroll   .ss-kpi-icon { color: var(--ss-btc);   background: rgba(247,147,26,.08); }
+.ss-kpi-drawdown   { border-left-color: var(--ss-down); }
+.ss-kpi-drawdown   .ss-kpi-icon { color: var(--ss-down);  background: rgba(251,150,120,.08); }
+.ss-kpi-realbalance{ border-left-color: var(--ss-ok); }
+.ss-kpi-realbalance .ss-kpi-icon { color: var(--ss-ok);   background: rgba(0,194,146,.08); }
+
 .ss-kpi-label { font-size: 11px; text-transform: uppercase;
                 letter-spacing: .04em; color: var(--ss-muted); }
 .ss-kpi-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
@@ -118,26 +264,6 @@ body.ss-body {
 .ss-empty {
   color: var(--ss-muted); font-size: 12px; text-align: center; padding: 1.5rem;
 }
-
-/* ── Martingale ──────────────────────────────────────────────────────────── */
-
-.ss-mart {
-  border: 1px solid var(--ss-border); border-radius: var(--ss-radius);
-  padding: .75rem; border-left: 3px solid var(--ss-muted); height: 100%;
-}
-.ss-mart.fade  { border-left-color: var(--ss-fade); }
-.ss-mart.trend { border-left-color: var(--ss-trend); }
-.ss-mart-head  { font-size: 12px; font-weight: 600; margin-bottom: .5rem; }
-.ss-mart-row {
-  display: flex; justify-content: space-between; align-items: center;
-  font-size: 12px; color: var(--ss-muted); padding: .15rem 0;
-}
-.ss-mart-val { color: var(--ss-text); font-weight: 600; }
-/* Loud on purpose: ×5 on a 1.5 martingale is 11× the base bet. */
-.ss-mart-val.hot { color: var(--ss-err); }
-/* A locked cycle is a state, not a problem — accent, not alarm. */
-.ss-mart-val.locked { color: var(--ss-trend); }
-.ss-mart-val.muted  { color: var(--ss-muted); font-weight: 500; }
 
 /* ── Bot status ──────────────────────────────────────────────────────────── */
 

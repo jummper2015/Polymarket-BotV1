@@ -23,13 +23,12 @@
   // come from the registry and are rendered into their own cards.
   const GROUPS = {
     "sizing-fields": ["ss_sizing", "ss_kelly_fraction"],
-    "martingale-fields": ["ss_martingale_mult_factor", "starting_bankroll"],
+    "limits-fields": ["ss_max_entry_age"],
     "regime-fields": [
       "ss_trading_hours",
       "ss_vol_min_pct",
       "ss_vol_max_pct",
       "ss_range_max_pct",
-      "ss_max_entry_age",
     ],
     "chainlink-fields": [
       "cl_twap_enabled",
@@ -196,70 +195,6 @@
   $("btn-paper").addEventListener("click", () => setModeUI("paper"));
   $("btn-real").addEventListener("click", () => setModeUI("real"));
 
-  /* Martingale preview.
-   *
-   * The number that matters isn't the size of the next bet, it's what you're
-   * left with if that bet WINS. Buying `s` shares at `p` costs `s·p` and pays
-   * `s`, so a win only clears the cycle while factor > 1/(1-p). Below that the
-   * accumulated losses outgrow the payout and "keep going until you win" ends
-   * in a bigger hole.
-   *
-   * Uses a 0.50 reference cap since neither BB nor CFD uses martingale — this
-   * panel is only relevant if the user switches sizing to "martingale". */
-  function updateMartingalePreview() {
-    const preview = $("martingale-preview");
-    if (!preview) return;
-    const numOr = (name, fallback) => {
-      const v = parseFloat(readValue(name));
-      return isNaN(v) ? fallback : v;
-    };
-    const mult = numOr("ss_martingale_mult_factor", 2.1);
-    const base = 5.0;    // reference — BB and CFD use flat sizing
-    const cap  = 0.50;   // reference price for the preview
-
-    const needed = cap < 1 ? 1 / (1 - cap) : Infinity;
-    const rows = [];
-    let shares = base;
-    let spent = 0;
-    let firstNegative = 0;
-
-    for (let i = 1; i <= 6; i++) {
-      const cost = shares * cap;
-      const net = shares - cost - spent;   // payout − this cost − everything lost so far
-      if (net < 0 && !firstNegative) firstNegative = i;
-      rows.push(
-        `<td>${i}</td><td>${shares.toFixed(1)} sh</td>` +
-        `<td>$${(spent + cost).toFixed(2)}</td>` +
-        `<td class="${net < 0 ? "text-danger" : "text-success"}">` +
-        `${net >= 0 ? "+" : ""}$${net.toFixed(2)}</td>`
-      );
-      spent += cost;
-      shares *= mult;
-    }
-
-    const sizing = readValue("ss_sizing");
-    const inactive =
-      sizing && sizing !== "martingale"
-        ? `<div class="ss-field-hint mb-1">Sizing actual: <strong>${esc(sizing)}</strong>` +
-          ` — esta progresión no se está usando.</div>`
-        : "";
-
-    const verdict =
-      mult > needed
-        ? `<span class="text-success">×${mult.toFixed(2)} recupera a $${cap.toFixed(2)}` +
-          ` (hace falta más de ×${needed.toFixed(2)}).</span>`
-        : `<span class="text-danger"><strong>×${mult.toFixed(2)} NO recupera a ` +
-          `$${cap.toFixed(2)}</strong>: hace falta más de ×${needed.toFixed(2)}. ` +
-          `Ganar el intento ${firstNegative || 3} ya deja el ciclo en pérdida.</span>`;
-
-    preview.innerHTML =
-      inactive +
-      `<strong>Ciclo a precio máximo $${cap.toFixed(2)} desde ${base.toFixed(1)} shares:</strong>` +
-      `<table class="table table-sm small mb-2 mt-1"><thead><tr>` +
-      `<th>#</th><th>Apuesta</th><th>Acumulado</th><th>Neto si gana</th>` +
-      `</tr></thead><tbody><tr>${rows.join("</tr><tr>")}</tr></tbody></table>` +
-      verdict;
-  }
 
   // ── load ─────────────────────────────────────────────────────────────────
   async function loadState() {
@@ -293,12 +228,6 @@
         }
       });
 
-      // Re-bind after render: the inputs these listen to didn't exist before.
-      ["ss_martingale_mult_factor", "ss_sizing"]
-        .forEach((name) => {
-          const el = $("cfg-" + name);
-          if (el) el.addEventListener("input", updateMartingalePreview);
-        });
       document.querySelectorAll("[data-cfg-field]").forEach((el) => {
         el.addEventListener("input", refreshEnabledState);
       });
@@ -308,7 +237,6 @@
         ssLabel.textContent = ssCheck.checked ? "Activado" : "Desactivado";
       }
       setModeUI(c.mode || "paper");
-      updateMartingalePreview();
 
       const badge = $("mode-badge");
       if (badge) {

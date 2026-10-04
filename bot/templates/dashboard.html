@@ -7,49 +7,94 @@
      so a BTC-only setup doesn't grow a tab bar with one tab in it. ── #}
 <div id="symbol-tabs" class="ss-symbol-tabs mt-2" style="display:none"></div>
 
-{# ── KPIs ── #}
-<div class="row g-3 mt-1">
-  <div class="col-xl-2 col-md-4 col-6">
-    <div class="ss-kpi notika-shadow h-100">
-      <span class="ss-kpi-label">P&amp;L Total</span>
-      <span id="kpi-pnl" class="ss-kpi-value">—</span>
-      <span id="kpi-roi" class="ss-kpi-sub">ROI —</span>
+{# ── KPIs (Notika-style: icon + label + value + sub, per-tile accent) ── #}
+<div class="ss-kpi-row mt-1">
+  <div class="ss-kpi-tile ss-kpi-winrate">
+    <div class="ss-kpi-icon"><i class="bi bi-percent"></i></div>
+    <div class="ss-kpi-body">
+      <div class="ss-kpi-label">Win Rate</div>
+      <div id="kpi-winrate" class="ss-kpi-value">—</div>
+      <div id="kpi-wl" class="ss-kpi-sub">—</div>
     </div>
   </div>
-  <div class="col-xl-2 col-md-4 col-6">
-    <div class="ss-kpi notika-shadow h-100">
-      <span class="ss-kpi-label">Win Rate</span>
-      <span id="kpi-winrate" class="ss-kpi-value">—</span>
-      <span id="kpi-wl" class="ss-kpi-sub">—</span>
-    </div>
-  </div>
-  <div class="col-xl-2 col-md-4 col-6">
-    <div class="ss-kpi notika-shadow h-100">
-      <span class="ss-kpi-label">Trades</span>
-      <span id="kpi-trades" class="ss-kpi-value">—</span>
-      <span id="kpi-open" class="ss-kpi-sub">— abiertas</span>
+  <div class="ss-kpi-tile ss-kpi-trades">
+    <div class="ss-kpi-icon"><i class="bi bi-bar-chart-line"></i></div>
+    <div class="ss-kpi-body">
+      <div class="ss-kpi-label">Trades</div>
+      <div id="kpi-trades" class="ss-kpi-value">—</div>
+      <div id="kpi-open" class="ss-kpi-sub">— abiertas</div>
     </div>
   </div>
   {# Split out because "bankroll" alone hid the cash locked in open positions. #}
-  <div class="col-xl-2 col-md-4 col-6">
-    <div class="ss-kpi notika-shadow h-100">
-      <span class="ss-kpi-label">Saldo disponible</span>
-      <span id="kpi-available" class="ss-kpi-value">—</span>
-      <span id="kpi-committed" class="ss-kpi-sub">— comprometido</span>
+  <div class="ss-kpi-tile ss-kpi-available">
+    <div class="ss-kpi-icon"><i class="bi bi-wallet2"></i></div>
+    <div class="ss-kpi-body">
+      <div class="ss-kpi-label">Saldo disponible</div>
+      <div id="kpi-available" class="ss-kpi-value">—</div>
+      <div id="kpi-committed" class="ss-kpi-sub">— comprometido</div>
     </div>
   </div>
-  <div class="col-xl-2 col-md-4 col-6">
-    <div class="ss-kpi notika-shadow h-100">
-      <span class="ss-kpi-label">Saldo total</span>
-      <span id="kpi-bankroll" class="ss-kpi-value">—</span>
-      <span id="kpi-bankroll-base" class="ss-kpi-sub">base —</span>
+  <div class="ss-kpi-tile ss-kpi-bankroll">
+    <div class="ss-kpi-icon"><i class="bi bi-cash-stack"></i></div>
+    <div class="ss-kpi-body">
+      <div class="ss-kpi-label">Saldo total</div>
+      <div id="kpi-bankroll" class="ss-kpi-value">—</div>
+      <div id="kpi-bankroll-base" class="ss-kpi-sub">base —</div>
     </div>
   </div>
-  <div class="col-xl-2 col-md-4 col-6">
-    <div class="ss-kpi notika-shadow h-100">
-      <span class="ss-kpi-label">Max Drawdown</span>
-      <span id="kpi-drawdown" class="ss-kpi-value">—</span>
-      <span id="kpi-drawdown-pct" class="ss-kpi-sub">—</span>
+  <div class="ss-kpi-tile ss-kpi-drawdown" id="kpi-drawdown-wrap">
+    <div class="ss-kpi-icon"><i class="bi bi-graph-down-arrow"></i></div>
+    <div class="ss-kpi-body">
+      <div class="ss-kpi-label">Max Drawdown</div>
+      <div id="kpi-drawdown" class="ss-kpi-value">—</div>
+      <div id="kpi-drawdown-pct" class="ss-kpi-sub">—</div>
+    </div>
+  </div>
+  <div class="ss-kpi-tile ss-kpi-realbalance" id="kpi-real-balance-wrap" style="display:none">
+    <div class="ss-kpi-icon"><i class="bi bi-bank"></i></div>
+    <div class="ss-kpi-body">
+      <div class="ss-kpi-label">Saldo Polymarket (real)</div>
+      <div id="kpi-real-balance" class="ss-kpi-value">—</div>
+      <div id="kpi-real-balance-sub" class="ss-kpi-sub">—</div>
+    </div>
+  </div>
+</div>
+
+{# ── P&L detallado por período ── #}
+<div class="row g-3 mt-1">
+  <div class="col-12">
+    <div class="ss-card ss-pnl-card notika-shadow">
+      <div class="ss-card-head">
+        <h2><i class="bi bi-graph-up-arrow"></i> P&amp;L detallado</h2>
+        <span class="text-muted small">cierres por período (UTC)</span>
+      </div>
+      <div class="ss-pnl-grid">
+        <div class="ss-pnl-tile" data-key="yesterday">
+          <div class="ss-pnl-tile-label">Ayer</div>
+          <div class="ss-pnl-tile-value" id="pnl-yesterday">—</div>
+          <div class="ss-pnl-tile-pct" id="pnl-yesterday-pct">—</div>
+        </div>
+        <div class="ss-pnl-tile" data-key="today">
+          <div class="ss-pnl-tile-label">Hoy</div>
+          <div class="ss-pnl-tile-value" id="pnl-today">—</div>
+          <div class="ss-pnl-tile-pct" id="pnl-today-pct">—</div>
+        </div>
+        <div class="ss-pnl-tile" data-key="week">
+          <div class="ss-pnl-tile-label">7 días</div>
+          <div class="ss-pnl-tile-value" id="pnl-week">—</div>
+          <div class="ss-pnl-tile-pct" id="pnl-week-pct">—</div>
+        </div>
+        <div class="ss-pnl-tile" data-key="month">
+          <div class="ss-pnl-tile-label">30 días</div>
+          <div class="ss-pnl-tile-value" id="pnl-month">—</div>
+          <div class="ss-pnl-tile-pct" id="pnl-month-pct">—</div>
+        </div>
+        <div class="ss-pnl-tile ss-pnl-tile-total" data-key="total">
+          <div class="ss-pnl-tile-label">Total</div>
+          <div class="ss-pnl-tile-value" id="pnl-total">—</div>
+          <div class="ss-pnl-tile-pct" id="pnl-total-pct">—</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>

@@ -12,6 +12,7 @@ import threading
 import time
 
 from . import logger
+from .polymarket_balance import start_balance_poller
 from .auth import auth_enabled, verify_startup_config
 from .config import Config, coerce_overrides, load_config, min_recovering_factor
 from .dashboard import create_app, start_price_fetcher
@@ -52,26 +53,6 @@ def _apply_persisted_overrides() -> None:
             icon="⚙",
         )
 
-
-def _warn_if_martingale_cannot_recover() -> None:
-    """Warn when the configured factor can't clear a losing cycle at the cap.
-
-    A martingale only keeps recovering while `f > 1/(1-p)`. Below that, "keep
-    doubling until you win" is arithmetically a slower way to lose: the losses
-    behind the cycle outgrow what the next win pays back. The factor is shared
-    by both strategies, so the tighter of the two caps sets the bar. Checked
-    against the *effective* values, after saved overrides are applied.
-
-    Silent unless the martingale is the sizing actually in use — the factor
-    still exists in the config under `flat` and `kelly`, it just isn't read.
-    """
-    if STATE.ss_sizing != "martingale":
-        return
-
-    factor = STATE.ss_martingale_mult_factor
-    # Con fade/trend eliminados, la martingala solo aplica a estrategias futuras.
-    # Conservamos la función para que box_builder o coin_flip_dog puedan usarla.
-    _ = factor  # no hay cap configurada para validar por ahora
 
 
 def _check_port_available(host: str, port: int) -> str | None:
@@ -163,7 +144,6 @@ def main() -> None:
             nrc_max_book_sum=cfg.nrc_max_book_sum,
             ss_sizing=cfg.ss_sizing,
             ss_kelly_fraction=cfg.ss_kelly_fraction,
-            ss_martingale_mult_factor=cfg.ss_martingale_mult_factor,
             ss_trading_hours=cfg.ss_trading_hours,
             ss_vol_min_pct=cfg.ss_vol_min_pct,
             ss_vol_max_pct=cfg.ss_vol_max_pct,
@@ -185,28 +165,28 @@ def main() -> None:
     else:
         _apply_persisted_overrides()
 
-    _warn_if_martingale_cannot_recover()
+    # Martingale cleanup 2026-09-15: removed the sizing-mode warner
 
     # Start BTC price fetcher (CoinGecko, for dashboard display)
     start_price_fetcher()
 
     # Start Coinbase ticker WebSocket feed (for local TWAP-60s strike source).
-    # Replaces the ~$20-30 residual gap between Coinbase candle OPEN and
-    # the official Chainlink btc-usd-twap-60s stream that Polymarket uses.
     from . import coinbase_ticker_feed
     coinbase_ticker_feed.start()
 
+    # Start Polymarket USDC balance poller. No-op when PROXY_WALLET is
+    # empty, so paper mode without credentials leaves the live balance at 0.
+    start_balance_poller(cfg.proxy_wallet)
+
     # One trader thread per market. They share nothing but the config: each has
-    # its own BotState, its own martingale row and its own DB queries.
+    # its own BotState and its own DB queries.
     traders = [StreakSnapperTrader(cfg, symbol) for symbol in cfg.ss_symbols]
     for trader in traders:
         trader.start()
     # Report the EFFECTIVE settings, which may include saved overrides.
-    # Report the sizing that's actually in use — announcing "martingale=×2.1"
-    # under flat sizing described a setting the bot wasn't reading.
-    if STATE.ss_sizing == "martingale":
-        sizing_detail = f"martingale ×{STATE.ss_martingale_mult_factor}"
-    elif STATE.ss_sizing == "kelly":
+    # Sizing detail for the startup line. "kelly" reports its fraction; anything
+    # else is reported as "flat" (the default and the only other supported mode).
+    if STATE.ss_sizing == "kelly":
         sizing_detail = f"kelly ×{STATE.ss_kelly_fraction:.2f}"
     else:
         sizing_detail = "flat"

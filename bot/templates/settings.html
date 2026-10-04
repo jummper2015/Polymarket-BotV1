@@ -36,14 +36,20 @@
       <div class="row g-2" id="sizing-fields"></div>
     </div>
 
-    {# ── Martingale ── #}
+
+    {# ── Entry limits ── #}
     <div class="ss-card notika-shadow mb-3">
       <div class="ss-card-head">
-        <h2><i class="bi bi-dice-3"></i> Martingale</h2>
-        <span class="text-muted small">solo con sizing = Martingala</span>
+        <h2><i class="bi bi-stopwatch"></i> Límites de entrada</h2>
+        <span class="text-muted small">cuándo NO entrar aunque haya señal</span>
       </div>
-      <div class="row g-2 mb-2" id="martingale-fields"></div>
-      <div class="alert alert-warning py-2 px-3 small mb-0" id="martingale-preview"></div>
+      <div class="alert alert-warning py-2 px-3 small">
+        Encendido por defecto. <code>ss_max_entry_age</code> corta entradas en
+        ventanas que ya llevan demasiado tiempo abiertas (selección adversa:
+        el cap de precio deja fuera al favorito, así que el único lado que
+        se llena tarde es el que el mercado ya dio por perdido).
+      </div>
+      <div class="row g-2" id="limits-fields"></div>
     </div>
 
     {# ── Regime filters ── #}
@@ -57,6 +63,8 @@
         contra 35 días, así que el mejor luce bien por construcción. El
         dashboard cuenta los descartes por motivo, que es lo que permite
         comparar «con filtro» contra «sin filtro» sobre datos nuevos.
+        El límite de antigüedad de entrada vive en su propia sección
+        («Límites de entrada») porque viene <strong>encendido</strong>.
       </div>
       <div class="row g-2" id="regime-fields"></div>
     </div>

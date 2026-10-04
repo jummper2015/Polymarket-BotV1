@@ -82,6 +82,15 @@ class BotState:
         self.has_credentials: bool = False
         self.starting_bankroll: float = 1000.0
 
+        # Polymarket CLOB balance, polled from data-api.polymarket.com.
+        # Stays at 0.0 in paper mode (the poller is a no-op when
+        # PROXY_WALLET is unset, and we don't poll without it).
+        self.polymarket_usdc_balance: float = 0.0
+        self.polymarket_positions_value: float = 0.0
+        self.polymarket_positions_count: int = 0
+        self.polymarket_balance_updated_at: float = 0.0
+        self.polymarket_balance_error: str = ""
+
         # ── ME$IRVE config ─────────────────────────────────────────────
         self.ss_enabled: bool  = True
         # ss_mode, ss_fade_*, ss_trend_* eliminados — estrategias desactivadas.
@@ -173,6 +182,7 @@ class BotState:
         # Beyond ta_profit_lock_min_secs (30s) we keep trying edge up to this
         # max window (60s), so the bot keeps looking for the lock.
         self.ta_profit_lock_max_secs:  float = 60.0
+
         # Post-trade grace + Mart-Hedge round 2 (added 2026-09-28)
         # Path B (hedge recovery) and Path E round 1 (mart-hedge) only fire
         # after grace_secs. Mart-hedge round 2 fires only on BTC reversal
@@ -704,6 +714,11 @@ class BotState:
                 "ta_grace_secs":               self.ta_grace_secs,
                 "ta_mh_round2_cooldown_secs":  self.ta_mh_round2_cooldown_secs,
                 "ta_mh_reversal_threshold":    self.ta_mh_reversal_threshold,
+                "polymarket_usdc_balance":       self.polymarket_usdc_balance,
+                "polymarket_positions_value":    self.polymarket_positions_value,
+                "polymarket_positions_count":    self.polymarket_positions_count,
+                "polymarket_balance_updated_at": self.polymarket_balance_updated_at,
+                "polymarket_balance_error":      self.polymarket_balance_error,
                 "ih_enabled":             self.ih_enabled,
                 "ih_entry_min":           self.ih_entry_min,
                 "ih_entry_max":           self.ih_entry_max,
@@ -834,6 +849,29 @@ class BotState:
                 },
             }
 
+
+
+    def update_polymarket_balance(
+        self,
+        *,
+        usdc: float,
+        positions_value: Optional[float],
+        positions_count: int,
+        updated_at: float,
+    ) -> None:
+        """Refresh the live Polymarket account snapshot.
+
+        Called by bot/polymarket_balance.py on each polling tick (real mode
+        only — see start_balance_poller's TRADING_MODE gate).
+        In paper mode the poller never runs, so these fields stay at their
+        defaults (0.0 / "") and the synthetic STARTING_BANKROLL + Σpnl view
+        remains the source of truth shown on the dashboard.
+        """
+        self.polymarket_usdc_balance = usdc
+        self.polymarket_positions_value = positions_value
+        self.polymarket_positions_count = positions_count
+        self.polymarket_balance_updated_at = updated_at
+        self.polymarket_balance_error = ""
 
 # ── Per-market state ─────────────────────────────────────────────────────────
 # One BotState per asset, created on demand by `state_for()`. BTC exists from

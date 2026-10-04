@@ -119,8 +119,9 @@
       renderSymbolTabs(s);
       renderHeader(s);
       renderKpis(s);
-      renderMartingale(s);
       renderStatus(s);
+      renderStrategyCards(s);
+      renderPnlBreakdown(s.pnl_breakdown);
       renderPrices(s);
       renderOrderBook(s);
       renderPriceChart(s);
@@ -252,57 +253,64 @@
     if (bkBase) bkBase.textContent = "base " + fmtMoney(st.starting_bankroll);
 
     const upt = $("uptime");
+
+    /* Real Polymarket balance tile — only meaningful when mode == "real"
+     * AND the poller has produced a value. Hidden otherwise so paper mode
+     * stays visually identical to before. The drift shown in the sub-line
+     * is the gap between our synthetic bankroll and the live USDC.e
+     * balance — anything large means fees, gas, manual transfers, or a
+     * missed resolution. */
+    const realWrap = $('kpi-real-balance-wrap');
+    const realVal = $('kpi-real-balance');
+    const realSub = $('kpi-real-balance-sub');
+    const isReal = (s.config && s.config.mode === 'real');
+    const pmUsdc = s.polymarket_usdc_balance || 0;
+    const pmPos = s.polymarket_positions_value || 0;
+    const pmTotal = s.polymarket_total != null
+      ? s.polymarket_total
+      : (pmUsdc + pmPos);
+    if (realWrap && realVal && realSub) {
+      if (isReal && pmTotal > 0) {
+        realWrap.style.display = '';
+        realVal.textContent = fmtMoney(pmTotal);
+        const drift = s.real_drift || 0;
+        const driftTxt = (Math.abs(drift) < 0.01)
+          ? 'sin drift'
+          : `drift ${drift >= 0 ? '+' : ''}${fmtMoney(drift)} vs sintético`;
+        realSub.textContent = `USDC ${fmtMoney(pmUsdc)} + pos ${fmtMoney(pmPos)} — ${driftTxt}`;
+      } else {
+        realWrap.style.display = 'none';
+      }
+    }
+
     if (upt) upt.textContent = fmtDuration(st.uptime_seconds);
   }
 
-  function renderMartingale(s) {
-    // None of the active strategies use martingale. Show live enabled state
-    // and key params for all four registered strategies.
-    const cfg = s.config || {};
-    const strats = s.strategies || [];
 
-    const bbDesc  = strats.find((d) => d.id === "box_builder");
-    const cfdDesc = strats.find((d) => d.id === "coin_flip_dog");
-    const taDesc  = strats.find((d) => d.id === "temporal_arb");
-    const nrcDesc = strats.find((d) => d.id === "near_res");
+  function renderPnlBreakdown(b) {
+    if (!b) return;
+    const fmtUSD = (v) => (v > 0 ? "+$" : v < 0 ? "−$" : "$") +
+                       Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtPct = (p) => (p == null) ? "—"
+                       : ((p > 0 ? "+" : p < 0 ? "−" : "") +
+                          Math.abs(p).toFixed(2) + "% vs base");
 
-    const set = (id, value) => { const el = $(id); if (el) el.textContent = value; };
+    ["yesterday", "today", "week", "month", "total"].forEach((k) => {
+      const tile = document.querySelector('.ss-pnl-tile[data-key="' + k + '"]');
+      const valEl = $("pnl-" + k);
+      const pctEl = $("pnl-" + k + "-pct");
+      if (!tile || !valEl || !pctEl) return;
 
-    // Box Builder card
-    const bbOn = cfg.bb_enabled !== false && bbDesc && bbDesc.enabled;
-    set("bb-status", bbOn ? "activa ✓" : "apagada");
-    const bbCard = $("bb-card");
-    if (bbCard) bbCard.classList.toggle("ss-strategy-off", !bbOn);
-    set("bb-shares", cfg.bb_shares_per_leg != null ? cfg.bb_shares_per_leg + " sh" : "—");
-    set("bb-cap", cfg.bb_bid_sum_cap != null ? "$" + cfg.bb_bid_sum_cap : "—");
+      const slot = b[k] || { pnl: 0, pct: null };
+      const v = slot.pnl || 0;
+      valEl.textContent = fmtUSD(v);
+      pctEl.textContent = fmtPct(slot.pct);
 
-    // Coin-Flip Dog card
-    const cfdOn = cfg.cfd_enabled !== false && cfdDesc && cfdDesc.enabled;
-    set("cfd-status", cfdOn ? "activa ✓" : "apagada");
-    const cfdCard = $("cfd-card");
-    if (cfdCard) cfdCard.classList.toggle("ss-strategy-off", !cfdOn);
-    set("cfd-bet", cfg.cfd_base_bet != null ? "$" + cfg.cfd_base_bet : "—");
-    const minL = cfg.cfd_entry_min_left;
-    const maxL = cfg.cfd_entry_max_left;
-    set("cfd-window", (minL != null && maxL != null) ? `T-${maxL}..T-${minL}s` : "—");
-
-    // Temporal Arb card
-    const taOn = cfg.ta_enabled !== false && taDesc && taDesc.enabled;
-    set("ta-status", taOn ? "activa ✓" : "apagada");
-    const taCard = $("ta-card");
-    if (taCard) taCard.classList.toggle("ss-strategy-off", !taOn);
-    set("ta-threshold", cfg.ta_cheap_threshold != null ? "≤ $" + cfg.ta_cheap_threshold : "—");
-    set("ta-cap", cfg.ta_complete_cap != null ? "≤ $" + cfg.ta_complete_cap : "—");
-
-    // Near-Resolution Capture card
-    const nrcOn = cfg.nrc_enabled !== false && nrcDesc && nrcDesc.enabled;
-    set("nrc-status", nrcOn ? "activa ✓" : "apagada");
-    const nrcCard = $("nrc-card");
-    if (nrcCard) nrcCard.classList.toggle("ss-strategy-off", !nrcOn);
-    const nrcMinL = cfg.nrc_min_entry_left;
-    const nrcMaxL = cfg.nrc_max_entry_left;
-    set("nrc-window", (nrcMinL != null && nrcMaxL != null) ? `T-${nrcMaxL}..T-${nrcMinL}s` : "—");
-    set("nrc-shares", cfg.nrc_shares != null ? cfg.nrc_shares + " sh" : "—");
+      tile.classList.remove("ss-pnl-pos", "ss-pnl-neg", "ss-pnl-zero");
+      if (v > 0.0001) tile.classList.add("ss-pnl-pos");
+      else if (v < -0.0001) tile.classList.add("ss-pnl-neg");
+      else tile.classList.add("ss-pnl-zero");
+    });
   }
 
   function renderStatus(s) {
@@ -330,7 +338,59 @@
     }
   }
 
-  function renderPrices(s) {
+  // Per-strategy cards in the "Estrategias Activas" section. The card
+  // values come from s.config (runtime-editable values from .env + DB
+  // overrides); the on/off state from the registry's `enabled` flag. The
+  // off class hides the card, so an inactive strategy just doesn't show.
+  function renderStrategyCards(s) {
+    const cfg = s.config || {};
+    const strats = s.strategies || [];
+
+    const findDesc = (id) => strats.find((d) => d.id === id);
+    const set = (id, value) => { const el = $(id); if (el) el.textContent = value; };
+    const fmtUSD = (v) => v != null ? "$" + v : "—";
+    const fmtPct = (v) => v != null ? (v * 100).toFixed(1) + "%" : "—";
+
+    // Box Builder
+    const bbDesc = findDesc("box_builder");
+    const bbOn = cfg.bb_enabled === true && bbDesc && bbDesc.enabled;
+    set("bb-status", bbOn ? "activa ✓" : "apagada");
+    const bbCard = $("bb-card");
+    if (bbCard) bbCard.classList.toggle("ss-strategy-off", !bbOn);
+    set("bb-shares", cfg.bb_shares_per_leg != null ? cfg.bb_shares_per_leg + " sh" : "—");
+    set("bb-cap", fmtUSD(cfg.bb_bid_sum_cap));
+
+    // Coin-Flip Dog
+    const cfdDesc = findDesc("coin_flip_dog");
+    const cfdOn = cfg.cfd_enabled === true && cfdDesc && cfdDesc.enabled;
+    set("cfd-status", cfdOn ? "activa ✓" : "apagada");
+    const cfdCard = $("cfd-card");
+    if (cfdCard) cfdCard.classList.toggle("ss-strategy-off", !cfdOn);
+    set("cfd-bet", fmtUSD(cfg.cfd_base_bet));
+    const minL = cfg.cfd_entry_min_left, maxL = cfg.cfd_entry_max_left;
+    set("cfd-window", (minL != null && maxL != null) ? `T-${maxL}..T-${minL}s` : "—");
+
+    // Temporal Arb
+    const taDesc = findDesc("temporal_arb");
+    const taOn = cfg.ta_enabled === true && taDesc && taDesc.enabled;
+    set("ta-status", taOn ? "activa ✓" : "apagada");
+    const taCard = $("ta-card");
+    if (taCard) taCard.classList.toggle("ss-strategy-off", !taOn);
+    set("ta-threshold", fmtPct(cfg.ta_min_itm_pct));
+    set("ta-cap", fmtUSD(cfg.ta_complete_cap));
+
+    // Near-Resolution Capture
+    const nrcDesc = findDesc("near_res");
+    const nrcOn = cfg.nrc_enabled === true && nrcDesc && nrcDesc.enabled;
+    set("nrc-status", nrcOn ? "activa ✓" : "apagada");
+    const nrcCard = $("nrc-card");
+    if (nrcCard) nrcCard.classList.toggle("ss-strategy-off", !nrcOn);
+    const nrcMin = cfg.nrc_min_entry_left, nrcMax = cfg.nrc_max_entry_left;
+    set("nrc-window", (nrcMin != null && nrcMax != null) ? `T-${nrcMax}..T-${nrcMin}s` : "—");
+    set("nrc-shares", cfg.nrc_shares != null ? cfg.nrc_shares + " sh" : "—");
+  }
+
+    function renderPrices(s) {
     const p = s.prices || {};
     const ph = s.price_history || {};
     const set = (id, value) => { const el = $(id); if (el) el.textContent = value; };
