@@ -283,7 +283,46 @@
       }
     }
 
-    if (upt) upt.textContent = fmtDuration(st.uptime_seconds);
+    if (upt) upt.textContent = fmtDuration(s.uptime_seconds);
+  }
+
+
+  // Security guards tile — fetched separately because it touches bot_guards
+  // table. Polled less aggressively than /state (5s vs 1s).
+  let _securityTimer = null;
+  async function refreshSecurity() {
+    const symbol = (window.currentSymbol && window.currentSymbol()) || 'btc';
+    const val = $('kpi-security-status');
+    const sub = $('kpi-security-detail');
+    if (!val || !sub) return;
+    try {
+      const resp = await fetch(`/api/security-status?symbol=${symbol}`, { cache: 'no-store' });
+      if (!resp.ok) { val.textContent = '—'; sub.textContent = 'error'; return; }
+      const d = await resp.json();
+      if (d.error) { val.textContent = '—'; sub.textContent = 'error'; return; }
+      if (d.halted_reason) {
+        val.textContent = 'HALTED';
+        sub.textContent = d.halted_reason.length > 40
+          ? d.halted_reason.slice(0, 37) + '...'
+          : d.halted_reason;
+        val.style.color = 'var(--ss-danger, #d9534f)';
+      } else if (!d.enabled) {
+        val.textContent = 'OFF';
+        sub.textContent = 'guards deshabilitados';
+        val.style.color = '';
+      } else if (d.dry_run) {
+        val.textContent = 'DRY-RUN';
+        sub.textContent = `$${d.daily_spent.toFixed(2)}/$${d.daily_cap.toFixed(0)} · ${d.consecutive_losses}× losses`;
+        val.style.color = 'var(--ss-warn, #f0ad4e)';
+      } else {
+        val.textContent = 'ARMED';
+        sub.textContent = `$${d.daily_spent.toFixed(2)}/$${d.daily_cap.toFixed(0)} · ${d.consecutive_losses}× losses`;
+        val.style.color = 'var(--ss-good, #5cb85c)';
+      }
+    } catch (e) {
+      val.textContent = '—';
+      sub.textContent = 'fetch error';
+    }
   }
 
 

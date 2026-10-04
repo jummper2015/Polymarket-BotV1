@@ -516,6 +516,47 @@ def create_app() -> Flask:
             return jsonify({"equity": [], "drawdown": [], "win_rate": [],
                             "error": str(exc)}), 500
 
+    @app.get("/api/security-status")
+    def api_security_status():
+        """Live counters from bot_guards + static config caps. One read per
+        symbol, two queries max — used by the dashboard tile."""
+        from .security_store import GuardRepository
+        from decimal import Decimal
+        symbol = (request.args.get("symbol") or "btc").strip().lower()
+        try:
+            with app.app_context():
+                repo = GuardRepository(lambda: db.session)
+                snap = repo.load(symbol)
+        except Exception as exc:
+            logger.warn(f"[dashboard] /api/security-status falló: {exc}")
+            return jsonify({"error": str(exc)}), 500
+
+        # Compute drawdown only if a baseline exists (first trade of session)
+        drawdown_pct = 0.0
+        if snap.hourly_drawdown_baseline_usd > 0:
+            current_bankroll = STATE.current_bankroll()
+            drawdown_pct = float(
+                (Decimal(str(current_bankroll)) - snap.hourly_drawdown_baseline_usd)
+                / snap.hourly_drawdown_baseline_usd
+            )
+
+        # Detect halted state (status set by SecurityRuntime._handle_block)
+        halted_reason = None
+        if STATE.bot_status == "halted_security" and STATE.bot_message:
+            halted_reason = STATE.bot_message
+
+        return jsonify({
+            "enabled": STATE.security_enabled,
+            "dry_run": STATE.security_dry_run,
+            "daily_spent": float(snap.daily_spend_usd),
+            "daily_cap": float(STATE.security_max_daily_spend_usd),
+            "consecutive_losses": snap.consecutive_losses,
+            "max_consecutive_losses": int(STATE.security_max_consecutive_losses),
+            "hourly_drawdown_pct": drawdown_pct,
+            "max_hourly_drawdown_pct": float(STATE.security_max_hourly_drawdown_pct),
+            "halted_reason": halted_reason,
+        })
+
     @app.post("/config")
     def update_config():
         data = request.get_json(force=True, silent=True) or {}
