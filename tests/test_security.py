@@ -130,3 +130,66 @@ class TestSpendLimitGuard:
         assert result.daily_spend_usd == Decimal("35")
         # original unchanged (immutable)
         assert snap.daily_spend_usd == Decimal("10")
+
+
+class TestTradingCircuitBreaker:
+    def test_under_consecutive_losses_passes(self):
+        from bot.security import TradingCircuitBreaker
+        cb = TradingCircuitBreaker()
+        snap = _make_snap(consec=2)
+        cb.check(snap, Decimal("1000"), _make_config())  # no raise
+
+    def test_at_consecutive_losses_raises(self):
+        from bot.security import TradingCircuitBreaker
+        cb = TradingCircuitBreaker()
+        snap = _make_snap(consec=3)
+        with pytest.raises(CircuitBreakerError) as exc:
+            cb.check(snap, Decimal("1000"), _make_config())
+        assert exc.value.kind == "consecutive_losses"
+
+    def test_over_consecutive_losses_raises(self):
+        from bot.security import TradingCircuitBreaker
+        cb = TradingCircuitBreaker()
+        snap = _make_snap(consec=5)
+        with pytest.raises(CircuitBreakerError) as exc:
+            cb.check(snap, Decimal("1000"), _make_config())
+        assert exc.value.kind == "consecutive_losses"
+
+    def test_no_hourly_baseline_does_not_trigger(self):
+        from bot.security import TradingCircuitBreaker
+        cb = TradingCircuitBreaker()
+        snap = GuardSnapshot(
+            symbol="btc",
+            daily_spend_usd=Decimal("0"),
+            daily_spend_reset_at=0.0,
+            consecutive_losses=0,
+            last_trade_at=0.0,
+            hourly_drawdown_baseline_usd=Decimal("0"),  # no baseline yet
+            hourly_drawdown_at=0.0,
+            last_reset_at=0.0,
+            enabled=True,
+            dry_run=False,
+        )
+        cb.check(snap, Decimal("100"), _make_config())  # no raise on first trade
+
+    def test_hourly_drawdown_under_threshold_passes(self):
+        from bot.security import TradingCircuitBreaker
+        cb = TradingCircuitBreaker()
+        snap = _make_snap()
+        # baseline=1000, portfolio=950 → -5% > -8% threshold
+        cb.check(snap, Decimal("950"), _make_config())
+
+    def test_hourly_drawdown_at_threshold_passes(self):
+        from bot.security import TradingCircuitBreaker
+        cb = TradingCircuitBreaker()
+        snap = _make_snap()
+        # baseline=1000, portfolio=920 → -8% = threshold (boundary allowed)
+        cb.check(snap, Decimal("920"), _make_config())
+
+    def test_hourly_drawdown_over_threshold_raises(self):
+        from bot.security import TradingCircuitBreaker
+        cb = TradingCircuitBreaker()
+        snap = _make_snap()
+        with pytest.raises(CircuitBreakerError) as exc:
+            cb.check(snap, Decimal("900"), _make_config())  # -10%
+        assert exc.value.kind == "hourly_drawdown"

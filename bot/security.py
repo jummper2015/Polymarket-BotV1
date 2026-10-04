@@ -85,3 +85,43 @@ class SpendLimitGuard:
             )
         # 3. Return new snapshot with incremented spend (immutable update)
         return replace(snapshot, daily_spend_usd=new_daily)
+
+
+class TradingCircuitBreaker:
+    """Stateless. Verifies consecutive losses and hourly drawdown against caps.
+
+    The first trade of a session has no hourly baseline (snapshot carries
+    hourly_drawdown_baseline_usd == 0); we skip the drawdown check in that
+    case so a fresh bot doesn't trip on its very first trade. Baseline is
+    initialized by GuardRepository.record_trade on the first trade.
+    """
+
+    def check(
+        self,
+        snapshot: "GuardSnapshot",
+        portfolio_value_usd: Decimal,
+        config: "GuardConfig",
+    ) -> None:
+        # 1. Consecutive losses
+        if snapshot.consecutive_losses >= config.max_consecutive_losses:
+            raise CircuitBreakerError(
+                kind="consecutive_losses",
+                msg=f"{snapshot.consecutive_losses} consecutive losses ≥ "
+                    f"{config.max_consecutive_losses}",
+                current=snapshot.consecutive_losses,
+                cap=config.max_consecutive_losses,
+            )
+        # 2. Hourly drawdown (only if baseline exists)
+        if snapshot.hourly_drawdown_baseline_usd > 0:
+            drawdown = (
+                (portfolio_value_usd - snapshot.hourly_drawdown_baseline_usd)
+                / snapshot.hourly_drawdown_baseline_usd
+            )
+            if drawdown < -config.max_hourly_drawdown_pct:
+                raise CircuitBreakerError(
+                    kind="hourly_drawdown",
+                    msg=f"hourly drawdown {drawdown:.1%} < "
+                        f"-{config.max_hourly_drawdown_pct:.0%}",
+                    current=drawdown,
+                    cap=-config.max_hourly_drawdown_pct,
+                )
