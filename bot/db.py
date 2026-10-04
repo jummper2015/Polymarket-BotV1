@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Generator, NamedTuple
 
 from flask import Flask
@@ -130,6 +131,57 @@ class BotConfigModel(db.Model):
 
     key   = db.Column(String(64), primary_key=True)
     value = db.Column(Text, nullable=False)
+
+
+class BotGuardState(db.Model):
+    """Per-symbol spend cap + circuit breaker counters. Survives restart.
+
+    One row per symbol. Updated by GuardRepository on every check + on every
+    trade settlement. The SecurityRuntime in bot/security_runtime.py consults
+    this to decide whether a trade should be blocked.
+    """
+    __tablename__ = "bot_guards"
+
+    symbol                       = db.Column(String(16), primary_key=True)
+    daily_spend_usd              = db.Column(Float, default=0.0, nullable=False)
+    daily_spend_reset_at         = db.Column(Float, default=0.0, nullable=False)
+    consecutive_losses           = db.Column(Integer, default=0, nullable=False)
+    last_trade_at                = db.Column(Float, default=0.0, nullable=False)
+    hourly_drawdown_baseline_usd = db.Column(Float, default=0.0, nullable=False)
+    hourly_drawdown_at           = db.Column(Float, default=0.0, nullable=False)
+    last_reset_at                = db.Column(Float, default=0.0, nullable=False)
+    enabled                      = db.Column(Boolean, default=True, nullable=False)
+    dry_run                      = db.Column(Boolean, default=False, nullable=False)
+
+    def to_snapshot(self):
+        from .security_store import GuardSnapshot
+        return GuardSnapshot(
+            symbol=self.symbol,
+            daily_spend_usd=Decimal(str(self.daily_spend_usd)),
+            daily_spend_reset_at=self.daily_spend_reset_at,
+            consecutive_losses=self.consecutive_losses,
+            last_trade_at=self.last_trade_at,
+            hourly_drawdown_baseline_usd=Decimal(str(self.hourly_drawdown_baseline_usd)),
+            hourly_drawdown_at=self.hourly_drawdown_at,
+            last_reset_at=self.last_reset_at,
+            enabled=self.enabled,
+            dry_run=self.dry_run,
+        )
+
+    @classmethod
+    def from_snapshot(cls, snap):
+        return cls(
+            symbol=snap.symbol,
+            daily_spend_usd=float(snap.daily_spend_usd),
+            daily_spend_reset_at=snap.daily_spend_reset_at,
+            consecutive_losses=snap.consecutive_losses,
+            last_trade_at=snap.last_trade_at,
+            hourly_drawdown_baseline_usd=float(snap.hourly_drawdown_baseline_usd),
+            hourly_drawdown_at=snap.hourly_drawdown_at,
+            last_reset_at=snap.last_reset_at,
+            enabled=snap.enabled,
+            dry_run=snap.dry_run,
+        )
 
 
 class ChainlinkTickModel(db.Model):
