@@ -7,7 +7,7 @@ config, returns decisions or raises typed exceptions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 
 
@@ -48,3 +48,40 @@ class CircuitBreakerError(Exception):
         self.kind = kind
         self.current = current
         self.cap = cap
+
+
+class SpendLimitGuard:
+    """Stateless. Verifies a proposed spend against single-tx and daily caps.
+
+    The daily cap operates on the snapshot's `daily_spend_usd` — the rolling
+    24h reset is handled upstream in `GuardRepository.record_trade` so this
+    guard only deals with the already-reset counter.
+    """
+
+    def check_and_record(
+        self,
+        proposed_usd: Decimal,
+        snapshot: "GuardSnapshot",
+        config: "GuardConfig",
+    ) -> "GuardSnapshot":
+        # 1. Single-tx cap
+        if proposed_usd > config.max_single_tx_usd:
+            raise SpendLimitError(
+                kind="single_tx",
+                attempted_usd=proposed_usd,
+                cap_usd=config.max_single_tx_usd,
+                spent_usd=snapshot.daily_spend_usd,
+                msg=f"single tx ${proposed_usd} > cap ${config.max_single_tx_usd}",
+            )
+        # 2. Daily cap (rolling 24h is handled by repo before snap reaches us)
+        new_daily = snapshot.daily_spend_usd + proposed_usd
+        if new_daily > config.max_daily_spend_usd:
+            raise SpendLimitError(
+                kind="daily",
+                attempted_usd=proposed_usd,
+                cap_usd=config.max_daily_spend_usd,
+                spent_usd=snapshot.daily_spend_usd,
+                msg=f"daily ${snapshot.daily_spend_usd} + ${proposed_usd} > ${config.max_daily_spend_usd}",
+            )
+        # 3. Return new snapshot with incremented spend (immutable update)
+        return replace(snapshot, daily_spend_usd=new_daily)
