@@ -144,14 +144,14 @@ class BotState:
         self.ta_complete_cap:     float = 0.82
         self.ta_shares_per_leg:   float = 5.0
         self.ta_order_slice:      float = 5.0
-        self.ta_entry_cutoff_sec: float = 150.0
+        self.ta_entry_cutoff_sec: float = 120.0  # spec 2026-10-06: 120s restantes (antes 150)
         self.ta_bailout_sec:      float = 60.0
         self.ta_cancel_all_sec:   float = 10.0
         # Late Pair Taker: buy both sides when sum ≤ ta_lpt_cap (no directional signal needed)
         self.ta_lpt_enabled:      bool  = True
         self.ta_lpt_cap:          float = 0.90
         self.ta_lpt_min_left:     float = 20.0
-        self.ta_lpt_max_left:     float = 148.0
+        self.ta_lpt_max_left:     float = 118.0  # spec 2026-10-06: bajo entry_cutoff=120 (antes 148)
         # Hedge Recovery: buy opposite side when first leg has dropped to limit loss
         self.ta_hedge_enabled:    bool  = True
         self.ta_hedge_drop_pct:   float = 0.40
@@ -185,7 +185,7 @@ class BotState:
         # Added 2026-09-21.
         self.ta_mart_hedge_enabled:    bool  = True
         self.ta_mart_hedge_min_secs:   int   = 30
-        self.ta_mart_hedge_mult:       float = 2.0
+        self.ta_mart_hedge_mult:       float = 2.5  # spec 2026-10-06: cada ronda = base × 2.5 constante
         self.ta_mart_hedge_max_rounds: int   = 3
         # Loss-fallback for Mart-Hedge round 1 (spec 2026-10-06, Issue #3).
         # Si la 1ª pata cae ≥ este %, dispara Mart-Hedge aunque BTC no haya

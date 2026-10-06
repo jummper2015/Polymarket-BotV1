@@ -425,14 +425,14 @@ def load_config() -> Config:
         ta_complete_cap=_env_float("TA_COMPLETE_CAP", 0.82),
         ta_shares_per_leg=_env_float("TA_SHARES_PER_LEG", 5.0),
         ta_order_slice=_env_float("TA_ORDER_SLICE", 5.0),
-        ta_entry_cutoff_sec=_env_float("TA_ENTRY_CUTOFF_SEC", 150.0),
+        ta_entry_cutoff_sec=_env_float("TA_ENTRY_CUTOFF_SEC", 120.0),  # spec 2026-10-06
         ta_bailout_sec=_env_float("TA_BAILOUT_SEC", 60.0),
         ta_cancel_all_sec=_env_float("TA_CANCEL_ALL_SEC", 10.0),
         # Late Pair Taker: buy both sides when sum ≤ cap, no directional signal needed
         ta_lpt_enabled=_env_bool("TA_LPT_ENABLED", True),
         ta_lpt_cap=_env_float("TA_LPT_CAP", 0.90),
         ta_lpt_min_left=_env_float("TA_LPT_MIN_LEFT", 20.0),
-        ta_lpt_max_left=_env_float("TA_LPT_MAX_LEFT", 148.0),
+        ta_lpt_max_left=_env_float("TA_LPT_MAX_LEFT", 118.0),  # spec 2026-10-06: bajo entry_cutoff=120
         # Hedge Recovery: buy opposite side when first leg drops to limit loss
         ta_hedge_enabled=_env_bool("TA_HEDGE_ENABLED", True),
         ta_hedge_drop_pct=_env_float("TA_HEDGE_DROP_PCT", 0.40),

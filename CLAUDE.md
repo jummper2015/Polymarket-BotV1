@@ -12,7 +12,7 @@ A Python bot ("Streak Snapper v2") that trades Polymarket's **up/down 5-minute**
 |---|---|---|---|
 | `box_builder` | Maker — cotiza en ambos lados en la primera mitad | Colecta el spread: par redime a $1 sin riesgo direccional | **Activa** — BB_ENABLED=true cuando haya credenciales maker |
 | `coin_flip_dog` | Taker late — entra a T-30..T-90 | Intra-ventana: underdog ask 0,22–0,47, coa ≤ 0,20 | **Activa** — CFD_ENABLED=true para acumular datos |
-| `temporal_arb` | Taker observe — compra el líder cuando BTC cruzó el strike pero el libro no repriceó | itm_pct ≥ 0,05 %; ask líder 0,40–0,55; segunda pata si par ≤ 0,82; compra en tranches de `ta_order_slice` shares para reducir impacto | **Activa** — TA_ENABLED=true |
+| `temporal_arb` | Taker observe — compra el líder cuando BTC cruzó el strike pero el libro no repriceó | itm_pct ≥ 0,05 %; ask líder 0,40–0,55; segunda pata si par ≤ 0,82; compra en tranches de `ta_order_slice` shares para reducir impacto; Mart-Hedge (recuperación en Mart-Hedge round ×2.5 + edge lock suprimido post-hedge) | **Activa** — TA_ENABLED=true |
 | `near_res` | Taker late — entra a T-5..T-20 s en el casi-ganador seguro | ask ∈ [0,97, 0,995]; recauda 1–3 ¢/share al settlement | **Activa** — NRC_ENABLED=true; riesgo de cola alto |
 
 **Desactivadas** (fuera del registro, módulos preservados como referencia):
@@ -30,7 +30,7 @@ Defaults: `SS_SIZING=flat`, `BB_ENABLED=false`, `CFD_ENABLED=false`, `TA_ENABLED
 python run.py                                    # arranca trader + dashboard (paper por defecto)
 PORT=5055 python run.py                          # puerto alternativo
 
-python -m pytest tests/ -q                       # suite completa (493 tests, ~7s)
+python -m pytest tests/ -q                       # suite completa (651 tests, ~7s)
 python -m pytest tests/test_db.py -q             # un archivo
 python -m pytest tests/test_db.py::test_name -q  # un test
 
@@ -118,6 +118,35 @@ secs ≤ BB_CANCEL_ALL_SEC (T-10) → cancelar todo
 - `_record_box_fill(tokens, direction, token_id, price, shares)` — persiste la pata en `trades` con `strategy="box_builder"`.
 
 Paper mode: `_place_maker_bid` devuelve un id sintético; `_get_position_size` devuelve 0.0 siempre (la máquina de estados corre, las órdenes no son reales).
+
+### Temporal Arb — `bot/strategies/temporal_arb.py`
+
+Edge: Polymarket tarda en repreciar cuando BTC cruza el strike; compramos al líder
+descalibrado como taker, buscamos par cheap para redimir a $1. Si la pata perdedora
+no se cierra, Path E (Mart-Hedge, rev 2026-10-06) compensa con qty `first_shares × 2.5`
+constante cada ronda, ancla al **inicial** sin compounding.
+
+**Mart-Hedge (Path E) — reglas 2026-10-06:**
+- Gate principal: side-change (BTC cruzó el strike contra la 1ª pata) o pérdida ≥
+  `ta_mart_hedge_loss_fallback_pct` (default 50% → cubre posiciones en pérdidas
+  profundas sin cruce de lado).
+- qty round 1: `first_shares_filled × ta_mart_hedge_mult` (2.5 default).
+- qty round 2+: igual a round 1 (constante, anclado a first_shares — **NO
+  compounding** sobre round1_qty).
+- Entre rondas: espera `ta_mh_monitor_secs` (30s default). Si el ganador actual
+  sigue siendo la pata recién comprada, HOLD hasta resolución. Si el lado
+  cambia, abre la siguiente ronda.
+- **Edge lock suprimido post-hedge**: una vez que `mart_hedge_rounds >= 1`,
+  Path A (par completo) y Path D (profit-lock) no disparan — Mart-Hedge es
+  recuperación, no cobertura.
+- Cap configurable: `ta_mart_hedge_max_rounds` (default 2).
+
+**Cutoff de entrada**: `ta_entry_cutoff_sec` (120s default, antes 150s hardcoded
+a 30s). Si BTC no cruza el strike dentro de los 120s restantes, la ventana cierra.
+
+**Bug fix 2026-10-06**: línea con `ts` undefined en check de hold-winner causaba
+`NameError` que rompía la evaluación de Paths A/B/C/D/E en ese tick. Reemplazado
+por `time.time()`.
 
 ### Coin-Flip Dog — `bot/strategies/coin_flip_dog.py`
 
