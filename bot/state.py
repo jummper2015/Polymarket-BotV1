@@ -187,18 +187,24 @@ class BotState:
         self.ta_mart_hedge_min_secs:   int   = 30
         self.ta_mart_hedge_mult:       float = 2.0
         self.ta_mart_hedge_max_rounds: int   = 3
+        # Loss-fallback for Mart-Hedge round 1 (spec 2026-10-06, Issue #3).
+        # Si la 1ª pata cae ≥ este %, dispara Mart-Hedge aunque BTC no haya
+        # cruzado el strike. Default 0.50 = 50%.
+        self.ta_mart_hedge_loss_fallback_pct: float = 0.50
         # Profit-Lock extension (added 2026-09-25 per Caso 2)
         # Beyond ta_profit_lock_min_secs (30s) we keep trying edge up to this
         # max window (60s), so the bot keeps looking for the lock.
         self.ta_profit_lock_max_secs:  float = 60.0
 
-        # Post-trade grace + Mart-Hedge round 2 (added 2026-09-28)
-        # Path B (hedge recovery) and Path E round 1 (mart-hedge) only fire
-        # after grace_secs. Mart-hedge round 2 fires only on BTC reversal
-        # ≥ reversal_threshold AND cooldown_secs since round 1.
+        # Post-trade grace + Mart-Hedge monitor window (revised 2026-10-05)
+        # Path B (hedge recovery) only fires after grace_secs. Path E
+        # (mart-hedge) is NOT gated by grace — uses its own
+        # mart_hedge_min_secs + mh_monitor_secs.
+        # mh_monitor_secs: window during which the bot monitors the side
+        # after each round. If the winner hasn't changed → HOLD. If the
+        # side changes (UP↔DOWN) → next round on the new winner.
         self.ta_grace_secs:               float = 60.0
-        self.ta_mh_round2_cooldown_secs:  float = 20.0
-        self.ta_mh_reversal_threshold:    float = 0.005
+        self.ta_mh_monitor_secs:          float = 30.0
         # Impulse-Lock strategy (added 2026-09-24)
         self.ih_enabled:          bool  = False
         self.ih_entry_min:        float = 0.55
@@ -719,10 +725,10 @@ class BotState:
                 "ta_mart_hedge_min_secs": self.ta_mart_hedge_min_secs,
                 "ta_mart_hedge_mult":     self.ta_mart_hedge_mult,
                 "ta_mart_hedge_max_rounds": self.ta_mart_hedge_max_rounds,
+                "ta_mart_hedge_loss_fallback_pct": self.ta_mart_hedge_loss_fallback_pct,
                 "ta_profit_lock_max_secs":  self.ta_profit_lock_max_secs,
                 "ta_grace_secs":               self.ta_grace_secs,
-                "ta_mh_round2_cooldown_secs":  self.ta_mh_round2_cooldown_secs,
-                "ta_mh_reversal_threshold":    self.ta_mh_reversal_threshold,
+                "ta_mh_monitor_secs":          self.ta_mh_monitor_secs,
                 "polymarket_usdc_balance":       self.polymarket_usdc_balance,
                 "polymarket_positions_value":    self.polymarket_positions_value,
                 "polymarket_positions_count":    self.polymarket_positions_count,
