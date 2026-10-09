@@ -279,6 +279,50 @@ def _ctx(state, tokens, trader, seconds_left=200.0):
     )
 
 
+def _build_mart_hedge_scenario(*, first_shares_filled, first_px, mart_hedge_mult=2.0,
+                               side_changed=True):
+    """Build a minimal ctx/ta for Mart-Hedge observe tests.
+
+    Sets up half_open with first leg filled, side_changed True, ready for R1.
+    """
+    from bot.strategies.temporal_arb import _TAWindow, _get_window
+    from bot.strategies.base import StrategyContext
+    from unittest.mock import MagicMock
+
+    state = MagicMock()
+    state.ta_mart_hedge_enabled = True
+    state.ta_mart_hedge_min_secs = 0
+    state.ta_mart_hedge_mult = mart_hedge_mult
+    state.ta_mart_hedge_max_rounds = 2
+    state.ta_mart_hedge_loss_fallback_pct = 0.50
+    state.ta_mh_monitor_secs = 30.0
+    state.spot_price = 86100.0
+    tokens = MagicMock()
+    tokens.window_ts = 1000
+    tokens.up_token_id = "tok-up"
+    tokens.down_token_id = "tok-dn"
+    ta = _get_window("btc", window_ts=1000)
+    ta.phase = "half_open"
+    ta.first_side = "DOWN"
+    ta.first_px = first_px
+    ta.first_tok = tokens.down_token_id
+    ta.first_shares_filled = first_shares_filled
+    ta.first_shares_target = first_shares_filled
+    ta.first_cost_sum = first_px * first_shares_filled
+    ta.first_leg_filled_at = 0.0  # epoch means lots of seconds elapsed
+    ta.strike = 86050.0 if side_changed else 86100.0  # 86050 makes UP the winner
+    ctx = MagicMock(spec=StrategyContext)
+    ctx.state = state
+    ctx.symbol = "btc"
+    ctx.tokens = tokens
+    ctx.trader = MagicMock()
+    ctx.trader._place_taker_order.return_value = "oid-1"
+    ctx.trader._record_box_fill.return_value = None
+    ctx.seconds_left = 150.0  # before cutoff, so cutoff guard passes
+    state.get_asks = lambda: (0.55, 0.18)
+    return ta, ctx
+
+
 STRIKE = 60000.0   # strike cached in _TAWindow for observe tests
 
 
@@ -1978,3 +2022,46 @@ class TestTAWindowRoundQty:
         _get_window("btc", window_ts=1).mart_hedge_round_qty = 50.0
         win2 = _get_window("btc", window_ts=2)
         assert win2.mart_hedge_round_qty == 0.0
+
+
+# ── Task 3: Mart-Hedge R1 qty anchored to first_shares × mult ────────────────
+
+def test_r1_qty_is_first_shares_times_mult(monkeypatch):
+    """R1 qty must be first_shares_filled × ta_mart_hedge_mult, anchored
+    to the initial leg (NOT to a prior round)."""
+    from unittest.mock import patch, MagicMock
+    from bot.strategies import temporal_arb
+    from bot import polymarket_twap_tracker as twap_tracker
+
+    twap_tracker.clear_all()
+    ta, ctx = _build_mart_hedge_scenario(
+        first_shares_filled=30.0,
+        first_px=0.50,
+        mart_hedge_mult=2.0,
+        side_changed=True,
+    )
+    # Patch trader to capture mart_qty
+    captured = []
+    orig_place = ctx.trader._place_taker_order
+    def capture(tok, side, price, qty, *a, **kw):
+        captured.append(qty)
+        return orig_place(tok, side, price, qty, *a, **kw)
+    monkeypatch.setattr(ctx.trader, "_place_taker_order", capture)
+
+    with (
+        patch("bot.strategies.temporal_arb._get_window", return_value=ta),
+        patch("bot.polymarket_price.get_strike", return_value=86050.0),
+        patch("bot.indicators.get_atr", return_value=None),
+        patch("bot.indicators.get_rsi", return_value=None),
+        patch("bot.logger.info"),
+        patch("bot.logger.ok"),
+        patch("bot.logger.warn"),
+        patch.object(twap_tracker, "get_state", return_value=MagicMock()),
+    ):
+        temporal_arb._observe(ctx)
+    assert captured, "expected R1 to fire"
+    assert captured[0] == pytest.approx(60.0), \
+        f"R1 qty should be first_shares × mult = 30 × 2 = 60, got {captured[0]}"
+    assert ta.mart_hedge_round_qty == pytest.approx(60.0)
+    assert ta.mart_hedge_rounds == 1
+

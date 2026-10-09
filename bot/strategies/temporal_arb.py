@@ -1067,6 +1067,7 @@ def _observe(ctx: StrategyContext) -> None:
             mart_qty = round(
                 ta.first_shares_filled * mart_hedge_mult, 4
             )
+            ta.mart_hedge_round_qty = mart_qty  # canonical for next round's base
             tok_second = (
                 tokens.up_token_id if second_side == "UP"
                 else tokens.down_token_id
