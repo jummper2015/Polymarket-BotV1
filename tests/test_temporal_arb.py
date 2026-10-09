@@ -2151,3 +2151,64 @@ def test_r1_qty_is_first_shares_times_mult(monkeypatch):
     assert ta.mart_hedge_round_qty == pytest.approx(60.0)
     assert ta.mart_hedge_rounds == 1
 
+
+def test_accumulating_stops_at_cutoff():
+    """Cuando secs < ta_entry_cutoff_sec en accumulating, se detiene con
+    stop_reason='cutoff_strict' y no se compran mas tranches.
+
+    Spec 2026-10-08 silent bug #1: with a previous position, more tranches
+    could fill even past the 120s cutoff since only the IDLE gate was enforced.
+    """
+    from bot.strategies.temporal_arb import _TAWindow, _observe
+    from bot.strategies.base import StrategyContext
+
+    # ta_entry_cutoff_sec=120, ta_bailout_sec=60 — test that cutoff fires
+    # before bailout when 60 < secs < 120.
+    state = _make_state(
+        ta_min_ask=0.40,
+        ta_max_ask=0.55,
+        ta_entry_cutoff_sec=120.0,
+        ta_bailout_sec=60.0,
+        ta_shares_per_leg=20.0,
+        spot_price=86100.0,
+        ask_up=0.50,
+        ask_dn=0.50,
+        logged_bailout=True,  # suppress bailout log
+    )
+    tokens = _make_tokens()
+
+    trader = _make_trader()
+
+    # Partial first leg already filled: 10/20 shares — next tranche would be 5.
+    win = _TAWindow(
+        window_ts=tokens.window_ts, phase="accumulating",
+        first_side="DOWN", first_tok=tokens.down_token_id,
+        first_px=0.50, first_shares_target=20.0,
+        first_shares_filled=10.0, first_cost_sum=5.0,
+    )
+
+    # secs_left=110.0 is below the 120s cutoff but above the 60s bailout,
+    # so only cutoff_strict should fire (not bailout).
+    secs_left = 110.0
+
+    with (
+        patch("bot.strategies.temporal_arb._get_window", return_value=win),
+        patch("bot.polymarket_price.get_strike", return_value=86050.0),
+        patch("bot.indicators.get_atr", return_value=None),
+        patch("bot.indicators.get_rsi", return_value=None),
+        patch("bot.indicators.get_volume_ratio", return_value=None),
+        patch("bot.logger.info"),
+        patch("bot.logger.ok"),
+        patch("bot.logger.warn"),
+    ):
+        ctx = _ctx(state, tokens, trader, secs_left)
+        _observe(ctx)
+
+    # Should transition to half_open, not buy anything.
+    assert win.phase == "half_open", \
+        f"expected phase=half_open, got {win.phase}"
+    assert trader._place_taker_order.call_count == 0, \
+        "expected zero buys after cutoff — no tranche should fill past 120s"
+    # No order placed, so no record_box_fill call either.
+    assert len(trader._record_box_fill.call_args_list) == 0
+

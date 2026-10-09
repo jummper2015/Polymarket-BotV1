@@ -572,6 +572,10 @@ def _observe(ctx: StrategyContext) -> None:
         stop_reason = None
         if secs <= bail_sec:
             stop_reason = "bailout"
+        elif secs < q_cut:
+            # Spec 2026-10-08: cutoff estricto. Stop tranches antes de bailout
+            # para no seguir comprando post-120s. Log explícito.
+            stop_reason = "cutoff_strict"
         elif remaining <= 0:
             stop_reason = "target_reached"
         elif leader_ask is None or not (min_ask <= leader_ask <= max_ask):
@@ -581,12 +585,22 @@ def _observe(ctx: StrategyContext) -> None:
             # Finalise VWAP and move to half_open regardless of reason.
             if ta.first_shares_filled > 0:
                 ta.first_px = round(ta.first_cost_sum / ta.first_shares_filled, 4)
-            logger.info(
-                f"[TA] acumulación finalizada ({stop_reason})  "
-                f"filled={ta.first_shares_filled:.0f}/{ta.first_shares_target:.0f}  "
-                f"vwap={ta.first_px:.4f}",
-                icon="📊",
-            )
+            if stop_reason == "cutoff_strict":
+                logger.info(
+                    f"[TA] ⏭ CUTOFF_STRICT_TRANCHES — no más compras "
+                    f"primera_pata={ta.first_side}@{ta.first_px:.3f} "
+                    f"filled={ta.first_shares_filled:.0f}/{ta.first_shares_target:.0f} "
+                    f"secs={secs:.0f} < cutoff={q_cut:.0f}",
+                    icon="⏭",
+                )
+                state.record_skip("TA_CUTOFF_TRANCHES")
+            else:
+                logger.info(
+                    f"[TA] acumulación finalizada ({stop_reason})  "
+                    f"filled={ta.first_shares_filled:.0f}/{ta.first_shares_target:.0f}  "
+                    f"vwap={ta.first_px:.4f}",
+                    icon="📊",
+                )
             ta.first_leg_filled_at = time.time()  # mark time the first leg completed
             ta.phase = "half_open"
             return
