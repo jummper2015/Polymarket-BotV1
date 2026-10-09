@@ -1151,12 +1151,11 @@ def _observe(ctx: StrategyContext) -> None:
                     round1_loss_pct = (
                         (ta.mart_hedge_px - mh_side_ask) / ta.mart_hedge_px
                     )
-                    # Spec usuario 2026-10-06: cada ronda = base_inicial × 2.5 constante
-                    # Round 2 también usa first_shares_filled (NO compounding sobre
-                    # round1_qty). Si first_shares=30 → round 2 = 30 × 2.5 = 75.
-                    mart_qty = round(
-                        ta.first_shares_filled * mart_hedge_mult, 4
-                    )
+                    # Spec 2026-10-08: round_n = round_(n-1) × mult (compounding).
+                    # round_qty was last written by R1 as first_shares × mult;
+                    # R2 doubles it again.
+                    base_qty = ta.mart_hedge_round_qty
+                    mart_qty = round(base_qty * mart_hedge_mult, 4)
                     tok_second = (
                         tokens.up_token_id if round2_side == "UP"
                         else tokens.down_token_id
@@ -1169,6 +1168,7 @@ def _observe(ctx: StrategyContext) -> None:
                         ta.mart_hedge_side = round2_side
                         ta.mart_hedge_px   = round2_ask
                         ta.mart_hedge_qty  = mart_qty
+                        ta.mart_hedge_round_qty = mart_qty
                         ta.last_mh_round_at = time.time()
                         logger.ok(
                             f"[TA] 🛡 MART-HEDGE round=2/{mart_hedge_max_rounds}  "
@@ -1181,7 +1181,7 @@ def _observe(ctx: StrategyContext) -> None:
                                  f"ganador_actual=DOWN ({spot:.0f}<{ta.strike:.0f})"
                             f"  "
                             f"hedge={round2_side}@{round2_ask:.3f} × {mart_qty:.0f}sh  "
-                            f"(qty=initial×{mart_hedge_mult}, sin compounding)  "
+                            f"(qty=round1×{mart_hedge_mult}, compounding)  "
                             f"monitor={mh_monitor_secs:.0f}s",
                             icon="🛡",
                         )

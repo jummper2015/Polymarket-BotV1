@@ -1658,9 +1658,9 @@ class TestObserveHalfOpen:
         """Round 2 fires when BOTH the monitor window elapsed AND the side
         changed (BTC re-crossed the strike to the opposite side of round 1).
         Per user spec (2026-10-05), round 2 buys the CURRENT WINNER (the side
-        opposite to mh_side), not the same side as round 1. Spec 2026-10-06
-        (revised): qty = first_shares × mart_hedge_mult (CONSTANT — no
-        compounding on round1_qty)."""
+        opposite to mh_side), not the same side as round 1. Spec 2026-10-08
+        (revised): qty = mart_hedge_round_qty × mart_hedge_mult (compounding).
+        R1 set round_qty=160 (80×2.0), so R2 = 160×2.0 = 320."""
         from bot import polymarket_twap_tracker as twap_tracker
         twap_tracker.clear_all()
         # Round 1 bought DOWN (first_leg=UP, mh_side=DOWN).
@@ -1681,8 +1681,8 @@ class TestObserveHalfOpen:
         tokens = _make_tokens()
         trader = _make_trader()
         # Round 1 fired 35s ago (monitor window elapsed).
-        # Spec 2026-10-06 (CONSTANT): qty round 2 = first_shares × mult
-        # = 80 × 2.0 = 160 (mismo size que round 1, NO compounding).
+        # Spec 2026-10-08 (COMPOUNDING): qty round 2 = round_qty × mult
+        # = 160 × 2.0 = 320 (R1 set round_qty=160 from 80×2.0).
         # Round 2 buys UP (new winner, opposite to mh_side=DOWN) at ask_up=0.45.
         win = _TAWindow(
             window_ts=tokens.window_ts, phase="half_open",
@@ -1690,6 +1690,7 @@ class TestObserveHalfOpen:
             strike=STRIKE, first_leg_filled_at=time.time() - 90,
             mart_hedge_rounds=1,
             mart_hedge_side="DOWN", mart_hedge_px=0.70, mart_hedge_qty=160.0,
+            mart_hedge_round_qty=160.0,  # compounding base from R1
             mh_first_ask_at_r1=0.30,
             last_mh_round_at=time.time() - 35,  # past 30s monitor window
         )
@@ -1706,16 +1707,15 @@ class TestObserveHalfOpen:
             _observe(_ctx(state, tokens, trader, seconds_left=100.0))
         assert win.mart_hedge_rounds == 2
         # Round 2 buys the NEW WINNER (UP, opposite to mh_side=DOWN) at ask_up=0.45.
-        # Spec 2026-10-06 CONSTANT: qty = first_shares × mult = 80 × 2.0 = 160
-        # (mismo size que round 1, sin compounding)
+        # Spec 2026-10-08 COMPOUNDING: qty = round_qty × mult = 160 × 2.0 = 320.
         orders = trader._place_taker_order.call_args_list
         assert any(
             call.args[0] == tokens.up_token_id
             and call.args[1] == "BUY"
             and abs(call.args[2] - 0.45) < 1e-6
-            and abs(call.args[3] - 160.0) < 1e-3
+            and abs(call.args[3] - 320.0) < 1e-3
             for call in orders
-        ), f"Expected UP BUY @0.45 × 365.7143 (new winner); got {orders}"
+        ), f"Expected UP BUY @0.45 × 320.0 (compounding 160×2.0); got {orders}"
         # After round 2, the new tracked side is UP.
         assert win.mart_hedge_side == "UP"
         assert abs(win.mart_hedge_px - 0.45) < 1e-6
@@ -2024,6 +2024,90 @@ class TestTAWindowRoundQty:
         assert win2.mart_hedge_round_qty == 0.0
 
 
+# ── Task 4: Mart-Hedge R2 compounding on R1 qty ───────────────────────────────
+
+def test_r2_qty_is_r1_qty_times_mult(monkeypatch):
+    """R2 must multiply ta.mart_hedge_round_qty (set by R1) by mult, NOT
+    first_shares_filled again. With mult=2.0, R1→60 → R2→120."""
+    from bot.strategies import temporal_arb
+    from bot import polymarket_twap_tracker as twap_tracker
+
+    twap_tracker.clear_all()
+    ta, ctx = _build_mart_hedge_scenario(
+        first_shares_filled=30.0, first_px=0.50,
+        mart_hedge_mult=2.0, side_changed=True,
+    )
+    # Simulate R1 already fired with qty 60, then side flipped back
+    ta.mart_hedge_rounds = 1
+    ta.mart_hedge_side = "UP"
+    ta.mart_hedge_px = 0.55
+    ta.mart_hedge_qty = 60.0
+    ta.mart_hedge_round_qty = 60.0  # R1's qty
+    ta.last_mh_round_at = 0.0       # enough time elapsed
+    # DOWN is now the winner (spot below strike → side changed from R1's UP)
+    ctx.state.spot_price = 86080.0
+    ta.strike = 86150.0
+
+    captured = []
+    orig_place = ctx.trader._place_taker_order
+    def capture(tok, side, price, qty, *a, **kw):
+        captured.append(qty)
+        return orig_place(tok, side, price, qty, *a, **kw)
+    monkeypatch.setattr(ctx.trader, "_place_taker_order", capture)
+
+    from unittest.mock import patch as patch2, MagicMock
+    with (
+        patch2("bot.strategies.temporal_arb._get_window", return_value=ta),
+        patch2("bot.polymarket_price.get_strike", return_value=86150.0),
+        patch2("bot.indicators.get_atr", return_value=None),
+        patch2("bot.indicators.get_rsi", return_value=None),
+        patch2("bot.logger.info"),
+        patch2("bot.logger.ok"),
+        patch2("bot.logger.warn"),
+        patch2.object(twap_tracker, "get_state", return_value=MagicMock()),
+    ):
+        temporal_arb._observe(ctx)
+    assert captured, "expected R2 to fire"
+    assert captured[0] == pytest.approx(120.0), \
+        f"R2 qty must be R1_qty × mult = 60 × 2 = 120, got {captured[0]}"
+    assert ta.mart_hedge_round_qty == pytest.approx(120.0)
+    assert ta.mart_hedge_rounds == 2
+
+
+def test_no_r3_fires_when_max_rounds_2(monkeypatch):
+    """max_rounds=2 → even if side flips again, no R3."""
+    from bot.strategies import temporal_arb
+    from bot import polymarket_twap_tracker as twap_tracker
+
+    twap_tracker.clear_all()
+    ta, ctx = _build_mart_hedge_scenario(
+        first_shares_filled=30.0, first_px=0.50,
+        mart_hedge_mult=2.0, side_changed=True,
+    )
+    ta.mart_hedge_rounds = 2
+    ta.mart_hedge_side = "DOWN"
+    ta.mart_hedge_px = 0.40
+    ta.mart_hedge_qty = 120.0
+    ta.mart_hedge_round_qty = 120.0
+    ta.last_mh_round_at = 0.0
+    ctx.state.ta_mart_hedge_max_rounds = 2
+
+    from unittest.mock import patch as patch2, MagicMock
+    with (
+        patch2("bot.strategies.temporal_arb._get_window", return_value=ta),
+        patch2("bot.polymarket_price.get_strike", return_value=86150.0),
+        patch2("bot.indicators.get_atr", return_value=None),
+        patch2("bot.indicators.get_rsi", return_value=None),
+        patch2("bot.logger.info"),
+        patch2("bot.logger.ok"),
+        patch2("bot.logger.warn"),
+        patch2.object(twap_tracker, "get_state", return_value=MagicMock()),
+    ):
+        temporal_arb._observe(ctx)
+    # No R3 — verify rounds unchanged and no new order placed
+    assert ta.mart_hedge_rounds == 2
+
+
 # ── Task 3: Mart-Hedge R1 qty anchored to first_shares × mult ────────────────
 
 def test_r1_qty_is_first_shares_times_mult(monkeypatch):
@@ -2040,6 +2124,8 @@ def test_r1_qty_is_first_shares_times_mult(monkeypatch):
         mart_hedge_mult=2.0,
         side_changed=True,
     )
+    # Reset cached state: _get_window("btc", 1000) is shared across tests.
+    ta.mart_hedge_rounds = 0
     # Patch trader to capture mart_qty
     captured = []
     orig_place = ctx.trader._place_taker_order
