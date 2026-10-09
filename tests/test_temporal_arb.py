@@ -1963,3 +1963,18 @@ class TestDescriptor:
         for val in ew["values"]:
             state = SimpleNamespace(**{field: val})
             assert DESCRIPTOR.is_enabled(state) is True
+
+
+# ── _TAWindow round-qty field ─────────────────────────────────────────────────
+
+class TestTAWindowRoundQty:
+    def test_round_qty_defaults_to_zero(self):
+        from bot.strategies.temporal_arb import _get_window
+        win = _get_window("btc", window_ts=1)
+        assert win.mart_hedge_round_qty == 0.0
+
+    def test_window_ts_change_resets_round_qty(self):
+        from bot.strategies.temporal_arb import _get_window
+        _get_window("btc", window_ts=1).mart_hedge_round_qty = 50.0
+        win2 = _get_window("btc", window_ts=2)
+        assert win2.mart_hedge_round_qty == 0.0

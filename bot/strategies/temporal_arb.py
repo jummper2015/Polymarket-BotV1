@@ -248,6 +248,8 @@ class _TAWindow:
     mart_hedge_qty:  float               = 0.0   # filled shares of the most recent round
     mh_first_ask_at_r1: Optional[float]  = None  # first_leg ask at round-1 fire (compat)
     last_mh_round_at: Optional[float]    = None  # time.time() of the most recent round
+    mart_hedge_round_qty: float          = 0.0   # qty efectiva de la ronda más reciente;
+                                                 # usada como base para la siguiente ronda (compounding).
 
 
 
