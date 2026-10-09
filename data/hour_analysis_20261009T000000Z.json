@@ -1,0 +1,53 @@
+{
+  "buckets": [
+    {
+      "avg_pnl": 0.15,
+      "max_loss": -0.2,
+      "max_win": 0.3,
+      "n_trades": 30,
+      "net_pnl": 4.5,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 14,
+      "win_rate": 0.6667
+    },
+    {
+      "avg_pnl": -0.1,
+      "max_loss": -0.3,
+      "max_win": 0.1,
+      "n_trades": 22,
+      "net_pnl": -2.2,
+      "strategy": "coin_flip_dog",
+      "symbol": "eth",
+      "utc_hour": 3,
+      "win_rate": 0.5
+    },
+    {
+      "avg_pnl": 0.16,
+      "max_loss": -0.1,
+      "max_win": 0.2,
+      "n_trades": 30,
+      "net_pnl": 4.8,
+      "strategy": "coin_flip_dog",
+      "symbol": "btc",
+      "utc_hour": 7,
+      "win_rate": 0.8667
+    }
+  ],
+  "filters": {
+    "min_trades": 20,
+    "min_winrate": 0.5
+  },
+  "generated_at_utc": "20261009T123453Z",
+  "lookback_days": 0,
+  "recommended_whitelist": {
+    "btc": [
+      7,
+      14
+    ]
+  },
+  "symbols": [
+    "btc",
+    "eth"
+  ]
+}
