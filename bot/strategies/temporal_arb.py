@@ -219,6 +219,7 @@ class _TAWindow:
     # Strike cached per window — one Binance call per 5-min window.
     strike:              Optional[float] = None
     logged_bailout:      bool            = False
+    logged_hold_cutoff:  bool            = False
     logged_complete:     bool            = False
     logged_flat:         bool            = False    # "mercado plano" already logged this window
     hedge_fired:         bool            = False    # Hedge Recovery already executed this window
@@ -629,6 +630,20 @@ def _observe(ctx: StrategyContext) -> None:
     # ── HALF_OPEN: pair completion + Hedge Recovery ───────────────────────────
     # Checked before IDLE so a reversion on the same tick isn't missed.
     if ta.phase == "half_open":
+        # Spec 2026-10-08: cutoff estricto. Ningún path de coverage compra
+        # si secs < cutoff. La pata abierta se queda hasta resolución.
+        # Mart-Hedge (Path E) tiene su propio gate, así que este guard
+        # afecta A/B/C/D únicamente.
+        hold_due_to_cutoff = secs < q_cut
+        if hold_due_to_cutoff and not ta.logged_hold_cutoff:
+            ta.logged_hold_cutoff = True
+            logger.info(
+                f"[TA] ⏭ HOLD_CUTOFF  primera_pata={ta.first_side}@{ta.first_px:.3f} "
+                f"secs={secs:.0f} < cutoff={q_cut:.0f}  → mantener hasta resolución",
+                icon="⏭",
+            )
+            state.record_observation("TA_HOLD_CUTOFF")
+
         second_side = "DOWN" if ta.first_side == "UP" else "UP"
         second_ask  = ask_dn if second_side == "DOWN" else ask_up
 
@@ -813,8 +828,10 @@ def _observe(ctx: StrategyContext) -> None:
         # ventana — cada intento es independiente.
         # Spec 2026-10-06: NO buscar Edge (Path D / Path A) después que el
         # Mart-Hedge haya disparado. Mart-Hedge es recuperación, no cobertura.
+        # Spec 2026-10-08: cutoff strict gate — skip if secs < cutoff.
         if (
-            profit_lock_enabled
+            not hold_due_to_cutoff
+            and profit_lock_enabled
             and ta.mart_hedge_rounds == 0
             and ta.first_leg_filled_at is not None
             and ta.first_shares_filled > 0
@@ -853,8 +870,10 @@ def _observe(ctx: StrategyContext) -> None:
 
         # Path A: normal pair completion — second leg is cheap enough
         # Spec 2026-10-06: NO buscar Edge si Mart-Hedge ya disparó esta ventana.
+        # Spec 2026-10-08: cutoff strict gate — skip if secs < cutoff.
         if (
-            ta.mart_hedge_rounds == 0
+            not hold_due_to_cutoff
+            and ta.mart_hedge_rounds == 0
             and second_ask is not None
             and ta.first_px is not None
             and second_leg_worthwhile(ta.first_px, second_ask, cap)
@@ -894,8 +913,12 @@ def _observe(ctx: StrategyContext) -> None:
             time.time() - ta.first_leg_filled_at
             if ta.first_leg_filled_at is not None else None
         )
-        if hedge_enabled and not ta.hedge_fired and ta.first_px is not None \
-                and time_in_trade is not None and time_in_trade >= grace_secs:
+        # Spec 2026-10-08: cutoff strict gate — skip if secs < cutoff.
+        if (
+            not hold_due_to_cutoff
+            and hedge_enabled and not ta.hedge_fired and ta.first_px is not None
+            and time_in_trade is not None and time_in_trade >= grace_secs
+        ):
             # current ask of the FIRST leg (the losing side)
             current_first_ask = ask_up if ta.first_side == "UP" else ask_dn
             # ask of the HEDGE side (opposite)
@@ -937,8 +960,10 @@ def _observe(ctx: StrategyContext) -> None:
         # the official TWAP-60s (Polymarket resolution oracle) strongly
         # opposes our position. Earlier signal than Path B because it uses
         # the resolution oracle's projected winner, not the spot price.
+        # Spec 2026-10-08: cutoff strict gate — skip if secs < cutoff.
         if (
-            twap_hedge_enabled
+            not hold_due_to_cutoff
+            and twap_hedge_enabled
             and not ta.hedge_fired
             and secs < 60.0
             and ta.first_px is not None
@@ -990,6 +1015,19 @@ def _observe(ctx: StrategyContext) -> None:
                         ta.phase = "hedged"
                         state.record_observation("TA_TWAP_HEDGE")
                         return
+
+        # Bailout: time ran out — first leg resolves normally (win or loss)
+        if secs <= bail_sec and not ta.logged_bailout:
+            ta.logged_bailout = True
+            ta.phase = "closed"
+            logger.info(
+                f"[TA] ⏭ BAILOUT  primera_pata={ta.first_side}@{ta.first_px:.3f}"
+                f"  segunda no disponible (left={secs:.0f}s)"
+                f"  → primera pata se resuelve normalmente",
+                icon="⏭",
+            )
+            state.record_skip("TA_BAILOUT")
+            return
 
         # Path E: Martingale hedge (revised 2026-10-05 — side-change filter,
         # bugfix 2026-10-05 13:30 UTC: el round 1 también requiere cambio de
@@ -1210,19 +1248,6 @@ def _observe(ctx: StrategyContext) -> None:
             # Si no se cumple side_changed → HOLD
             # (no se abre round 2 este tick; se vuelve a evaluar
             # en el siguiente observe tick).
-
-        # Bailout: time ran out — first leg resolves normally (win or loss)
-        if secs <= bail_sec and not ta.logged_bailout:
-            ta.logged_bailout = True
-            ta.phase = "closed"
-            logger.info(
-                f"[TA] ⏭ BAILOUT  primera_pata={ta.first_side}@{ta.first_px:.3f}"
-                f"  segunda no disponible (left={secs:.0f}s)"
-                f"  → primera pata se resuelve normalmente",
-                icon="⏭",
-            )
-            state.record_skip("TA_BAILOUT")
-        return
 
     # ── IDLE: look for the mispriced leader ───────────────────────────────────
     if ta.phase == "idle":

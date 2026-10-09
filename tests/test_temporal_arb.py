@@ -511,7 +511,8 @@ class TestObserveHalfOpen:
         tokens = _make_tokens()
         trader = _make_trader()
         win = _TAWindow(window_ts=tokens.window_ts, phase="half_open",
-                        first_side="UP", first_px=0.48, strike=STRIKE)
+                        first_side="UP", first_px=0.48, strike=STRIKE,
+                        logged_hold_cutoff=True)
         self._call(state, tokens, trader, win, secs=45.0)  # ≤ bail_sec=60
         assert win.phase == "closed"
         assert "TA_BAILOUT" in skips
@@ -535,7 +536,9 @@ class TestObserveHalfOpen:
         with margin -$300 (well above ta_twap_hedge_margin=50).
         ta_twap_hedge_enabled=True (default is False; we opt in for this test).
 
-        Expected: bot buys DOWN as hedge, transitions to "hedged".
+        Spec 2026-10-08: TWAP hedge (Path C) is blocked by the cutoff guard
+        when secs < ta_entry_cutoff_sec. This test sets q_cut=30 so that
+        seconds_left=45 > q_cut and TWAP hedge can fire (it also needs secs<60).
         """
         from bot import polymarket_twap_tracker as twap_tracker
 
@@ -547,6 +550,7 @@ class TestObserveHalfOpen:
         state = _make_state(
             ask_up=0.81, ask_dn=0.35, spot_price=60_000.0,
             ta_twap_hedge_enabled=True,   # opt in
+            ta_entry_cutoff_sec=30.0,     # set low so 45s > q_cut
         )
         tokens = _make_tokens()
         trader = _make_trader(records=records)
@@ -554,6 +558,7 @@ class TestObserveHalfOpen:
             window_ts=tokens.window_ts, phase="half_open",
             first_side="UP", first_px=0.55, first_shares_filled=80.0,
             strike=STRIKE,
+            logged_bailout=True,
         )
 
         # Mock the TWAP tracker to project DOWN as winner with strong margin.
@@ -1693,6 +1698,7 @@ class TestObserveHalfOpen:
             mart_hedge_round_qty=160.0,  # compounding base from R1
             mh_first_ask_at_r1=0.30,
             last_mh_round_at=time.time() - 35,  # past 30s monitor window
+            logged_hold_cutoff=True,
         )
         with (
             patch("bot.strategies.temporal_arb._get_window", return_value=win),
@@ -2211,4 +2217,54 @@ def test_accumulating_stops_at_cutoff():
         "expected zero buys after cutoff — no tranche should fill past 120s"
     # No order placed, so no record_box_fill call either.
     assert len(trader._record_box_fill.call_args_list) == 0
+
+
+def test_half_open_no_paths_after_cutoff(monkeypatch):
+    """Cuando secs < cutoff al evaluar half_open, ningún path (A/B/C/D)
+    puede ejecutarse. La pata abierta se queda hasta resolución."""
+    from bot.strategies import temporal_arb
+    from bot.strategies.temporal_arb import _TAWindow
+
+    state = MagicMock()
+    state.ta_complete_cap = 0.82
+    state.ta_entry_cutoff_sec = 120.0
+    state.ta_bailout_sec = 60.0
+    state.ta_cancel_all_sec = 10.0
+    state.ta_grace_secs = 60.0
+    state.ta_hedge_enabled = False  # disable B so it doesn't block
+    state.ta_twap_hedge_enabled = False
+    state.ta_mart_hedge_enabled = False  # disabled → no Mart-Hedge either
+    state.ta_profit_lock_enabled = False
+    state.ta_hedge_drop_pct = 0.40
+    state.ta_hedge_max_sum = 0.92
+    state.spot_price = 86100.0
+    state.get_asks.return_value = (0.30, 0.30)  # cheap second leg → Path A would fire
+
+    tokens = MagicMock()
+    tokens.up_token_id = "tok-up"
+    tokens.down_token_id = "tok-dn"
+    tokens.window_ts = 3000
+
+    ta = _TAWindow(window_ts=3000, phase="half_open",
+                   first_side="DOWN", first_tok="tok-dn",
+                   first_px=0.50, first_shares_filled=20.0,
+                   first_cost_sum=10.0, strike=86050.0,
+                   first_leg_filled_at=0.0, entry_timestamp=0.0)
+    ta.first_shares_target = 20.0
+    temporal_arb._WINDOWS["btc"] = ta
+
+    ctx = MagicMock()
+    ctx.state = state
+    ctx.symbol = "btc"
+    ctx.tokens = tokens
+    ctx.trader = MagicMock()
+    ctx.seconds_left = 100.0  # below 120 cutoff, but cheap second leg
+
+    place_calls = []
+    monkeypatch.setattr(ctx.trader, "_place_taker_order",
+                        lambda *a, **kw: place_calls.append(a) or "oid")
+
+    temporal_arb._observe(ctx)
+    assert place_calls == [], "expected no buys after cutoff"
+    # Phase stays half_open (we don't clobber it; the position still resolves at end)
 
