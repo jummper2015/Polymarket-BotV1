@@ -166,7 +166,8 @@ PROFIT_LOCK_CAP_DEFAULT      = 1.00
 #        round 2 → round1_qty × (2 + loss_pct_round1_leg)
 MART_HEDGE_ENABLED_DEFAULT   = False
 MART_HEDGE_MIN_SECS_DEFAULT  = 5    # buffer mínimo desde el fill de la 1ª pata
-MART_HEDGE_MULT_DEFAULT      = 2.5  # Spec usuario 2026-10-06: cada ronda = base × 2.5
+MART_HEDGE_MULT_DEFAULT      = 2.0  # Spec 2026-10-08: compounding ×2 sobre base de primera pata.
+                                   # Antes 2.5 (constante). Ahora 2.0 (compounding).
 MART_HEDGE_MAX_ROUNDS_DEFAULT = 2
 MART_HEDGE_MONITOR_SECS_DEFAULT = 30.0  # ventana de monitoreo entre rondas
 MART_HEDGE_LOSS_FALLBACK_DEFAULT = 0.50  # fallback si pérdida ≥ 50% sin cambio de lado

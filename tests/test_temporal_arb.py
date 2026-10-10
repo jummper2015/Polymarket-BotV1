@@ -1018,6 +1018,10 @@ class TestObserveHalfOpen:
 
     # ── Martingale hedge (Path E) ────────────────────────────────────────────
 
+    def test_default_mart_hedge_mult_is_2(self):
+        from bot.strategies import temporal_arb
+        assert temporal_arb.MART_HEDGE_MULT_DEFAULT == 2.0
+
     def test_mart_hedge_defaults(self):
         from bot.strategies.temporal_arb import (
             MART_HEDGE_ENABLED_DEFAULT,
@@ -1031,8 +1035,8 @@ class TestObserveHalfOpen:
         # 2026-10-05: round 1 fires quickly when the first leg goes in loss.
         # 30s is too long — the buffer is just an anti-noise gate. Default 5s.
         assert MART_HEDGE_MIN_SECS_DEFAULT == 5
-        # 2026-10-06: spec usuario — cada ronda = base × 2.5 constante
-        assert MART_HEDGE_MULT_DEFAULT == 2.5
+        # 2026-10-08: compounding ×2 sobre base de primera pata.
+        assert MART_HEDGE_MULT_DEFAULT == 2.0
         # 2026-09-28: max_rounds default lowered 3 → 2 to match the round-2
         # reversal-gated design (round 1 + round 2 only on BTC reversal).
         # 2026-10-05: keeps 2 (round 1 + round 2 condicional a cambio de lado).
