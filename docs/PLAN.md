@@ -360,3 +360,19 @@ Plan — Filtros de régimen, multi-activo y registro de estrategias
      construye el instrumento para decidir; no convierte el bot en rentable. La
      única cifra con respaldo sólido es que lo que hay hoy pierde dinero de forma
      evitable.
+
+---
+
+## Cambios post-2026-10-08 — Mart-Hedge compounding + cutoff estricto + filtro horario
+
+- **Mart-Hedge compounding**: R_n = R_{n-1} × mult. Default mult=2.0, max_rounds=2. Spec en `docs/superpowers/specs/2026-10-08-temporal-arb-fixes-design.md`.
+- **Cutoff estricto 120s**: bloquea toda compra post-cutoff (accumulating, Path A/B/C/D, Mart-Hedge). LPT queda fuera (su ventana ya respeta el cutoff).
+- **Filtro horario**: whitelist derivada de `scripts/analyze_trade_hours.py`. Vacía por defecto. UI en `/settings` con tres inputs CSV (BTC, ETH, SOL).
+
+### Comando de re-análisis
+```bash
+sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  root@76.13.251.202 "cd /opt/polymarket-bot && source venv/bin/activate && \
+  sqlite3 data/streak_snapper.db '.dump trades' | head -100"
+# Pull DB → correr analyze_trade_hours.py localmente → actualizar bot_config.
+```

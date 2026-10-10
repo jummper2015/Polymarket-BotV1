@@ -917,3 +917,11 @@ Flat: `shares = max(5, round(CFD_BASE_BET / underdog_ask))`. Sin martingale.
       mecanismo que la Etapa 2 de spread_harvest
 - [ ] Medir si `ss_fade` y `coin_flip_dog` correlacionan (misma ventana activa
       frecuentemente): si sí, hay que decidir si coexisten o si CFD reemplaza fade
+
+---
+
+### 2026-10-08 — Mart-Hedge compounding + cutoff estricto (medición pendiente)
+- Cambio: `ta_mart_hedge_mult` ahora es **compounding** (R_n = R_{n-1} × mult, default 2.0) en lugar de constante.
+- Cambio: cutoff 120s ahora **estricto** (todas las fases de compra gating).
+- Cambio: whitelist horario derivada de análisis de producción (ver `scripts/analyze_trade_hours.py`).
+- **Medición (7d post-deploy)**: tasa de mart-hedge R2 cerradas con profit, P&L agregado de la ventana vs baseline, distribución de horas con profit. Pendiente tras validación paper.
