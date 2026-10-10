@@ -1681,6 +1681,7 @@ class TestObserveHalfOpen:
             ta_mart_hedge_mult=2.0, ta_mart_hedge_max_rounds=2,
             ta_grace_secs=60.0,
             ta_mh_monitor_secs=30.0,
+            ta_entry_cutoff_sec=30.0,  # set low so 100s > q_cut (R2 cutoff gate)
             logged_bailout=True,
         )
         tokens = _make_tokens()
@@ -2267,4 +2268,56 @@ def test_half_open_no_paths_after_cutoff(monkeypatch):
     temporal_arb._observe(ctx)
     assert place_calls == [], "expected no buys after cutoff"
     # Phase stays half_open (we don't clobber it; the position still resolves at end)
+
+
+# ── Task 7: Mart-Hedge cutoff gate (R1 and R2) ───────────────────────────────
+
+def test_mh_r1_cutoff_blocks_fire(monkeypatch):
+    """Mart-Hedge R1 no dispara aunque side_changed=True si secs < cutoff."""
+    from bot.strategies import temporal_arb
+    from bot import polymarket_twap_tracker as twap_tracker
+
+    twap_tracker.clear_all()
+    ta, ctx = _build_mart_hedge_scenario(
+        first_shares_filled=30.0, first_px=0.50,
+        mart_hedge_mult=2.0, side_changed=True,
+    )
+    ctx.seconds_left = 100.0  # below cutoff (120), but side_changed True
+    ctx.state.ta_entry_cutoff_sec = 120.0
+
+    place_calls = []
+    monkeypatch.setattr(ctx.trader, "_place_taker_order",
+                        lambda *a, **kw: place_calls.append(a) or "oid")
+
+    temporal_arb._observe(ctx)
+    assert place_calls == [], f"expected no MH fire post-cutoff, got {place_calls}"
+    assert ta.mart_hedge_rounds == 0
+
+
+def test_mh_r2_cutoff_blocks_fire(monkeypatch):
+    """Mart-Hedge R2 no dispara aunque side_changed=True si secs < cutoff."""
+    from bot.strategies import temporal_arb
+    from bot import polymarket_twap_tracker as twap_tracker
+
+    twap_tracker.clear_all()
+    ta, ctx = _build_mart_hedge_scenario(
+        first_shares_filled=30.0, first_px=0.50,
+        mart_hedge_mult=2.0, side_changed=True,
+    )
+    ta.mart_hedge_rounds = 1
+    ta.mart_hedge_side = "UP"
+    ta.mart_hedge_px = 0.55
+    ta.mart_hedge_qty = 60.0
+    ta.mart_hedge_round_qty = 60.0
+    ta.last_mh_round_at = 0.0
+    ctx.seconds_left = 100.0  # below cutoff
+    ctx.state.spot_price = 86080.0  # side changed from UP→DOWN
+
+    place_calls = []
+    monkeypatch.setattr(ctx.trader, "_place_taker_order",
+                        lambda *a, **kw: place_calls.append(a) or "oid")
+
+    temporal_arb._observe(ctx)
+    assert place_calls == [], f"expected no R2 post-cutoff, got {place_calls}"
+    assert ta.mart_hedge_rounds == 1
 

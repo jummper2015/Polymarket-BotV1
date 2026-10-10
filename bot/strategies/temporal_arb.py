@@ -1109,6 +1109,7 @@ def _observe(ctx: StrategyContext) -> None:
             and (time.time() - ta.first_leg_filled_at) >= mart_hedge_min_secs
             and current_first_ask is not None
             and opp_ask is not None
+            and secs >= q_cut  # NEW: cutoff gate for Mart-Hedge R1
             and (
                 side_changed_e1
                 or loss_pct >= mart_hedge_loss_fallback
@@ -1181,6 +1182,7 @@ def _observe(ctx: StrategyContext) -> None:
             and ta.mart_hedge_px > 0
             and ta.last_mh_round_at is not None
             and (time.time() - ta.last_mh_round_at) >= mh_monitor_secs
+            and secs >= q_cut  # NEW: cutoff gate for Mart-Hedge R2
         ):
             # ask actual de la pata del round 1 — sólo se usa para calcular
             # el loss_pct que define la qty de la nueva ronda. El trigger
