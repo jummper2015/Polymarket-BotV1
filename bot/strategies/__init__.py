@@ -15,7 +15,7 @@ from typing import Any, Iterable
 
 from ..runtime_field import RuntimeField
 from .base import StrategyContext, StrategyDescriptor
-from . import box_builder, coin_flip_dog, temporal_arb, near_res, impulse_hedge
+from . import box_builder, coin_flip_dog, temporal_arb, near_res, impulse_hedge, market_hours_filter
 # ss_fade y ss_trend desactivadas:
 #   - ss_fade:  medida +3.74%/op (Fase 8) pero se descontinúa en esta fase.
 #   - ss_trend: medida −4.22%/op (Fase 8, t=−2.61). Sin edge.
@@ -25,6 +25,7 @@ from . import box_builder, coin_flip_dog, temporal_arb, near_res, impulse_hedge
 # Declaration order is the display order. Execution order is by descending
 # priority, so the tie-break doesn't depend on how this list is sorted.
 _REGISTERED: tuple[StrategyDescriptor, ...] = (
+    market_hours_filter.DESCRIPTOR,
     box_builder.DESCRIPTOR,
     coin_flip_dog.DESCRIPTOR,
     temporal_arb.DESCRIPTOR,
