@@ -83,13 +83,13 @@ DESCRIPTOR = StrategyDescriptor(
     is_enabled=lambda state: True,  # always on; whitelist emptiness decides
     priority=90,
     params=(
-        RuntimeField("whitelist_hours_btc", "string",
+        RuntimeField("whitelist_hours_btc", "csv",
                      label="Whitelist horas BTC (CSV)",
                      hint="Horas UTC 0-23 separadas por coma. Vacio = sin filtro."),
-        RuntimeField("whitelist_hours_eth", "string",
+        RuntimeField("whitelist_hours_eth", "csv",
                      label="Whitelist horas ETH (CSV)",
                      hint="Horas UTC 0-23 separadas por coma. Vacio = sin filtro."),
-        RuntimeField("whitelist_hours_sol", "string",
+        RuntimeField("whitelist_hours_sol", "csv",
                      label="Whitelist horas SOL (CSV)",
                      hint="Horas UTC 0-23 separadas por coma. Vacio = sin filtro."),
     ),

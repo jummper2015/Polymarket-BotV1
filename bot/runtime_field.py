@@ -88,6 +88,12 @@ class RuntimeField:
                 parsed = str(value).strip()
                 return _is_valid(parsed), parsed
 
+            if self.kind == "csv":
+                # Free-form CSV string — any non-empty value is accepted.
+                # Validation (integers 0-23) is client-side only in settings.js.
+                parsed = str(value).strip()
+                return True, parsed
+
             parsed = int(value) if self.kind == "int" else float(value)
         except (TypeError, ValueError):
             return False, None

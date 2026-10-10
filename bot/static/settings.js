@@ -29,6 +29,9 @@
       "ss_vol_min_pct",
       "ss_vol_max_pct",
       "ss_range_max_pct",
+      "whitelist_hours_btc",
+      "whitelist_hours_eth",
+      "whitelist_hours_sol",
     ],
     "chainlink-fields": [
       "cl_twap_enabled",
@@ -84,6 +87,10 @@
       control =
         `<input type="text" class="form-control form-control-sm" ` +
         `placeholder="13-21,21-24" ${common} />`;
+    } else if (field.kind === "csv") {
+      control =
+        `<input type="text" class="form-control form-control-sm" ` +
+        `placeholder="0,3,7,14,21" ${common} />`;
     } else {
       const attrs = [
         field.step != null ? `step="${field.step}"` : 'step="any"',
@@ -313,7 +320,27 @@
     return body;
   }
 
+  // Validate CSV inputs (integers 0-23) before saving.
+  function validateCsvInputs() {
+    const csvInputs = document.querySelectorAll('[data-kind="csv"]');
+    for (const input of csvInputs) {
+      const csv = input.value.trim();
+      if (!csv) continue; // empty is fine (no filter)
+      const tokens = csv.split(',').map(s => s.trim()).filter(Boolean);
+      for (const t of tokens) {
+        const n = parseInt(t, 10);
+        if (!Number.isInteger(n) || n < 0 || n > 23) {
+          alert(`Valor inválido en whitelist: "${t}". Use enteros 0–23 separados por coma.`);
+          input.focus();
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
   $("btn-apply").addEventListener("click", async () => {
+    if (!validateCsvInputs()) return;
     try {
       const resp = await fetch("/config", {
         method: "POST",
@@ -353,6 +380,26 @@
       showMsg("✗ Error: " + err.message, "text-danger");
     }
   });
+
+  // Security: clear guards (does NOT touch config — only the bot_guards table).
+  const securityResetBtn = $("security-reset-btn");
+  if (securityResetBtn) {
+    securityResetBtn.addEventListener("click", async () => {
+      if (!confirm("¿Resetear los contadores de security guards en la DB? (daily_spend, consecutive_losses, baseline horaria)")) return;
+      try {
+        const resp = await fetch("/settings/security/reset?symbol=btc", { method: "POST", cache: "no-store" });
+        if (resp.status === 401) { window.location.href = "/login"; return; }
+        const data = await resp.json();
+        if (resp.ok && data.ok) {
+          showMsg("✓ Security guards reseteados", "text-success");
+        } else {
+          showMsg("✗ " + (data.error || "Error al resetear"), "text-danger");
+        }
+      } catch (err) {
+        showMsg("✗ Error: " + err.message, "text-danger");
+      }
+    });
+  }
 
   loadState();
 })();
