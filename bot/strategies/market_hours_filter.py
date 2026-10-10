@@ -77,6 +77,7 @@ DESCRIPTOR = StrategyDescriptor(
         "Whitelist derivada del analisis de P&L historico."
     ),
     notes="Prioridad 90 — corre antes que cualquier otra estrategia.",
+    enabled_when={"field": "mhf_enabled", "values": [True]},
     evaluate=_filter_evaluate,
     observe=lambda ctx: None,
     is_enabled=lambda state: True,  # always on; whitelist emptiness decides

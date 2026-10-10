@@ -156,6 +156,9 @@ BASE_FIELDS: tuple[RuntimeField, ...] = (
         label="Divergencia máxima", step=0.001,
     ),
     RuntimeField("cl_record_ticks", "bool", label="Grabar ticks"),
+
+    # ── Market Hours Filter ────────────────────────────────────────────
+    RuntimeField("mhf_enabled", "bool", label="Market Hours Filter activo"),
 )
 
 # The registry contributes the per-strategy half. Declaring a parameter in a

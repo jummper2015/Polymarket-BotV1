@@ -252,6 +252,12 @@ class BotState:
         self.ss_vol_min_pct: float = 0.0
         self.ss_vol_max_pct: float = 100.0
         self.ss_range_max_pct: float = 100.0
+        # Per-symbol UTC hour whitelist for market-hours filter. CSV "0,7,14".
+        # Empty = no filter applied (safe degradation).
+        self.mhf_enabled: bool = False
+        self.whitelist_hours_btc: str = ""
+        self.whitelist_hours_eth: str = ""
+        self.whitelist_hours_sol: str = ""
         # Not a regime filter: on by default. A window that is already old can
         # only fill the side the market has written off, because the cap prices
         # the favourite out.
@@ -775,6 +781,10 @@ class BotState:
                 "ss_vol_min_pct": self.ss_vol_min_pct,
                 "ss_vol_max_pct": self.ss_vol_max_pct,
                 "ss_range_max_pct": self.ss_range_max_pct,
+                "mhf_enabled": self.mhf_enabled,
+                "whitelist_hours_btc": self.whitelist_hours_btc,
+                "whitelist_hours_eth": self.whitelist_hours_eth,
+                "whitelist_hours_sol": self.whitelist_hours_sol,
                 "ss_max_entry_age": self.ss_max_entry_age,
                 "skips": dict(self.skips),
                 "observations": dict(self.observations),
