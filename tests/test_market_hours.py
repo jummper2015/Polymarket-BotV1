@@ -32,7 +32,7 @@ class TestIsHourWhitelisted:
     def test_invalid_entries_ignored(self):
         # 24 is invalid (out of range), "abc" is invalid
         assert is_hour_whitelisted(7, "7,24,abc") is True
-        assert is_hour_whitelisted(14, "24,abc") is False  # only invalid -> whitelist empty -> open
+        assert is_hour_whitelisted(14, "24,abc") is False  # only invalid -> whitelist empty -> blocks all
 
 
 class TestCurrentUtcHour:

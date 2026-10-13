@@ -49,11 +49,6 @@ def current_utc_hour() -> int:
     return ts.tm_hour
 
 
-class _FilterStrategy:
-    """Marker — the actual gate logic lives in evaluate."""
-    pass
-
-
 def _filter_evaluate(ctx: StrategyContext) -> Optional[list]:
     """Descriptor callback. Returns [] when current hour is blocked,
     None when allowed (so the descriptor doesn't bias other strategies).
@@ -80,7 +75,7 @@ DESCRIPTOR = StrategyDescriptor(
     enabled_when={"field": "mhf_enabled", "values": [True]},
     evaluate=_filter_evaluate,
     observe=lambda ctx: None,
-    is_enabled=lambda state: True,  # always on; whitelist emptiness decides
+    is_enabled=lambda state: bool(getattr(state, "mhf_enabled", False)),  # off by default unless toggled
     priority=90,
     params=(
         RuntimeField("whitelist_hours_btc", "csv",

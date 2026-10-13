@@ -40,7 +40,7 @@ def _descriptor(sid, **kw):
 
 class TestRegistry:
     def test_the_registered_strategies(self):
-        assert strategies.ids() == ("box_builder", "coin_flip_dog", "temporal_arb", "near_res", "impulse_hedge")
+        assert strategies.ids() == ("market_hours_filter", "box_builder", "coin_flip_dog", "temporal_arb", "near_res", "impulse_hedge")
 
     def test_ids_match_what_trades_stores(self):
         """`trades.strategy` holds these strings; KPIs group by them."""
@@ -55,9 +55,12 @@ class TestRegistry:
         )
 
     def test_enabled_order_is_by_priority(self):
-        state = SimpleNamespace(bb_enabled=True, cfd_enabled=True)
+        # market_hours_filter has priority=90, same as box_builder; stable sort
+        # by -priority keeps insertion order (mhf is first in _REGISTERED).
+        state = SimpleNamespace(bb_enabled=True, cfd_enabled=True, mhf_enabled=True)
         ids = [d.id for d in strategies.enabled_for(state)]
-        assert ids[0] == "box_builder"
+        assert ids[0] == "market_hours_filter"
+        assert "box_builder" in ids
         assert "coin_flip_dog" in ids
 
     def test_unknown_strategy_is_none(self):
@@ -105,12 +108,14 @@ class TestParamsFlowIntoRuntimeFields:
 class TestEnablement:
     def test_box_builder_and_cfd_enabled_independently(self):
         state = SimpleNamespace(bb_enabled=True, cfd_enabled=True,
-                                ta_enabled=False, nrc_enabled=False)
+                                ta_enabled=False, nrc_enabled=False,
+                                mhf_enabled=True)
         ids = [d.id for d in strategies.enabled_for(state)]
-        assert set(ids) == {"box_builder", "coin_flip_dog"}
+        assert set(ids) == {"market_hours_filter", "box_builder", "coin_flip_dog"}
 
     def test_both_disabled(self):
-        state = SimpleNamespace(bb_enabled=False, cfd_enabled=False)
+        state = SimpleNamespace(bb_enabled=False, cfd_enabled=False,
+                                mhf_enabled=False)
         assert strategies.enabled_for(state) == []
 
     def test_a_descriptor_that_raises_is_off(self):
@@ -225,14 +230,15 @@ class TestEvaluate:
 class TestToJson:
     def test_shape(self):
         state = SimpleNamespace(bb_enabled=False, cfd_enabled=False,
-                                ta_enabled=False, nrc_enabled=False)
+                                ta_enabled=False, nrc_enabled=False,
+                                mhf_enabled=True)
         payload = strategies.to_json(state)
         assert [s["id"] for s in payload] == [
-            "box_builder", "coin_flip_dog", "temporal_arb", "near_res",
+            "market_hours_filter", "box_builder", "coin_flip_dog", "temporal_arb", "near_res",
             "impulse_hedge",
         ]
 
-        bb = payload[0]
+        bb = payload[1]
         assert bb["enabled"] is False
         assert bb["name"] and bb["description"]
         assert any(p["name"] == "bb_bid_sum_cap" for p in bb["params"])

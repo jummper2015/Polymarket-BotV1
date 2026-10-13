@@ -1116,8 +1116,8 @@ def _observe(ctx: StrategyContext) -> None:
                 or loss_pct >= mart_hedge_loss_fallback
             )
         ):
-            # Spec usuario 2026-10-06: cada ronda = base × 2.5 constante
-            # (sin compounding ni ajuste por pérdida). qty round 1 = first_shares × mult
+            # Spec 2026-10-06: compounding — cada ronda = first_shares × mult (anclado
+            # al inicial, NO compounding sobre round1_qty). qty round 1 = first_shares × mult
             mart_qty = round(
                 ta.first_shares_filled * mart_hedge_mult, 4
             )
