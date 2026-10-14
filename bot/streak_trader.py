@@ -361,7 +361,9 @@ class StreakSnapperTrader(threading.Thread):
                     signals.extend(descriptor.evaluate(ctx))
                 except Exception as exc:
                     # One broken strategy must not take the window down with it.
-                    logger.error(
+                    # Spec 2026-10-14: bot.logger exposes info/warn/ok, not error.
+                    # Bugfix: use warn to match the project's logger API.
+                    logger.warn(
                         f"[M$] {descriptor.id} falló al evaluar: {exc}", icon="💥"
                     )
 
