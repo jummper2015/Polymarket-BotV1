@@ -49,9 +49,14 @@ def current_utc_hour() -> int:
     return ts.tm_hour
 
 
-def _filter_evaluate(ctx: StrategyContext) -> Optional[list]:
-    """Descriptor callback. Returns [] when current hour is blocked,
-    None when allowed (so the descriptor doesn't bias other strategies).
+def _filter_evaluate(ctx: StrategyContext) -> list:
+    """Descriptor callback. Always returns a list (compatible with
+    `signals.extend(evaluate(ctx))` in streak_trader).
+
+    The market-hours filter is a pure BLOCK gate, not a signal producer.
+    When the current hour is OUT of the whitelist, we return `[]` and
+    log a skip. When the hour IS in the whitelist, we return `[]` and
+    let downstream strategies (temporal_arb, etc.) decide.
     """
     state = ctx.state
     symbol = (ctx.symbol or "").lower()
@@ -59,7 +64,15 @@ def _filter_evaluate(ctx: StrategyContext) -> Optional[list]:
     whitelist_csv = getattr(state, field_name, "") or ""
     hour = current_utc_hour()
     if is_hour_whitelisted(hour, whitelist_csv):
-        return None
+        return []  # allowed: don't generate signals, don't block others
+    # blocked: return empty signals (downstream strategies still run, but
+    # the operator has been notified via the log line below).
+    from .. import logger
+    logger.warn(
+        f"[M$] MHF_BLOCK  symbol={symbol}  hour_utc={hour}  "
+        f"whitelist={whitelist_csv!r}  → no signal this window",
+        icon="🚫",
+    )
     return []
 
 

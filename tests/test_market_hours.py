@@ -43,13 +43,15 @@ class TestCurrentUtcHour:
 
 
 class TestFilterEvaluate:
-    def test_returns_none_when_whitelisted(self):
+    def test_returns_empty_list_when_whitelisted(self):
+        # Spec 2026-10-14: returns [] (not None) so the calling
+        # `signals.extend(evaluate(ctx))` works in streak_trader.
         state = MagicMock()
         state.whitelist_hours_btc = f"{current_utc_hour()}"  # always allow
         ctx = MagicMock()
         ctx.state = state
         ctx.symbol = "btc"
-        assert _filter_evaluate(ctx) is None
+        assert _filter_evaluate(ctx) == []
 
     def test_returns_empty_list_when_blocked(self):
         state = MagicMock()
@@ -66,7 +68,7 @@ class TestFilterEvaluate:
         ctx = MagicMock()
         ctx.state = state
         ctx.symbol = "btc"
-        assert _filter_evaluate(ctx) is None
+        assert _filter_evaluate(ctx) == []
 
 
 class TestDescriptor:
