@@ -1,0 +1,290 @@
+{
+  "buckets": [
+    {
+      "avg_pnl": 0.2868,
+      "max_loss": -66.6,
+      "max_win": 42.3,
+      "n_trades": 68,
+      "net_pnl": 19.5,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 1,
+      "win_rate": 0.5147
+    },
+    {
+      "avg_pnl": -0.696,
+      "max_loss": -67.5,
+      "max_win": 46.8,
+      "n_trades": 85,
+      "net_pnl": -59.16,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 2,
+      "win_rate": 0.4941
+    },
+    {
+      "avg_pnl": -1.8315,
+      "max_loss": -81.9,
+      "max_win": 52.2,
+      "n_trades": 80,
+      "net_pnl": -146.52,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 3,
+      "win_rate": 0.475
+    },
+    {
+      "avg_pnl": -2.269,
+      "max_loss": -70.2,
+      "max_win": 54.9,
+      "n_trades": 63,
+      "net_pnl": -142.95,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 4,
+      "win_rate": 0.4921
+    },
+    {
+      "avg_pnl": 0.1853,
+      "max_loss": -62.1,
+      "max_win": 49.5,
+      "n_trades": 51,
+      "net_pnl": 9.45,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 5,
+      "win_rate": 0.5294
+    },
+    {
+      "avg_pnl": -1.6675,
+      "max_loss": -67.23,
+      "max_win": 50.4,
+      "n_trades": 65,
+      "net_pnl": -108.39,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 6,
+      "win_rate": 0.4923
+    },
+    {
+      "avg_pnl": -0.45,
+      "max_loss": -72.0,
+      "max_win": 50.4,
+      "n_trades": 63,
+      "net_pnl": -28.35,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 7,
+      "win_rate": 0.4921
+    },
+    {
+      "avg_pnl": 0.457,
+      "max_loss": -66.6,
+      "max_win": 64.8,
+      "n_trades": 81,
+      "net_pnl": 37.02,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 8,
+      "win_rate": 0.5062
+    },
+    {
+      "avg_pnl": -1.0542,
+      "max_loss": -77.4,
+      "max_win": 46.98,
+      "n_trades": 78,
+      "net_pnl": -82.23,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 9,
+      "win_rate": 0.4872
+    },
+    {
+      "avg_pnl": -2.084,
+      "max_loss": -70.2,
+      "max_win": 48.6,
+      "n_trades": 77,
+      "net_pnl": -160.47,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 10,
+      "win_rate": 0.5065
+    },
+    {
+      "avg_pnl": 0.3476,
+      "max_loss": -60.3,
+      "max_win": 46.8,
+      "n_trades": 85,
+      "net_pnl": 29.55,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 11,
+      "win_rate": 0.5176
+    },
+    {
+      "avg_pnl": 0.0939,
+      "max_loss": -69.3,
+      "max_win": 38.88,
+      "n_trades": 61,
+      "net_pnl": 5.73,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 12,
+      "win_rate": 0.5082
+    },
+    {
+      "avg_pnl": -1.9179,
+      "max_loss": -75.6,
+      "max_win": 51.3,
+      "n_trades": 86,
+      "net_pnl": -164.94,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 13,
+      "win_rate": 0.5
+    },
+    {
+      "avg_pnl": -0.2593,
+      "max_loss": -73.8,
+      "max_win": 54.27,
+      "n_trades": 73,
+      "net_pnl": -18.93,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 14,
+      "win_rate": 0.4932
+    },
+    {
+      "avg_pnl": -0.572,
+      "max_loss": -67.5,
+      "max_win": 56.7,
+      "n_trades": 75,
+      "net_pnl": -42.9,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 15,
+      "win_rate": 0.48
+    },
+    {
+      "avg_pnl": 0.5125,
+      "max_loss": -58.5,
+      "max_win": 44.1,
+      "n_trades": 48,
+      "net_pnl": 24.6,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 16,
+      "win_rate": 0.4792
+    },
+    {
+      "avg_pnl": -0.1338,
+      "max_loss": -67.5,
+      "max_win": 53.1,
+      "n_trades": 65,
+      "net_pnl": -8.7,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 17,
+      "win_rate": 0.4769
+    },
+    {
+      "avg_pnl": 0.1019,
+      "max_loss": -68.4,
+      "max_win": 45.9,
+      "n_trades": 48,
+      "net_pnl": 4.89,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 18,
+      "win_rate": 0.5208
+    },
+    {
+      "avg_pnl": -2.3598,
+      "max_loss": -55.8,
+      "max_win": 45.0,
+      "n_trades": 44,
+      "net_pnl": -103.83,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 19,
+      "win_rate": 0.5227
+    },
+    {
+      "avg_pnl": 2.0921,
+      "max_loss": -69.3,
+      "max_win": 72.9,
+      "n_trades": 38,
+      "net_pnl": 79.5,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 20,
+      "win_rate": 0.5263
+    },
+    {
+      "avg_pnl": 1.8632,
+      "max_loss": -61.2,
+      "max_win": 27.9,
+      "n_trades": 19,
+      "net_pnl": 35.4,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 21,
+      "win_rate": 0.5789
+    },
+    {
+      "avg_pnl": -4.623,
+      "max_loss": -64.8,
+      "max_win": 47.7,
+      "n_trades": 50,
+      "net_pnl": -231.15,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 22,
+      "win_rate": 0.48
+    },
+    {
+      "avg_pnl": -1.2058,
+      "max_loss": -86.4,
+      "max_win": 72.0,
+      "n_trades": 52,
+      "net_pnl": -62.7,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 23,
+      "win_rate": 0.5
+    },
+    {
+      "avg_pnl": -1.5581,
+      "max_loss": -63.9,
+      "max_win": 46.8,
+      "n_trades": 80,
+      "net_pnl": -124.65,
+      "strategy": "temporal_arb",
+      "symbol": "btc",
+      "utc_hour": 0,
+      "win_rate": 0.5
+    }
+  ],
+  "filters": {
+    "min_trades": 20,
+    "min_winrate": 0.5
+  },
+  "generated_at_utc": "20261014T012053Z",
+  "lookback_days": 7,
+  "recommended_whitelist": {
+    "btc": [
+      1,
+      5,
+      8,
+      11,
+      12,
+      18,
+      20
+    ]
+  },
+  "symbols": [
+    "btc",
+    "eth",
+    "sol"
+  ]
+}

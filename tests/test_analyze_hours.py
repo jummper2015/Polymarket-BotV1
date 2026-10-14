@@ -22,30 +22,33 @@ from scripts.analyze_trade_hours import (
 def _make_db(tmp_path: Path) -> Path:
     db = tmp_path / "trades.db"
     conn = sqlite3.connect(db)
+    # Production schema: opened_at DATETIME (matches real bot/db.py).
     conn.execute(
-        "CREATE TABLE trades (id INTEGER PRIMARY KEY, created_at INTEGER, "
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY, opened_at TEXT, "
         "symbol TEXT, strategy TEXT, pnl REAL)"
     )
     base = datetime(2026, 10, 1, tzinfo=timezone.utc)
     rows = [
-        # hour 14, btc, temporal_arb: 25 trades, 16 winners, net +8.50
-        *[(int((base.replace(hour=14, minute=i)).timestamp()), "BTC", "temporal_arb",
+        # hour 14, btc, temporal_arb: 25 trades, 16 winners, net +5.00
+        *[(base.replace(hour=14, minute=i).strftime("%Y-%m-%d %H:%M:%S"),
+            "BTC", "temporal_arb",
             0.30 if i % 5 != 0 else -0.10)
            for i in range(25)],
         # hour 14, btc, temporal_arb: 5 more losers only
-        *[(int((base + timedelta(days=1, hours=14, minutes=i)).timestamp()), "BTC",
-            "temporal_arb", -0.20)
+        *[(base.replace(day=2, hour=14, minute=i).strftime("%Y-%m-%d %H:%M:%S"),
+            "BTC", "temporal_arb", -0.20)
            for i in range(5)],
-        # hour 3, eth, coin_flip_dog: 22 trades, 11 winners, net -3.00
-        *[(int((base + timedelta(days=i // 10, hours=3, minutes=i % 10)).timestamp()),
+        # hour 3, eth, coin_flip_dog: 22 trades, 11 winners, net -2.20
+        *[(base.replace(day=1 + i // 10, hour=3, minute=i % 10).strftime(
+            "%Y-%m-%d %H:%M:%S"),
             "ETH", "coin_flip_dog", 0.10 if i % 2 == 0 else -0.30)
            for i in range(22)],
-        # hour 7, btc, coin_flip_dog: 30 trades, 22 winners, net +5.00
-        *[(int((base + timedelta(days=i // 6, hours=7)).timestamp()), "BTC",
-            "coin_flip_dog", 0.20 if i % 8 != 0 else -0.10)
+        # hour 7, btc, coin_flip_dog: 30 trades, 22 winners, net +4.80
+        *[(base.replace(day=1 + i // 6, hour=7).strftime("%Y-%m-%d %H:%M:%S"),
+            "BTC", "coin_flip_dog", 0.20 if i % 8 != 0 else -0.10)
            for i in range(30)],
     ]
-    conn.executemany("INSERT INTO trades (created_at, symbol, strategy, pnl) VALUES (?,?,?,?)",
+    conn.executemany("INSERT INTO trades (opened_at, symbol, strategy, pnl) VALUES (?,?,?,?)",
                      rows)
     conn.commit()
     conn.close()
@@ -83,7 +86,7 @@ def test_recommend_whitelist_empty_when_no_data(tmp_path: Path):
     db = tmp_path / "empty.db"
     conn = sqlite3.connect(db)
     conn.execute(
-        "CREATE TABLE trades (id INTEGER PRIMARY KEY, created_at INTEGER, "
+        "CREATE TABLE trades (id INTEGER PRIMARY KEY, opened_at TEXT, "
         "symbol TEXT, strategy TEXT, pnl REAL)"
     )
     conn.close()

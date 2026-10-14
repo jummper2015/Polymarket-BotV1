@@ -20,7 +20,7 @@ import sqlite3
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -42,29 +42,32 @@ def fetch_trades(db_path: str, days: int | None) -> list[tuple]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
+    # Production schema: opened_at DATETIME (not created_at INTEGER as in
+    # earlier test fixtures). strftime returns ISO hour as integer 0-23.
     sql = (
-        "SELECT created_at, symbol, strategy, pnl FROM trades "
-        "WHERE pnl IS NOT NULL"
+        "SELECT strftime('%H', opened_at) AS utc_hour, symbol, strategy, pnl "
+        "FROM trades WHERE pnl IS NOT NULL"
     )
     params: list = []
     if days is not None:
-        cutoff = int(datetime.now(timezone.utc).timestamp()) - days * 86400
-        sql += " AND created_at >= ?"
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        sql += " AND opened_at >= ?"
         params.append(cutoff)
     rows = cur.execute(sql, params).fetchall()
     conn.close()
-    return [(r["created_at"], (r["symbol"] or "").lower(), r["strategy"], r["pnl"])
+    return [(int(r["utc_hour"]), (r["symbol"] or "").lower(), r["strategy"], r["pnl"])
             for r in rows]
 
 
 def bucket_by_hour(rows: list[tuple]) -> list[HourBucket]:
     """Group rows into (utc_hour, symbol, strategy) buckets with stats."""
     acc: dict[tuple[int, str, str], list[float]] = defaultdict(list)
-    for created_at, sym, strat, pnl in rows:
-        hr = datetime.fromtimestamp(created_at, tz=timezone.utc).hour
+    for utc_hour, sym, strat, pnl in rows:
         if not sym or not strat or pnl is None:
             continue
-        acc[(hr, sym, strat)].append(float(pnl))
+        acc[(utc_hour, sym, strat)].append(float(pnl))
     out: list[HourBucket] = []
     for (hr, sym, strat), pnls in acc.items():
         n = len(pnls)
