@@ -168,7 +168,9 @@ MART_HEDGE_ENABLED_DEFAULT   = False
 MART_HEDGE_MIN_SECS_DEFAULT  = 5    # buffer mínimo desde el fill de la 1ª pata
 MART_HEDGE_MULT_DEFAULT      = 2.0  # Spec 2026-10-08: compounding ×2 sobre base de primera pata.
                                    # Antes 2.5 (constante). Ahora 2.0 (compounding).
-MART_HEDGE_MAX_ROUNDS_DEFAULT = 2
+MART_HEDGE_MAX_ROUNDS_DEFAULT = 4  # Spec 2026-10-20: raised 2 → 4 (3 Mart-Hedge rounds).
+                                   # Compounding: R1=first×2, R2=first×4, R3=first×8.
+                                   # Operator can lower to 2/3 via /settings; max is 4.
 MART_HEDGE_MONITOR_SECS_DEFAULT = 30.0  # ventana de monitoreo entre rondas
 MART_HEDGE_LOSS_FALLBACK_DEFAULT = 0.50  # fallback si pérdida ≥ 50% sin cambio de lado
 
@@ -1734,9 +1736,9 @@ DESCRIPTOR = StrategyDescriptor(
         RuntimeField(
             "ta_mart_hedge_max_rounds", "int",
             label="Mart-Hedge rondas máx",
-            minimum=1, maximum=3, step=1,
-            hint="Cap de rondas consecutivas (default 2: round 1 + round 2 "
-                 "condicional a cambio de lado). Rev 2026-10-05.",
+            minimum=1, maximum=4, step=1,
+            hint="Cap de rondas consecutivas (default 4: R1+R2+R3 condicional a "
+                 "cambio de lado). Spec 2026-10-20 — raised from 2/3.",
         ),
         # ── Post-trade grace + Mart-Hedge monitor window (revised 2026-10-05) ───
         RuntimeField(

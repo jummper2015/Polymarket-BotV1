@@ -1022,6 +1022,29 @@ class TestObserveHalfOpen:
         from bot.strategies import temporal_arb
         assert temporal_arb.MART_HEDGE_MULT_DEFAULT == 2.0
 
+    def test_mart_hedge_rounds_max_is_4(self):
+        """Spec 2026-10-20: max_rounds default raised 2 → 4 to give the
+        operator the room to opt into 3 Mart-Hedge rounds (R1+R2+R3).
+        Compounding math: R1=first×2, R2=round1×2=first×4, R3=round2×2=first×8.
+        Total deployed per window with first=20 → 20+40+80+160 = 300 shares.
+        Operator can dial back to 2/3 via /settings; max is 4.
+        """
+        from bot.strategies.temporal_arb import (
+            MART_HEDGE_MAX_ROUNDS_DEFAULT,
+        )
+        # Default raised from 2 to 4 per operator request 2026-10-20.
+        assert MART_HEDGE_MAX_ROUNDS_DEFAULT == 4
+        # RuntimeField's `maximum` matches the default so the operator
+        # can use the default via /settings without hitting the range
+        # validator. (Bugfix for the silent-rejection: max was 3.)
+        from bot.config import RUNTIME_FIELDS
+        field = RUNTIME_FIELDS["ta_mart_hedge_max_rounds"]
+        assert field.maximum == 4
+        # Coerce accepts the new max value.
+        assert field.coerce(4) == (True, 4)
+        # And rejects above the cap.
+        assert field.coerce(5) == (False, None)
+
     def test_mart_hedge_defaults(self):
         from bot.strategies.temporal_arb import (
             MART_HEDGE_ENABLED_DEFAULT,
@@ -1040,7 +1063,8 @@ class TestObserveHalfOpen:
         # 2026-09-28: max_rounds default lowered 3 → 2 to match the round-2
         # reversal-gated design (round 1 + round 2 only on BTC reversal).
         # 2026-10-05: keeps 2 (round 1 + round 2 condicional a cambio de lado).
-        assert MART_HEDGE_MAX_ROUNDS_DEFAULT == 2
+        # 2026-10-20: raised 2 → 4 per operator request (3 Mart-Hedge rounds).
+        assert MART_HEDGE_MAX_ROUNDS_DEFAULT == 4
         # 2026-10-05: new monitor window (30s) replaces the old
         # round2_cooldown + reversal_threshold pair.
         assert MART_HEDGE_MONITOR_SECS_DEFAULT == 30.0
